@@ -4,8 +4,9 @@ A Go library and Nix flake for running external media tools (ImageMagick,
 FFmpeg, Poppler, pandoc and friends) from a pinned, reproducible tool
 closure. Licensed under AGPL-3.0.
 
-This repository currently contains the tool closure and the Go package that
-finds it. Hardening and recipes are coming.
+This repository currently contains the tool closure, the Go package that
+finds it, and the `media` package that builds the tools' command lines.
+Hardening and recipes are coming.
 
 ## The `tool` package
 
@@ -18,6 +19,34 @@ paths.
   (development builds) it returns `exec.LookPath(name)`.
 - `tool.FlakeRevision()` returns the flake revision injected at link time,
   or `""` in development builds.
+
+## The `media` package
+
+`github.com/davars/winnow-media/media` builds ImageMagick and FFmpeg command
+lines and interprets their output. It does not run programs itself: the caller
+supplies an `Env`, so it decides how tools are resolved, limited and
+cancelled, and where scratch files live.
+
+- `Env{Run, Stage}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
+  ([]byte, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
+  `Stage` is a `Stager` that creates an empty scratch file for a pattern and
+  returns its path and a cleanup function.
+- Face-detection source encodes: `Env.ProbeFrames` reads each scene's delay and
+  ICC flag from the headers; `Ladder` lists the fallback rungs (frames are
+  spent before resolution); `Env.EncodeRung` encodes one rung as a WebP, still
+  or animation, and returns the frame mapping the artifact holds, with the
+  colour, orientation, no-upscale and resource-limit arguments applied.
+  `Env.IdentifyArtifact` is the post-encode scene and size check.
+- `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
+  coder `CoderForMIME` names for formats it cannot sniff from an extensionless
+  path.
+- `Env.GenerateVideoThumbnails` (and `VideoThumbnailArgs`) samples up to fifteen
+  evenly spaced frames of a video stream into two animated WebP previews.
+- `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
+  their own invocations over these artifacts.
+
+The same inputs, arguments and tool binaries give the same output bytes;
+callers pass policy values (quality, sizes, ceilings) in explicitly.
 
 ## Flake outputs
 
@@ -33,7 +62,8 @@ Systems: `x86_64-linux` and `aarch64-linux`.
   fails evaluation.
 - `lib.ldflags { system, tools }`: the `-ldflags` list that points the `tool`
   package at that directory and records the flake revision.
-- `checks.<system>`: `test` (go test), `lint` (golangci-lint), `gofumpt`, and
+- `checks.<system>`: `test` (go test, with all the tools on `PATH` so the
+  tool-dependent tests run instead of skipping), `lint` (golangci-lint), `gofumpt`, and
   `closure`, which builds a small probe binary the way a consumer would and
   asserts that it resolves `magick` from the injected directory and that
   ImageMagick is in the binary's runtime closure.

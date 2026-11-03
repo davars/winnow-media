@@ -121,7 +121,7 @@
       checks = nixpkgs.lib.genAttrs systems (system:
         let s = perSystem system; in
         {
-          test = s.gate "test" [ ] "go test ./...";
+          test = s.gate "test" s.allTools "go test ./...";
           lint = s.gate "lint" [ s.golangci-lint ] "golangci-lint run ./...";
           gofumpt = s.gate "gofumpt" [ s.pkgs.gofumpt ] ''
             unformatted=$(gofumpt -l .)
