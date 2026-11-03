@@ -21,4 +21,5 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - run: nix flake check --print-build-logs
