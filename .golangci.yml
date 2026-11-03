@@ -1,0 +1,19 @@
+# golangci-lint configuration (schema v2).
+#
+# Enforced by `nix flake check` (flake.nix `checks.<system>.lint`) and runnable
+# in the devShell with `golangci-lint run` / `golangci-lint fmt`.
+#
+# The flake's golangci-lint is rebuilt with go_1_26; the stock nixpkgs build
+# (go1.25) refuses a go 1.26 module.
+version: "2"
+
+linters:
+  # golangci-lint's full curated "standard" set: errcheck, govet, ineffassign,
+  # staticcheck, unused. No exclusions: dead code and unchecked errors fail.
+  default: standard
+
+formatters:
+  # The anti-recurrence check: `golangci-lint run` reports unformatted code and
+  # `golangci-lint fmt` rewrites it. gofumpt is a strict superset of gofmt.
+  enable:
+    - gofumpt
