@@ -50,7 +50,8 @@ callers pass policy values (quality, sizes, ceilings) in explicitly.
 
 ## Flake outputs
 
-Systems: `x86_64-linux` and `aarch64-linux`.
+Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
+`x86_64-darwin` and `aarch64-darwin`; `checks` and `devShells` are Linux only.
 
 - `packages.<system>.<tool>` for each of `exiftool`, `file`, `ffmpeg`,
   `imagemagick`, `poppler-utils`, `pandoc`, `catdoc` and `lynx`, taken
@@ -62,9 +63,11 @@ Systems: `x86_64-linux` and `aarch64-linux`.
   fails evaluation.
 - `lib.ldflags { system, tools }`: the `-ldflags` list that points the `tool`
   package at that directory and records the flake revision.
+- `lib.checkGoModPin { goModText, rev }` and `lib.assertGoModPin goModPath`:
+  see [the pin check](#the-pin-check).
 - `checks.<system>`: `test` (go test, with all the tools on `PATH` so the
   tool-dependent tests run instead of skipping), `lint` (golangci-lint), `gofumpt`, and
-  `closure`, which builds a small probe binary the way a consumer would and
+  `pin` (the fixtures for the pin check), and `closure`, which builds a small probe binary the way a consumer would and
   asserts that it resolves `magick` from the injected directory and that
   ImageMagick is in the binary's runtime closure.
 - `devShells.<system>.default`: Go, golangci-lint, gofumpt and all the tools.
@@ -104,6 +107,28 @@ separate contents list.
   binaries underneath the library.
 - **One revision for code and tools.** Pin the Go module in `go.mod` and the
   tools in `flake.lock` to the same commit of this repository.
+
+## The pin check
+
+The Go module version in `go.mod` and the flake input in `flake.lock` must
+name the same commit. `lib.assertGoModPin` reads a `go.mod` and compares the
+12-hex-digit commit suffix of its `github.com/davars/winnow-media`
+pseudo-version with the revision this flake was locked at. It returns `true`
+on a match and throws, naming both values, on a mismatch, a missing
+requirement, a tagged (non-pseudo) version, or a `replace` directive for the
+module. When the input has no revision (a dirty or `path:` override) it prints
+a warning and returns `true`.
+
+Wire it into the evaluation of the package and of your CI check:
+
+```nix
+packages.${system}.default =
+  assert winnow-media.lib.assertGoModPin ./go.mod;
+  pkgs.buildGoModule { /* ... */ };
+```
+
+`lib.checkGoModPin { goModText, rev }` is the same comparison as a pure
+function over strings; `checks.<system>.pin` exercises it over fixtures.
 
 ## Development
 

@@ -8,6 +8,7 @@
   outputs = { self, nixpkgs }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
+      toolSystems = systems ++ [ "x86_64-darwin" "aarch64-darwin" ];
 
       toolNames = [ "exiftool" "file" "ffmpeg" "imagemagick" "poppler-utils" "pandoc" "catdoc" "lynx" ];
 
@@ -31,6 +32,66 @@
             done
           '') (map pick tools)}
         '';
+
+      modulePath = "github.com/davars/winnow-media";
+
+      # The commit suffix of a pseudo-version, in any of Go's three forms
+      # (vX.0.0-<ts>-<sha>, vX.Y.Z-pre.0.<ts>-<sha>, vX.Y.Z-0.<ts>-<sha>).
+      pseudoSuffix = v:
+        let m = builtins.match "v[0-9]+\\.[0-9]+\\.[0-9]+-([0-9A-Za-z.-]*[.-])?[0-9]{14}-([0-9a-f]{12})(\\+incompatible)?" v;
+        in if m == null then null else builtins.elemAt m 1;
+
+      # Returns true when go.mod's requirement of this module names the
+      # commit `rev`; throws otherwise, so a mismatch fails evaluation.
+      checkGoModPin = { goModText, rev }:
+        let
+          lines = nixpkgs.lib.splitString "\n" goModText;
+          reqOf = line:
+            builtins.match "[[:space:]]*(require[[:space:]]+)?${nixpkgs.lib.escapeRegex modulePath}[[:space:]]+([^[:space:]]+).*" line;
+          isReplace = line:
+            builtins.match ".*${nixpkgs.lib.escapeRegex modulePath}([[:space:]].*)?=>.*" line != null;
+          reqs = builtins.filter (m: m != null) (map reqOf lines);
+          version = builtins.elemAt (builtins.head reqs) 1;
+          suffix = pseudoSuffix version;
+          want = builtins.substring 0 12 rev;
+        in
+        if builtins.any isReplace lines then
+          throw "winnow-media: go.mod has a replace directive for ${modulePath}; the pin cannot be checked"
+        else if reqs == [ ] then
+          throw "winnow-media: go.mod has no requirement for ${modulePath}"
+        else if suffix == null then
+          throw "winnow-media: go.mod requires ${modulePath} ${version}, which is not a pseudo-version; only pseudo-versions are supported"
+        else if suffix != want then
+          throw "winnow-media: go.mod pins ${modulePath} at ${suffix} but flake.lock locks ${want}; move go.mod and flake.lock together"
+        else true;
+
+      # Uses this flake's own revision, i.e. the one the consumer locked.
+      assertGoModPin = goModPath:
+        if self ? rev then
+          checkGoModPin { goModText = builtins.readFile goModPath; rev = self.rev; }
+        else
+          builtins.trace "winnow-media: no revision for this input (dirty or path override); go.mod pin NOT checked" true;
+
+      pinFixtures =
+        let
+          run = f:
+            let r = builtins.tryEval (checkGoModPin { goModText = f.text; inherit rev; });
+            in f // { actual = r.success && r.value == true; };
+          rev = "104cc9a7f5f4aaaabbbbccccddddeeeeffff0000";
+          good = "v0.0.0-20261103230040-104cc9a7f5f4";
+        in
+        map run [
+          { name = "block form"; want = true; text = "module x\n\nrequire (\n\tgithub.com/other/y v1.0.0\n\t${modulePath} ${good}\n)\n"; }
+          { name = "block form, indirect"; want = true; text = "require (\n\t${modulePath} ${good} // indirect\n)\n"; }
+          { name = "single-line form"; want = true; text = "module x\n\nrequire ${modulePath} ${good}\n"; }
+          { name = "pre-release pseudo-version"; want = true; text = "require ${modulePath} v1.2.3-pre.0.20261103230040-104cc9a7f5f4\n"; }
+          { name = "next-patch pseudo-version"; want = true; text = "require ${modulePath} v1.2.4-0.20261103230040-104cc9a7f5f4\n"; }
+          { name = "mismatched hash"; want = false; text = "require ${modulePath} v0.0.0-20261103230040-aaaaaaaaaaaa\n"; }
+          { name = "missing requirement"; want = false; text = "module x\n\nrequire github.com/other/y v1.0.0\n"; }
+          { name = "tag version"; want = false; text = "require ${modulePath} v1.2.3\n"; }
+          { name = "replace directive"; want = false; text = "require ${modulePath} ${good}\n\nreplace ${modulePath} => ../winnow-media\n"; }
+          { name = "replace directive in block"; want = false; text = "require ${modulePath} ${good}\n\nreplace (\n\t${modulePath} => ../winnow-media\n)\n"; }
+        ];
 
       ldflags = { system, tools }: [
         "-X" "github.com/davars/winnow-media/tool.toolDir=${toolDir { inherit system tools; }}"
@@ -110,13 +171,12 @@
         };
     in
     {
-      packages = nixpkgs.lib.genAttrs systems (system:
-        let s = perSystem system; in
-        s.tools // {
+      packages = nixpkgs.lib.genAttrs toolSystems (system:
+        toolPackages nixpkgs.legacyPackages.${system} // {
           default = toolDir { inherit system; tools = toolNames; };
         });
 
-      lib = { inherit toolDir ldflags; };
+      lib = { inherit toolDir ldflags checkGoModPin assertGoModPin; };
 
       checks = nixpkgs.lib.genAttrs systems (system:
         let s = perSystem system; in
@@ -132,6 +192,14 @@
             fi
           '';
           closure = s.closureCheck;
+          pin =
+            let
+              rows = map (f: "${if f.want == f.actual then "ok  " else "FAIL"} ${f.name}: want ${builtins.toJSON f.want}, got ${builtins.toJSON f.actual}") pinFixtures;
+              report = nixpkgs.lib.concatStringsSep "\n" rows;
+            in
+            if builtins.all (f: f.want == f.actual) pinFixtures
+            then s.pkgs.writeText "winnow-media-pin-check" report
+            else throw "winnow-media: pin check fixtures failed:\n${report}";
         });
 
       devShells = nixpkgs.lib.genAttrs systems (system:
