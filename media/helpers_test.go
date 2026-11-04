@@ -21,19 +21,20 @@ func testEnv(t *testing.T) Env {
 	t.Helper()
 	staging := t.TempDir()
 	return Env{
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
 			path, err := tool.Resolve(name)
 			if err != nil {
-				return nil, err
+				return Result{}, err
 			}
 			cmd := exec.CommandContext(ctx, path, args...)
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			out, err := cmd.Output()
+			res := Result{Stdout: out, Usage: UsageOf(cmd.ProcessState)}
 			if err != nil {
-				return out, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(stderr.String()))
+				return res, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(stderr.String()))
 			}
-			return out, nil
+			return res, nil
 		},
 		Stage: func(ext string) (string, func(), error) {
 			f, err := os.CreateTemp(staging, "*"+ext)
@@ -59,11 +60,11 @@ func requireMagick(t *testing.T) Env {
 
 func magick(t *testing.T, env Env, args ...string) []byte {
 	t.Helper()
-	out, err := env.Run(context.Background(), "magick", args...)
+	res, err := env.Run(context.Background(), "magick", args...)
 	if err != nil {
 		t.Fatalf("magick %q: %v", args, err)
 	}
-	return out
+	return res.Stdout
 }
 
 // renameToContent drops path's extension, so the decoder cannot rely on the
