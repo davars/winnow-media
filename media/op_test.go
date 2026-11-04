@@ -580,33 +580,44 @@ func TestGoldenArgv(t *testing.T) {
 			if err := c.run(env, input, out); err != nil {
 				t.Fatal(err)
 			}
-			var b strings.Builder
-			for _, call := range rec.calls {
-				for _, arg := range call {
-					arg = strings.ReplaceAll(arg, filepath.Dir(input), "$IN")
-					arg = strings.ReplaceAll(arg, out, "$OUT")
-					b.WriteString(strconv.Quote(arg))
-					b.WriteByte('\n')
-				}
-				b.WriteByte('\n')
-			}
-			path := filepath.Join("testdata", "golden-argv", c.name+".txt")
-			if *update {
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("%v (run with -update to create it)", err)
-			}
-			if string(want) != b.String() {
-				t.Errorf("argv differs from %s:\n--- got\n%s\n--- want\n%s", path, b.String(), want)
-			}
+			checkGolden(t, c.name, goldenArgv(rec.calls, input, out))
 		})
+	}
+}
+
+// goldenArgv renders the recorded invocations with the input and output
+// directories replaced by placeholders.
+func goldenArgv(calls [][]string, input, out string) string {
+	var b strings.Builder
+	for _, call := range calls {
+		for _, arg := range call {
+			arg = strings.ReplaceAll(arg, filepath.Dir(input), "$IN")
+			arg = strings.ReplaceAll(arg, out, "$OUT")
+			b.WriteString(strconv.Quote(arg))
+			b.WriteByte('\n')
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func checkGolden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", "golden-argv", name+".txt")
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update to create it)", err)
+	}
+	if string(want) != got {
+		t.Errorf("argv differs from %s:\n--- got\n%s\n--- want\n%s", path, got, want)
 	}
 }

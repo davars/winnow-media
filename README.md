@@ -61,6 +61,36 @@ an output directory. Each is a method of `Env` and needs only `Env.Run`:
   otherwise 1-64) bounds the evenly spaced frames sampled from the composited
   animation; a frame identical to the one before it after resizing is dropped,
   and `Image.Frame` records the source frame each file came from.
+- `Env.VideoFrames(ctx, Source, Encoding, maxFrames, dir) ([]Image, error)`
+  accepts `video/mp4` and `video/quicktime` (ffmpeg demuxer `mov`) and
+  `video/webm` and `video/x-matroska` (demuxer `matroska`) and writes
+  `frame-000.<ext>`, `frame-001.<ext>`, and so on. `maxFrames` is as for
+  `AnimationFrames`. It runs `ffprobe`, `ffmpeg` and `magick`.
+  - ffprobe picks the first video stream that is not an attached picture and
+    reads its size, display rotation, duration (the stream's, else the
+    container's), frame count and colour transfer. Output is upright, so a
+    stream rotated by 90 or 270 degrees gives portrait files. An input with no
+    video stream is an error.
+  - The samples are the centres of `maxFrames` equal intervals of the
+    duration, fewer when the stream has fewer frames (the duration is the only
+    guide when the frame count is unknown). Targets that coincide are
+    merged, and a clip of unknown duration gives one sample at 0.
+  - Each sample is one ffmpeg run with an accurate input seek (`-ss` before
+    `-i`), which decodes at most one group of pictures, so the cost depends on
+    the number of samples and the GOP length, not on the duration. The runs are
+    sequential: one process with all the seeks as separate inputs is faster
+    but holds every decoder open at once (14 GB peak on 4K HEVC).
+  - HLG and PQ video is converted to SDR before it is scaled: linearize,
+    convert the primaries to BT.709, tone-map with `hable`, and return to the
+    BT.709 transfer and matrix. Other video gets no colour filter.
+  - ffmpeg scales once, to the size the shared bounds give, and writes each
+    sample as PNG to a hidden scratch file in `dir`. One magick run encodes
+    them to the encoding's format and quality with metadata stripped; a sample
+    identical to the one before it (by ImageMagick signature) is dropped. The
+    scratch files are removed before `VideoFrames` returns.
+  - `Image.TimeMS` is the seek target in ms; the file shows the first frame at
+    or after it. A seeked sample has no known frame index, so `Image.Frame` is
+    always 0.
 
 `Source` is the staged file (`Path`) and the media type the caller asserts for
 it (`Type`); the type selects the decoder pin. A type the operation does not
@@ -83,7 +113,7 @@ range, an unaccepted type or a non-empty `dir` is an error with nothing
 written. On any later failure the operation removes what it wrote and `dir` is
 empty again. Each `Image` has the file's `Name` relative to `dir`, its `Width`
 and `Height`, and `Frame` (the animation frame index) and `TimeMS` (the video
-sample time, 0 for operations that do not sample a video).
+sample time; 0 for operations that do not sample a video).
 
 The accepted media types, decoder pins and tools of each operation are
 internal.
