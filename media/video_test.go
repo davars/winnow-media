@@ -76,8 +76,8 @@ func TestGenerateVideoThumbnailsWritesBothSizes(t *testing.T) {
 			t.Fatalf("identify %s: %v", path, err)
 		}
 		var w, h int
-		if _, err := fmt.Sscanf(strings.SplitN(string(out), "\n", 2)[0], "%d %d", &w, &h); err != nil {
-			t.Fatalf("parsing %q: %v", out, err)
+		if _, err := fmt.Sscanf(strings.SplitN(string(out.Stdout), "\n", 2)[0], "%d %d", &w, &h); err != nil {
+			t.Fatalf("parsing %q: %v", out.Stdout, err)
 		}
 		if max(w, h) != wantLong {
 			t.Errorf("%s is %dx%d, want long side %d", filepath.Base(path), w, h, wantLong)

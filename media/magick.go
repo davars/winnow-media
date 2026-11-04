@@ -32,19 +32,19 @@ func CoderForMIME(mimeType string) (coder string, ok bool) {
 // coder the original output and error are returned unchanged. Both attempts
 // failing yields an error naming both.
 func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, buildArgs func(coder string) []string) ([]byte, error) {
-	out, err := e.Run(ctx, "magick", buildArgs("")...)
+	first, err := e.Run(ctx, "magick", buildArgs("")...)
 	if err == nil {
-		return out, nil
+		return first.Stdout, nil
 	}
 	coder, ok := CoderForMIME(mimeType)
 	if !ok {
-		return out, err
+		return first.Stdout, err
 	}
 	retried, retryErr := e.Run(ctx, "magick", buildArgs(coder)...)
 	if retryErr != nil {
-		return retried, fmt.Errorf("magick: sniffed decode failed (%w); retried with coder %q, which also failed: %v", err, coder, retryErr)
+		return retried.Stdout, fmt.Errorf("magick: sniffed decode failed (%w); retried with coder %q, which also failed: %v", err, coder, retryErr)
 	}
-	return retried, nil
+	return retried.Stdout, nil
 }
 
 // LimitArgs returns the resource-limit flags that bound one magick process:
@@ -84,11 +84,11 @@ func DeleteExpr(keep []int, sourceFrames int) string {
 func (e Env) IdentifyArtifact(ctx context.Context, path string) (scenes, width, height int, err error) {
 	args := append([]string{"identify"}, LimitArgs()...)
 	args = append(args, "-format", "%s %w %h\n", path)
-	out, err := e.Run(ctx, "magick", args...)
+	res, err := e.Run(ctx, "magick", args...)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("identifying artifact: %w", err)
 	}
-	trimmed := strings.TrimRight(string(out), "\n")
+	trimmed := strings.TrimRight(string(res.Stdout), "\n")
 	if trimmed == "" {
 		return 0, 0, 0, fmt.Errorf("identify returned no output")
 	}

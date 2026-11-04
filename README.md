@@ -28,7 +28,10 @@ supplies an `Env`, so it decides how tools are resolved, limited and
 cancelled, and where scratch files live.
 
 - `Env{Run, Stage}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
-  ([]byte, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
+  (Result, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
+  A `Result` holds the tool's `Stdout` and a `*Usage` (CPU time, peak RSS in
+  bytes) that is nil when the runner cannot measure it; `UsageOf` builds one
+  from an exited `*os.ProcessState`.
   `Stage` is a `Stager` that creates an empty scratch file whose name ends in
   an extension (`".webp"`) and returns its path and a cleanup function.
 - Bounded WebP encodes: `Env.ProbeFrames` reads each scene's delay and

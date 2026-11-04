@@ -10,13 +10,48 @@
 // and so the same output bytes.
 package media
 
-import "context"
+import (
+	"context"
+	"os"
+	"syscall"
+	"time"
+)
 
-// Runner runs one tool to completion and returns its standard output.
+// Result is one completed tool run.
+type Result struct {
+	Stdout []byte
+	// Usage is nil when the runner cannot measure it; it is never zero-filled.
+	Usage *Usage
+}
+
+// Usage is what one tool run consumed.
+type Usage struct {
+	CPU    time.Duration // user plus system time
+	MaxRSS int64         // peak resident set size, in bytes
+}
+
+// UsageOf reports the resources an exited process consumed. It returns nil
+// when state is nil or carries no rusage.
+func UsageOf(state *os.ProcessState) *Usage {
+	if state == nil {
+		return nil
+	}
+	ru, ok := state.SysUsage().(*syscall.Rusage)
+	if !ok || ru == nil {
+		return nil
+	}
+	return &Usage{
+		CPU:    state.UserTime() + state.SystemTime(),
+		MaxRSS: maxRSSBytes(ru),
+	}
+}
+
+// Runner runs one tool to completion and returns its standard output and,
+// when it can measure it, its resource usage.
 //
 // The package passes bare tool names ("magick", "ffmpeg"); resolving them to
 // executables is the Runner's business. A non-nil error means the tool failed.
-type Runner func(ctx context.Context, tool string, args ...string) ([]byte, error)
+type Runner func(ctx context.Context, tool string, args ...string) (Result, error)
 
 // Stager creates an empty scratch file whose name ends in ext (for example
 // ".webp"); the tools choose the output format from the extension. cleanup
