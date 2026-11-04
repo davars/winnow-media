@@ -7,12 +7,12 @@ import (
 	"strings"
 )
 
-// maxVideoSampleFrames caps the frames a video preview animation samples;
-// it is tied to the preview's playback rate.
+// maxVideoSampleFrames caps the frames a video animation samples;
+// it is tied to the animation's playback rate.
 const maxVideoSampleFrames = 15
 
 // GenerateVideoThumbnails runs ffmpeg once to write two animated WebP
-// previews of one video stream, at maximum sizes sizeSmall and sizeLarge and
+// thumbnails of one video stream, at maximum sizes sizeSmall and sizeLarge and
 // the given WebP quality. frames is the stream's frame count, from which an
 // evenly spaced sample is taken; zero or less samples the first frame only.
 func (e Env) GenerateVideoThumbnails(ctx context.Context, inputPath, smallPath, largePath string, streamIndex, frames, sizeSmall, sizeLarge, quality int) error {

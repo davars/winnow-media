@@ -118,10 +118,9 @@ func selectFrames(n, sourceFrames int) []int {
 //
 // A stored delay below 2 centiseconds is rendered as 10 by the long-standing
 // GIF display convention, and real GIFs do store 0 on every frame; an
-// unclamped sum makes every timestamp 0, which locates no moment for a human
-// reviewing an overlay. It is a display convention and nothing hangs off it:
-// source_frame, not the timestamp, is what reconciliation matches on, so a
-// wrong clamp cannot move a label.
+// unclamped sum makes every timestamp 0, which locates no moment in the
+// media. It is a display convention only: frames are identified by source
+// frame index, not by timestamp, so a wrong clamp cannot change a mapping.
 func timestamps(delaysCS []int) []int64 {
 	out := make([]int64, len(delaysCS))
 	var elapsedCS int64
@@ -155,7 +154,7 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 		outputPath, cleanupFn, width, height, err = e.encodeStill(
 			ctx, inputPath, mimeType, rung.CeilingPx, profilePath, profiled, orient, quality)
 		if err != nil {
-			return "", nil, 0, 0, nil, fmt.Errorf("face_source: encoding still: %w", err)
+			return "", nil, 0, 0, nil, fmt.Errorf("encoding still: %w", err)
 		}
 		return outputPath, cleanupFn, width, height, []Frame{{SourceFrame: 0, SourceTimeMS: 0}}, nil
 	}
@@ -175,8 +174,8 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 // of identical consecutive frames and no -define prevents it: a four-frame
 // GIF of one repeated image encodes to a one-scene WebP. Left alone that
 // yields a mapping promising four frames against an artifact holding one, so
-// a frame_idx in a detection response would resolve to a source_frame the
-// peer never saw. Non-consecutive duplicates survive the writer, so dropping
+// an index into the artifact would resolve to a source frame the artifact
+// does not hold. Non-consecutive duplicates survive the writer, so dropping
 // only consecutive repeats is both sufficient and minimal.
 //
 // The scene-count check after the encode, not the dedup, is the guarantee —
@@ -184,8 +183,8 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 // dedup is what keeps the check from firing on the common case.
 //
 // The mapping is read off the probe rather than recomputed from the
-// selection: recovering provenance by recomputation is exactly what the
-// spec's identity rule forbids.
+// selection, so it records the frames magick kept rather than the frames the
+// selection meant it to keep.
 func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType string,
 	rung Rung, sourceFrames []FrameInfo, profilePath string, quality int,
 ) (outputPath string, cleanupFn func(), width, height int, frames []Frame, err error) {
@@ -200,10 +199,10 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType string,
 	probed, err := e.probeSelection(ctx, inputPath, mimeType, rung.CeilingPx,
 		DeleteExpr(selected, sourceFrameCount), profilePath, profiled)
 	if err != nil {
-		return "", nil, 0, 0, nil, fmt.Errorf("face_source: probing selected frames: %w", err)
+		return "", nil, 0, 0, nil, fmt.Errorf("probing selected frames: %w", err)
 	}
 	if len(probed) == 0 {
-		return "", nil, 0, 0, nil, fmt.Errorf("face_source: frame selection probe returned no frames")
+		return "", nil, 0, 0, nil, fmt.Errorf("frame selection probe returned no frames")
 	}
 
 	kept := make([]int, 0, len(probed))
@@ -217,7 +216,7 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType string,
 	}
 
 	deleteExpr := DeleteExpr(kept, sourceFrameCount)
-	outputPath, cleanupFn, err = e.Stage("face-source-*.webp")
+	outputPath, cleanupFn, err = e.Stage(".webp")
 	if err != nil {
 		return "", nil, 0, 0, nil, err
 	}
@@ -226,7 +225,7 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType string,
 		return append(args, "-quality", strconv.Itoa(quality), outputPath)
 	}); err != nil {
 		cleanupFn()
-		return "", nil, 0, 0, nil, fmt.Errorf("face_source: encoding animation: %w", err)
+		return "", nil, 0, 0, nil, fmt.Errorf("encoding animation: %w", err)
 	}
 
 	scenes, w, h, err := e.IdentifyArtifact(ctx, outputPath)
@@ -237,7 +236,7 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType string,
 	if scenes != len(kept) {
 		cleanupFn()
 		return "", nil, 0, 0, nil, fmt.Errorf(
-			"face_source: encoded artifact holds %d scenes, mapping describes %d", scenes, len(kept))
+			"encoded artifact holds %d scenes, mapping describes %d", scenes, len(kept))
 	}
 
 	timestamps := timestamps(frameDelays(sourceFrames))
@@ -246,7 +245,7 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType string,
 		if sourceFrame < 0 || sourceFrame >= len(timestamps) {
 			cleanupFn()
 			return "", nil, 0, 0, nil, fmt.Errorf(
-				"face_source: probe reported source frame %d outside the %d-frame source", sourceFrame, len(timestamps))
+				"probe reported source frame %d outside the %d-frame source", sourceFrame, len(timestamps))
 		}
 		frames = append(frames, Frame{SourceFrame: sourceFrame, SourceTimeMS: timestamps[sourceFrame]})
 	}
@@ -274,11 +273,11 @@ func (e Env) probeSelection(ctx context.Context, inputPath, mimeType string, cei
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
-			return nil, fmt.Errorf("face_source: probe line %q missing fields", line)
+			return nil, fmt.Errorf("probe line %q missing fields", line)
 		}
 		sourceFrame, err := strconv.Atoi(fields[0])
 		if err != nil {
-			return nil, fmt.Errorf("face_source: parsing scene index from %q: %w", line, err)
+			return nil, fmt.Errorf("parsing scene index from %q: %w", line, err)
 		}
 		probed = append(probed, probedFrame{sourceFrame: sourceFrame, signature: fields[1]})
 	}
@@ -295,8 +294,7 @@ func (e Env) probeSelection(ctx context.Context, inputPath, mimeType string, cei
 // fragments where it claims to carry moments.
 //
 // -layers optimize is deliberately absent: it is a GIF palette and disposal
-// optimization the preview path applies to its own animated output, and it
-// has nothing to do with WebP.
+// optimization that does not apply to WebP output.
 func animationPipeline(inputPath string, ceiling int, deleteExpr, coder, profilePath string, profiled bool) []string {
 	arg0 := inputPath
 	if coder != "" {
@@ -332,7 +330,7 @@ func colorArgs(profilePath string, sourceProfiled bool) []string {
 // The caller owns the returned staging file via cleanupFn; on error the
 // staging file is already removed.
 func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, ceiling int, profilePath string, profiled bool, orient string, quality int) (outputPath string, cleanupFn func(), width, height int, err error) {
-	outputPath, cleanupFn, err = e.Stage("face-source-*.webp")
+	outputPath, cleanupFn, err = e.Stage(".webp")
 	if err != nil {
 		return "", nil, 0, 0, err
 	}
@@ -347,7 +345,7 @@ func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, ceilin
 	}
 	if scenes != 1 {
 		cleanupFn()
-		return "", nil, 0, 0, fmt.Errorf("face_source: still encode produced %d scenes, want 1", scenes)
+		return "", nil, 0, 0, fmt.Errorf("still encode produced %d scenes, want 1", scenes)
 	}
 	return outputPath, cleanupFn, w, h, nil
 }
@@ -364,7 +362,7 @@ func (e Env) generateStill(ctx context.Context, inputPath, outputPath string, ce
 
 // stillArgs builds one magick invocation for the still-image path: the
 // frame-0 selector, the mandatory resource limits, an -auto-orient
-// (preceded by -orient when orient is set, for an embedded preview that lost
+// (preceded by -orient when orient is set, for an embedded image that lost
 // its orientation tag) ahead of the shrink-only "<C>x<C>>" ceiling (the ">"
 // flag is the whole no-upscale contract), and -quality.
 func stillArgs(inputPath, outputPath string, ceiling int, coder, profilePath, orient string, profiled bool, quality int) []string {
@@ -396,21 +394,15 @@ type FrameInfo struct {
 	hasICC  bool
 }
 
-// ProbeFrames is the input guard and the source of every
-// timestamp: one magick identify pass reporting each scene's delay in
-// centiseconds and whether it carries an ICC profile. The returned length is
-// the source frame count.
+// ProbeFrames reads each scene's delay in centiseconds and whether it carries
+// an ICC profile, in one magick identify pass over the headers. The returned
+// length is the source frame count.
 //
-// Cheap because identify reads headers rather than compositing — -coalesce
-// is what makes compositing frame N cost every frame before it, which is
-// exactly the unbounded work the frame-count guard exists to refuse before
-// it happens.
-//
-// Retries once with a coder-forcing prefix on the same terms as
-// generateStill: this runs before any decode, on an extensionless
-// archive content path, so it hits the identical sniffing gap
-// CoderForMIME exists to cover (verified: a bare TGA fails plain
-// identify the same way it fails a bare encode).
+// It does not composite, so its cost does not grow with frame count the way
+// -coalesce does: a caller can refuse an input by frame count before any rung
+// decodes pixels. A failed identify is retried once with the coder
+// CoderForMIME names for mimeType ("" disables the retry), because magick
+// cannot sniff some formats from an extensionless path.
 func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]FrameInfo, error) {
 	out, err := e.RunMagickWithCoderFallback(ctx, mimeType, func(coder string) []string {
 		path := inputPath
@@ -425,18 +417,18 @@ func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]Fra
 	}
 	trimmed := strings.TrimRight(string(out), "\n")
 	if trimmed == "" {
-		return nil, fmt.Errorf("face_source: identify returned no scenes")
+		return nil, fmt.Errorf("identify returned no scenes")
 	}
 	lines := strings.Split(trimmed, "\n")
 	frames := make([]FrameInfo, 0, len(lines))
 	for _, line := range lines {
 		fields := strings.Split(line, "|")
 		if len(fields) != 4 || fields[3] != "END" {
-			return nil, fmt.Errorf("face_source: identify line %q missing fields", line)
+			return nil, fmt.Errorf("identify line %q missing fields", line)
 		}
 		delay, err := strconv.Atoi(fields[1])
 		if err != nil {
-			return nil, fmt.Errorf("face_source: parsing frame delay from %q: %w", line, err)
+			return nil, fmt.Errorf("parsing frame delay from %q: %w", line, err)
 		}
 		frames = append(frames, FrameInfo{delayCS: delay, hasICC: profileListHasICC(fields[2])})
 	}
@@ -462,6 +454,8 @@ func frameDelays(frames []FrameInfo) []int {
 	return delays
 }
 
+// AnyProfiled reports whether any frame carries an ICC profile, which is when
+// EncodeRung may read profilePath.
 func AnyProfiled(frames []FrameInfo) bool {
 	for _, frame := range frames {
 		if frame.hasICC {
@@ -479,7 +473,7 @@ func selectedProfiled(frames []FrameInfo, selected []int) (bool, error) {
 	profiled, unprofiled := false, false
 	for _, sourceFrame := range selected {
 		if sourceFrame < 0 || sourceFrame >= len(frames) {
-			return false, fmt.Errorf("face_source: selected source frame %d outside the %d-frame source", sourceFrame, len(frames))
+			return false, fmt.Errorf("selected source frame %d outside the %d-frame source", sourceFrame, len(frames))
 		}
 		if frames[sourceFrame].hasICC {
 			profiled = true
@@ -488,7 +482,7 @@ func selectedProfiled(frames []FrameInfo, selected []int) (bool, error) {
 		}
 	}
 	if profiled && unprofiled {
-		return false, fmt.Errorf("face_source: selected animation frames mix embedded ICC profiles with unprofiled pixels")
+		return false, fmt.Errorf("selected animation frames mix embedded ICC profiles with unprofiled pixels")
 	}
 	return profiled, nil
 }

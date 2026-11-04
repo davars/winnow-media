@@ -1,5 +1,7 @@
-// Package media builds and runs the media tools' command lines: still and
-// animation encodes for face detection, and video thumbnail frames.
+// Package media builds and runs the media tools' command lines: bounded WebP
+// encodes of still images and animations (a fallback ladder of dimension
+// ceilings and frame caps, with the frame mapping each encode holds), and
+// animated WebP thumbnails of video.
 //
 // The package decides arguments and interprets tool output; it does not run
 // programs itself. A caller supplies a Runner and a Stager through an Env, so
@@ -16,11 +18,11 @@ import "context"
 // executables is the Runner's business. A non-nil error means the tool failed.
 type Runner func(ctx context.Context, tool string, args ...string) ([]byte, error)
 
-// Stager creates an empty scratch file whose base name matches pattern, in
-// the form os.CreateTemp accepts. cleanup removes the file and is safe to call
-// once; the caller owns it. The tools write their output to the returned
-// path.
-type Stager func(pattern string) (path string, cleanup func(), err error)
+// Stager creates an empty scratch file whose name ends in ext (for example
+// ".webp"); the tools choose the output format from the extension. cleanup
+// removes the file and is safe to call once; the caller owns it. The tools
+// write their output to the returned path.
+type Stager func(ext string) (path string, cleanup func(), err error)
 
 // Env is what the package needs from its caller to run tools. Run is
 // required by every method; Stage is required by the methods that produce an

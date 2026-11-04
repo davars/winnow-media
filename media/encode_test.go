@@ -361,16 +361,16 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 
 	dir := t.TempDir()
 	reference := filepath.Join(dir, "reference.webp")
-	legacy := filepath.Join(dir, "legacy.webp")
+	unconverted := filepath.Join(dir, "unconverted.webp")
 	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
 		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), reference)...)
-	magick(t, env, stillArgs(input, legacy, 128, "", destination, "", false, testQuality)...)
+	magick(t, env, stillArgs(input, unconverted, 128, "", destination, "", false, testQuality)...)
 
 	if diff := meanAbsoluteDifference(t, env, actual, reference); diff > 0.004 {
 		t.Fatalf("corrected WebP differs from explicit sRGB reference by %.6f, want <= 0.004", diff)
 	}
-	if diff := meanAbsoluteDifference(t, env, actual, legacy); diff < 0.015 {
-		t.Fatalf("corrected WebP differs from legacy reinterpretation by %.6f, want >= 0.015; fixture no longer proves conversion", diff)
+	if diff := meanAbsoluteDifference(t, env, actual, unconverted); diff < 0.015 {
+		t.Fatalf("corrected WebP differs from unconverted reinterpretation by %.6f, want >= 0.015; fixture no longer proves conversion", diff)
 	}
 }
 
@@ -398,23 +398,23 @@ func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
 
 	dir := t.TempDir()
 	reference := filepath.Join(dir, "reference.webp")
-	legacy := filepath.Join(dir, "legacy.webp")
+	unconverted := filepath.Join(dir, "unconverted.webp")
 	magick(t, env, append(animationPipeline(input, 128, "", "", destination, true),
 		"-quality", strconv.Itoa(testQuality), reference)...)
 	magick(t, env, append(animationPipeline(input, 128, "", "", destination, false),
-		"-quality", strconv.Itoa(testQuality), legacy)...)
+		"-quality", strconv.Itoa(testQuality), unconverted)...)
 	for i := range mapping {
 		if diff := animationFrameDifference(t, env, actual, reference, i); diff > 0.004 {
 			t.Errorf("corrected animation frame %d differs from explicit sRGB reference by %.6f, want <= 0.004", i, diff)
 		}
-		if diff := animationFrameDifference(t, env, actual, legacy, i); diff < 0.012 {
-			t.Errorf("corrected animation frame %d differs from legacy reinterpretation by %.6f, want >= 0.012", i, diff)
+		if diff := animationFrameDifference(t, env, actual, unconverted, i); diff < 0.012 {
+			t.Errorf("corrected animation frame %d differs from unconverted reinterpretation by %.6f, want >= 0.012", i, diff)
 		}
 	}
 }
 
 // An untagged image must receive neither an ICC assignment nor a conversion.
-func TestEncodeRungUnprofiledStillKeepsLegacyPixels(t *testing.T) {
+func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
 	env := requireMagick(t)
 	withExtension := filepath.Join(t.TempDir(), "untagged.png")
 	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-strip", withExtension)
@@ -433,11 +433,11 @@ func TestEncodeRungUnprofiledStillKeepsLegacyPixels(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	legacy := filepath.Join(t.TempDir(), "legacy.webp")
+	unconverted := filepath.Join(t.TempDir(), "unconverted.webp")
 	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient",
-		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), legacy)...)
-	if diff := meanAbsoluteDifference(t, env, actual, legacy); diff > 0.004 {
-		t.Fatalf("unprofiled WebP differs from legacy pipeline by %.6f, want <= 0.004", diff)
+		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), unconverted)...)
+	if diff := meanAbsoluteDifference(t, env, actual, unconverted); diff > 0.004 {
+		t.Fatalf("unprofiled WebP differs from plain pipeline by %.6f, want <= 0.004", diff)
 	}
 }
 

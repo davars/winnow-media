@@ -35,8 +35,8 @@ func testEnv(t *testing.T) Env {
 			}
 			return out, nil
 		},
-		Stage: func(pattern string) (string, func(), error) {
-			f, err := os.CreateTemp(staging, pattern)
+		Stage: func(ext string) (string, func(), error) {
+			f, err := os.CreateTemp(staging, "*"+ext)
 			if err != nil {
 				return "", nil, err
 			}
@@ -66,8 +66,8 @@ func magick(t *testing.T, env Env, args ...string) []byte {
 	return out
 }
 
-// renameToContent drops path's extension the way archive content paths have
-// none, so the decoder cannot rely on the name.
+// renameToContent drops path's extension, so the decoder cannot rely on the
+// name.
 func renameToContent(t *testing.T, path string) string {
 	t.Helper()
 	content := filepath.Join(filepath.Dir(path), "content")
