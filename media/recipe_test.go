@@ -88,13 +88,11 @@ func stage(t *testing.T, path string) string {
 	return staged
 }
 
-// writeHEIC writes a 640x480 gradient tagged RightTop, which reads back as
-// 480x640, and returns the staged path.
-func writeHEIC(t *testing.T, env Env) string {
+// writeHEIC returns a staged copy of a 640x480 gradient tagged RightTop,
+// which reads back as 480x640.
+func writeHEIC(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "x.heic")
-	magick(t, env, "-size", "640x480", "gradient:red-blue", "-orient", "RightTop", path)
-	return stage(t, path)
+	return heicFixture(t, "gradient-righttop")
 }
 
 func exiftool(t *testing.T, env Env, args ...string) string {
@@ -231,7 +229,7 @@ func TestFitSize(t *testing.T) {
 
 func TestExecuteRefusesBeforeRunningTools(t *testing.T) {
 	real := requireMagick(t)
-	heic := writeHEIC(t, real)
+	heic := writeHEIC(t)
 	gif := writeGIF(t, real, solid, 2)
 	rec, env := newRecorder(real)
 	x := newExecutor(t, env, "still")
@@ -275,7 +273,7 @@ func TestExecuteRefusesBeforeRunningTools(t *testing.T) {
 func TestStillOutput(t *testing.T) {
 	requireExiftool(t)
 	env := requireMagick(t)
-	src := writeHEIC(t, env)
+	src := writeHEIC(t)
 	addMetadata(t, env, src)
 	if got := metadataGroups(t, env, src); !strings.Contains(got, "Artist") || !strings.Contains(got, "GPSLatitude") || !strings.Contains(got, "Creator") {
 		t.Fatalf("fixture lacks metadata:\n%s", got)
@@ -327,7 +325,7 @@ func TestStillOutput(t *testing.T) {
 
 func TestStillSizing(t *testing.T) {
 	env := requireMagick(t)
-	src := writeHEIC(t, env) // 480x640 upright
+	src := writeHEIC(t) // 480x640 upright
 	x := newExecutor(t, env, "still")
 	cases := []struct {
 		name         string
@@ -354,11 +352,7 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 	env := requireMagick(t)
 	dir := t.TempDir()
 	srgb := writeSRGBProfile(t)
-	adobe := writeAdobeProfile(t, dir)
-	png := filepath.Join(dir, "wide.png")
-	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-profile", srgb, "-profile", adobe, png)
-	heic := filepath.Join(dir, "wide.heic")
-	magick(t, env, png, "-quality", "100", heic)
+	heic := heicFixtureFile(t, "adobe-256x96")
 	if got := strings.TrimSpace(string(magick(t, env, "identify", "-format", "%[profiles]", heic))); !strings.Contains(got, "icc") {
 		t.Skipf("magick wrote no ICC profile into the HEIC (profiles %q)", got)
 	}
@@ -569,23 +563,15 @@ func TestExecuteFileRecords(t *testing.T) {
 
 func TestExecuteCleansUpOnFailure(t *testing.T) {
 	real := requireMagick(t)
-	wide := func() string {
-		dir := t.TempDir()
-		srgb, adobe := writeSRGBProfile(t), writeAdobeProfile(t, dir)
-		png := filepath.Join(dir, "w.png")
-		magick(t, real, "-size", "64x64", "gradient:#0020ff-#ffb000", "-profile", srgb, "-profile", adobe, png)
-		heic := filepath.Join(dir, "w.heic")
-		magick(t, real, png, "-quality", "100", heic)
-		return stage(t, heic)
-	}
+	wide := func() string { return heicFixture(t, "adobe-64x64") }
 	cases := []struct {
 		name, recipe, inputType string
 		input                   func() string
 		failAfter               int
 	}{
-		{"still after encode", "still", "image/heic", func() string { return writeHEIC(t, real) }, 2},
+		{"still after encode", "still", "image/heic", func() string { return writeHEIC(t) }, 2},
 		{"still with profile after encode", "still", "image/heic", wide, 2},
-		{"still at encode", "still", "image/heic", func() string { return writeHEIC(t, real) }, 3},
+		{"still at encode", "still", "image/heic", func() string { return writeHEIC(t) }, 3},
 		{"frames after probe", "frames", "image/gif", func() string { return writeGIF(t, real, solid, 6) }, 2},
 		{"frames after encode", "frames", "image/gif", func() string { return writeGIF(t, real, solid, 6) }, 3},
 		{"frames after output identify", "frames", "image/gif", func() string { return writeGIF(t, real, solid, 6) }, 4},
@@ -727,23 +713,15 @@ func sortedCopy(s []string) []string {
 
 func TestGoldenArgv(t *testing.T) {
 	real := requireMagick(t)
-	wide := func() string {
-		dir := t.TempDir()
-		srgb, adobe := writeSRGBProfile(t), writeAdobeProfile(t, dir)
-		png := filepath.Join(dir, "w.png")
-		magick(t, real, "-size", "64x32", "gradient:#0020ff-#ffb000", "-profile", srgb, "-profile", adobe, png)
-		heic := filepath.Join(dir, "w.heic")
-		magick(t, real, png, "-quality", "100", heic)
-		return stage(t, heic)
-	}
+	wide := func() string { return heicFixture(t, "adobe-64x32") }
 	cases := []struct {
 		name, recipe, inputType string
 		input                   func() string
 		params                  map[string]string
 	}{
-		{"still-jpeg-default", "still", "image/heic", func() string { return writeHEIC(t, real) }, nil},
+		{"still-jpeg-default", "still", "image/heic", func() string { return writeHEIC(t) }, nil},
 		{
-			"still-png-bounded", "still", "image/heif", func() string { return writeHEIC(t, real) },
+			"still-png-bounded", "still", "image/heif", func() string { return writeHEIC(t) },
 			map[string]string{"format": "png", "max_edge": "400", "max_area": "100000", "quality": "75"},
 		},
 		{"still-profiled", "still", "image/heic", wide, nil},
