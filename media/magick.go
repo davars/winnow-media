@@ -86,24 +86,24 @@ func (e Env) IdentifyArtifact(ctx context.Context, path string) (scenes, width, 
 	args = append(args, "-format", "%s %w %h\n", path)
 	out, err := e.Run(ctx, "magick", args...)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("identifying face_source artifact: %w", err)
+		return 0, 0, 0, fmt.Errorf("identifying artifact: %w", err)
 	}
 	trimmed := strings.TrimRight(string(out), "\n")
 	if trimmed == "" {
-		return 0, 0, 0, fmt.Errorf("face_source: identify returned no output")
+		return 0, 0, 0, fmt.Errorf("identify returned no output")
 	}
 	lines := strings.Split(trimmed, "\n")
 	fields := strings.Fields(lines[0])
 	if len(fields) < 3 {
-		return 0, 0, 0, fmt.Errorf("face_source: identify line %q missing fields", lines[0])
+		return 0, 0, 0, fmt.Errorf("identify line %q missing fields", lines[0])
 	}
 	width, err = strconv.Atoi(fields[1])
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("face_source: parsing width from %q: %w", lines[0], err)
+		return 0, 0, 0, fmt.Errorf("parsing width from %q: %w", lines[0], err)
 	}
 	height, err = strconv.Atoi(fields[2])
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("face_source: parsing height from %q: %w", lines[0], err)
+		return 0, 0, 0, fmt.Errorf("parsing height from %q: %w", lines[0], err)
 	}
 	return len(lines), width, height, nil
 }

@@ -29,9 +29,9 @@ cancelled, and where scratch files live.
 
 - `Env{Run, Stage}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
   ([]byte, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
-  `Stage` is a `Stager` that creates an empty scratch file for a pattern and
-  returns its path and a cleanup function.
-- Face-detection source encodes: `Env.ProbeFrames` reads each scene's delay and
+  `Stage` is a `Stager` that creates an empty scratch file whose name ends in
+  an extension (`".webp"`) and returns its path and a cleanup function.
+- Bounded WebP encodes: `Env.ProbeFrames` reads each scene's delay and
   ICC flag from the headers; `Ladder` lists the fallback rungs (frames are
   spent before resolution); `Env.EncodeRung` encodes one rung as a WebP, still
   or animation, and returns the frame mapping the artifact holds, with the
@@ -41,7 +41,7 @@ cancelled, and where scratch files live.
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
   path.
 - `Env.GenerateVideoThumbnails` (and `VideoThumbnailArgs`) samples up to fifteen
-  evenly spaced frames of a video stream into two animated WebP previews.
+  evenly spaced frames of a video stream into two animated WebP thumbnails.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts.
 
