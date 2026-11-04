@@ -269,6 +269,11 @@ func (e Env) probeSelection(ctx context.Context, inputPath, mimeType string, cei
 	if err != nil {
 		return nil, err
 	}
+	return parseProbe(out)
+}
+
+// parseProbe reads the "%s %#" lines a selection probe prints.
+func parseProbe(out []byte) ([]probedFrame, error) {
 	var probed []probedFrame
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		fields := strings.Fields(line)

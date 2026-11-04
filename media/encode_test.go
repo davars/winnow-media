@@ -285,7 +285,7 @@ func TestEncodeRungNeverUpscalesAStill(t *testing.T) {
 
 func writeSRGBProfile(t *testing.T) string {
 	t.Helper()
-	encoded, err := os.ReadFile("testdata/sRGB2014.icc.base64")
+	encoded, err := os.ReadFile("profiles/sRGB2014.icc.base64")
 	if err != nil {
 		t.Fatal(err)
 	}

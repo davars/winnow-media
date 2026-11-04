@@ -48,6 +48,60 @@ cancelled, and where scratch files live.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts.
 
+### Recipes and the executor
+
+A recipe is a declared transformation of one input file into still images.
+`Recipes()` returns every declaration, plain data: name, revision, accepted
+input media types (each with its decoder pin, the ImageMagick coder), typed
+parameters (name, kind `int` or `enum`, range or allowed values, default), the
+output media types and per-file metadata fields it fills, and the tools
+(`engines`) it runs.
+
+`NewExecutor(env, names...)` enables a subset by name and fails on an unknown
+or repeated name. It needs only `Env.Run`.
+
+`Executor.Execute(ctx, Request)` runs one recipe over one input:
+
+- `Recipe` and `Params` (`map[string]string`; omitted ones take their
+  declared defaults). The request is validated before any tool runs: an
+  unknown or not enabled recipe, unknown parameter, unparsable or
+  out-of-range integer, disallowed enum value, input type the recipe does not
+  accept, or non-empty output directory is an error.
+- `InputPath` is one file the driver has already staged, and `InputType` the
+  media type the driver asserts for it; the type selects the decoder pin.
+- `OutputDir` is an existing, empty directory the driver owns. Execute names
+  its own output files and moves no bytes beyond reading the input and writing
+  there. On error it removes everything it wrote.
+
+The `Response` has one `OutputFile` per file (name relative to the output
+directory, SHA-256, size, media type, width, height, source frame index and
+source timestamp in ms) and an `Accounting`: tool runs, CPU time summed and
+peak RSS maximised over the runs (`Usage`, nil when any run reported none),
+bytes in and bytes out.
+
+`Executor.Describe(ctx)` reports, for each tool the enabled recipes run, its
+name, the first line of its version output and its executable path with
+symbolic links resolved, plus `tool.FlakeRevision()` and the enabled recipes'
+declarations.
+
+Both recipes share these parameters: `max_edge` (longest side in pixels,
+16-16384, default 2576), `max_area` (pixel count, 256-100000000, default
+3750000), `format` (`jpeg`, `webp` or `png`, default `jpeg`) and `quality`
+(1-100, default 90). The output satisfies both bounds with one resample, is
+never upscaled, is upright, is converted to sRGB when the source carries an
+ICC profile, has transparency flattened onto white for JPEG, and carries no
+metadata. The sRGB profile is embedded in the library and exists as a
+temporary dot-file in the output directory only while a tool runs.
+
+- `still` accepts `image/heic` and `image/heif` (ImageMagick coder `heic`) and
+  writes `still.<ext>`.
+- `frames` accepts `image/gif` (coder `gif`) and `image/webp` (coder `webp`)
+  and writes `frame-000.<ext>`, `frame-001.<ext>`, and so on. Extra parameter
+  `max_frames` (1-64, default 16) bounds the evenly spaced frames sampled from
+  the composited animation; a frame identical to the one before it after
+  resizing is dropped, and each file records the source frame it came from and
+  that frame's start time.
+
 The same inputs, arguments and tool binaries give the same output bytes;
 callers pass policy values (quality, sizes, ceilings) in explicitly.
 

@@ -1,7 +1,8 @@
 // Package media builds and runs the media tools' command lines: bounded WebP
 // encodes of still images and animations (a fallback ladder of dimension
 // ceilings and frame caps, with the frame mapping each encode holds), and
-// animated WebP thumbnails of video.
+// animated WebP thumbnails of video. It also holds an Executor that runs named,
+// declared recipes (still and frames) over one staged input at a time.
 //
 // The package decides arguments and interprets tool output; it does not run
 // programs itself. A caller supplies a Runner and a Stager through an Env, so
