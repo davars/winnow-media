@@ -60,8 +60,10 @@ tools itself because the input is untrusted:
   `os.MkdirTemp`, installs a generated ImageMagick policy there and reads it
   back with `magick -list policy` and `-list resource`. It returns an error,
   removing the directory, unless the first policy file listed is the
-  installed one with exactly the rules written and no other file contributes
-  a rule. `Close` removes the directory.
+  installed one with exactly the rules written, no other file contributes
+  a rule and no resource limit reads back above the ceiling written
+  (ImageMagick may lower one, such as threads to the host's CPUs). `Close`
+  removes the directory.
 - `Processor.Still(ctx, path, Encoding, dir) (Image, Usage, error)` accepts
   HEIC and HEIF (ImageMagick coder `heic`) and writes `still.<ext>`.
 - `Processor.AnimationFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
