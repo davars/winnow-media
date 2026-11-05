@@ -142,8 +142,10 @@ beside the decoded ones, and a GIF of full-canvas frames completed up to
 90 MP one did not. The pixel caps sit below those points. ImageMagick's
 memory, map and disk ceilings (1, 2 and 4 GiB) are unchanged. The time
 ceiling is at least four times the longest ImageMagick run measured (36 s),
-and the ffmpeg allocation limit four times what an 8K frame needs; the factor
-of 4 for a slower host, such as a Raspberry Pi 5, is an estimate. The library
+and the ffmpeg allocation limit four times what an 8K frame needs. A
+Raspberry Pi 5 measured at worst about 4 times that host: 4.1 times the CPU
+for 4K HEVC decode, and 4.0 times the wall time for two 8000x8000 GIF frames
+(a disk-bound run); peak memory was the same. The library
 sets no deadline on a whole operation: a caller
 that wants one passes a context, and on a slow host a 4K video needs several
 minutes of it.
@@ -191,7 +193,7 @@ detects the marker, runs the helper and never returns; in any other process it
 returns at once and changes nothing. The helper
 
 - sets `no_new_privs` and these limits (soft and hard), each above the
-  largest value measured for a tool within the caps: CPU 200 s, address space
+  largest value measured for a tool within the caps: CPU 210 s, address space
   8 GiB, file size 5 GiB, open files 1024, and tasks the user's current count
   plus 512;
 - installs a seccomp filter, in pure Go, that makes `socket` and `socketpair`
