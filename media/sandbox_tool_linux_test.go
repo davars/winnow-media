@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -69,6 +70,29 @@ func fakeTool(args []string) {
 		check(os.WriteFile(args[1], fmt.Appendf(nil, "%d", os.Getpid()), 0o600))
 		check(syscall.Kill(os.Getppid(), syscall.SIGKILL))
 		time.Sleep(time.Minute)
+	case "tsync":
+		// A thread that exists before the filter is installed must be
+		// filtered too.
+		other := make(chan chan int)
+		started := make(chan struct{})
+		go func() {
+			runtime.LockOSThread()
+			close(started)
+			reply := <-other
+			_, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+			reply <- errnoOf(err)
+		}()
+		<-started
+		runtime.LockOSThread()
+		const prSetNoNewPrivs = 38
+		_, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0)
+		if e != 0 {
+			check(e)
+		}
+		check(installFilter())
+		reply := make(chan int)
+		other <- reply
+		fmt.Println("socket", <-reply)
 	case "sleep":
 		time.Sleep(time.Minute)
 	case "spawn":
