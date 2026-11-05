@@ -50,6 +50,7 @@ type row struct {
 }
 
 func main() {
+	media.Init()
 	var (
 		only        = flag.String("only", "", "run the input with this name")
 		genOnly     = flag.Bool("gen-only", false, "generate inputs and stop")

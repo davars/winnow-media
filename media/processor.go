@@ -1,13 +1,10 @@
 package media
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/davars/winnow-media/tool"
 )
@@ -15,7 +12,8 @@ import (
 // stderrTail is how much of a failed tool's standard error an error carries.
 const stderrTail = 4 << 10
 
-// Processor runs the media operations. It owns the tools it runs, the
+// Processor runs the media operations. Every tool runs in the sandbox
+// described at NewProcessor. It owns the tools it runs, the
 // ImageMagick policy those runs obey and a private directory for both; it
 // refuses to be created unless ImageMagick reports that policy as the only
 // one in effect. A Processor is safe for concurrent use.
@@ -25,10 +23,26 @@ type Processor struct {
 	run   Runner
 }
 
-// NewProcessor resolves ImageMagick and FFmpeg, installs the policy in a new
-// directory under the system temporary directory and checks that
-// ImageMagick applies exactly that policy. Call Close when done.
+// NewProcessor resolves ImageMagick and FFmpeg, checks that the sandbox every
+// tool run goes through is in force, installs the policy in a new directory
+// under the system temporary directory and checks that ImageMagick applies
+// exactly that policy. Call Close when done.
+//
+// The sandbox is a helper process (see Init) that limits the tool's
+// resources and denies it socket creation, and kills whatever the tool leaves
+// running. NewProcessor requires that Init was called, and refuses to return
+// unless the helper reports the sandbox applied. It returns an error on
+// platforms other than Linux on amd64 or arm64.
 func NewProcessor(ctx context.Context) (*Processor, error) {
+	if err := sandboxAvailable(); err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
+	if !initCalled.Load() {
+		return nil, fmt.Errorf("processor: %w", errNoInit)
+	}
+	if err := probeSandbox(ctx); err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
 	tools := map[string]string{}
 	for _, name := range []string{"magick", "ffmpeg", "ffprobe"} {
 		path, err := tool.Resolve(name)
@@ -96,27 +110,6 @@ func (t *tailBuffer) Write(b []byte) (int, error) {
 		t.buf = append(t.buf[:0], t.buf[len(t.buf)-stderrTail:]...)
 	}
 	return len(b), nil
-}
-
-func (p *Processor) runTool(ctx context.Context, name string, args ...string) (Result, error) {
-	path, ok := p.tools[name]
-	if !ok {
-		return Result{}, fmt.Errorf("unknown tool %q", name)
-	}
-	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = p.environ()
-	cmd.Dir = p.dir
-	cmd.WaitDelay = 5 * time.Second
-	var stdout bytes.Buffer
-	var stderr tailBuffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	res := Result{Stdout: stdout.Bytes(), Usage: UsageOf(cmd.ProcessState)}
-	if err != nil {
-		return res, fmt.Errorf("%s: %w: %s", name, err, bytes.TrimSpace(stderr.buf))
-	}
-	return res, nil
 }
 
 // meter accumulates the usage of the runs of one operation.

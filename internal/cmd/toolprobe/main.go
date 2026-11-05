@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/davars/winnow-media/media"
 	"github.com/davars/winnow-media/tool"
 )
 
 func main() {
+	media.Init()
 	p, err := tool.Resolve("magick")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
