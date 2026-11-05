@@ -445,3 +445,138 @@ func TestVideoFramesGoldenArgv(t *testing.T) {
 		})
 	}
 }
+
+func TestParseVideoProbeStreamSelection(t *testing.T) {
+	stream := func(index int, dispositions string) string {
+		return fmt.Sprintf(`{"index":%d,"codec_type":"video","width":%d,"height":10,"disposition":{%s}}`,
+			index, 100+index, dispositions)
+	}
+	cases := []struct {
+		name    string
+		streams []string
+		want    int
+		wantErr bool
+	}{
+		{"default beats first", []string{stream(0, `"default":0`), stream(1, `"default":1`)}, 1, false},
+		{"first default wins", []string{stream(0, `"default":0`), stream(1, `"default":1`), stream(2, `"default":1`)}, 1, false},
+		{"no default falls back to first", []string{stream(0, `"default":0`), stream(1, `"default":0`)}, 0, false},
+		{"attached picture is skipped even when default", []string{stream(0, `"default":1,"attached_pic":1`), stream(1, `"default":0`)}, 1, false},
+		{"default skips audio", []string{`{"index":0,"codec_type":"audio","disposition":{"default":1}}`, stream(1, `"default":0`)}, 1, false},
+		{"only attached pictures", []string{stream(0, `"default":1,"attached_pic":1`)}, 0, true},
+	}
+	for _, c := range cases {
+		out := fmt.Sprintf(`{"streams":[%s],"format":{"duration":"1.0"}}`, strings.Join(c.streams, ","))
+		v, err := parseVideoProbe([]byte(out))
+		if (err != nil) != c.wantErr || (err == nil && v.stream != c.want) {
+			t.Errorf("%s: stream %d, err %v; want stream %d, error %v", c.name, v.stream, err, c.want, c.wantErr)
+		}
+		if err == nil && v.streams != len(c.streams) {
+			t.Errorf("%s: %d streams counted, want %d", c.name, v.streams, len(c.streams))
+		}
+	}
+}
+
+func TestVideoFramesSamplesTheDefaultStream(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	src := writeClip(t, env, ".mp4",
+		"-f", "lavfi", "-i", "color=c=red:size=160x120:rate=10:duration=2",
+		"-f", "lavfi", "-i", "color=c=blue:size=320x240:rate=10:duration=2",
+		"-map", "0", "-map", "1", "-disposition:v:0", "0", "-disposition:v:1", "default",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
+	images, out := videoInto(t, p, src, Encoding{}, 2)
+	if len(images) == 0 {
+		t.Fatal("no images")
+	}
+	for _, f := range images {
+		if f.Width != 320 || f.Height != 240 {
+			t.Errorf("%s is %dx%d, want the default stream's 320x240", f.Name, f.Width, f.Height)
+		}
+		if rgb := pixelRGB(t, env, filepath.Join(out, f.Name)); rgb[2] < rgb[0]+100 {
+			t.Errorf("%s: mean colour %v is not blue", f.Name, rgb)
+		}
+	}
+}
+
+func TestCheckVideoInfo(t *testing.T) {
+	ok := videoInfo{streams: maxStreams, durationMS: maxDurationMS, width: maxDimension, height: maxDimension}
+	if err := checkVideoInfo(ok); err != nil {
+		t.Fatalf("limits are inclusive: %v", err)
+	}
+	cases := map[string]videoInfo{
+		"streams":  {streams: maxStreams + 1},
+		"duration": {streams: 1, durationMS: maxDurationMS + 1},
+		"width":    {streams: 1, width: maxDimension + 1, height: 1},
+	}
+	for name, v := range cases {
+		if err := checkVideoInfo(v); !errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s: err = %v, want ErrTooLarge", name, err)
+		}
+	}
+}
+
+func TestVideoFramesRefusesOversizedProbeBeforeSampling(t *testing.T) {
+	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
+	manyStreams := `{"index":0,"codec_type":"video","width":16,"height":16,"duration":"1.0"}`
+	for i := 1; i <= maxStreams; i++ {
+		manyStreams += fmt.Sprintf(`,{"index":%d,"codec_type":"audio"}`, i)
+	}
+	cases := map[string]string{
+		"stream count":    `{"streams":[` + manyStreams + `],"format":{}}`,
+		"stream duration": `{"streams":[{"index":0,"codec_type":"video","width":16,"height":16,"duration":"21600.001"}],"format":{}}`,
+		"format duration": `{"streams":[{"index":0,"codec_type":"video","width":16,"height":16}],"format":{"duration":"99999"}}`,
+		"width":           `{"streams":[{"index":0,"codec_type":"video","width":16385,"height":16,"duration":"1"}],"format":{}}`,
+	}
+	for name, probe := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := requireProcessor(t)
+			var tools []string
+			p.run = func(_ context.Context, tool string, _ ...string) (Result, error) {
+				tools = append(tools, tool)
+				return Result{Stdout: []byte(probe)}, nil
+			}
+			_, _, err := p.VideoFrames(context.Background(), mp4, Encoding{}, 0, t.TempDir())
+			if !errors.Is(err, ErrTooLarge) {
+				t.Errorf("err = %v, want ErrTooLarge", err)
+			}
+			if !slices.Equal(tools, []string{"ffprobe"}) {
+				t.Errorf("tools run = %v, want only the probe", tools)
+			}
+		})
+	}
+}
+
+func TestVideoToolRunsShareTheInputArguments(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	rec := record(p)
+	videoInto(t, p, sdrClip(t, env, "160x120", 10, 4), Encoding{}, 3)
+	seen := map[string]int{}
+	for _, call := range rec.calls {
+		tool := call[0]
+		if tool != "ffprobe" && tool != "ffmpeg" {
+			continue
+		}
+		seen[tool]++
+		input := strings.Join(inputArgs(decoder{tool, "mov"}, "X"), " ")
+		input = strings.TrimSuffix(input, "X")
+		if !strings.Contains(strings.Join(call[1:], " "), input) {
+			t.Errorf("%s call lacks %q: %q", tool, input, call)
+		}
+		if tool == "ffmpeg" {
+			joined := " " + strings.Join(call[1:], " ") + " "
+			for _, want := range []string{
+				" -max_alloc " + strconv.Itoa(ffmpegMaxAlloc) + " ",
+				" -filter_threads " + strconv.Itoa(ffmpegThreads) + " ",
+				" -threads " + strconv.Itoa(ffmpegThreads) + " -protocol_whitelist ",
+			} {
+				if !strings.Contains(joined, want) {
+					t.Errorf("ffmpeg call lacks %q: %q", want, call)
+				}
+			}
+		}
+	}
+	if seen["ffprobe"] != 1 || seen["ffmpeg"] < 2 {
+		t.Errorf("calls seen = %v", seen)
+	}
+}

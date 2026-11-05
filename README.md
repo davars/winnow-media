@@ -77,9 +77,10 @@ tools itself because the input is untrusted:
   (demuxer `matroska`) and writes `frame-000.<ext>`, `frame-001.<ext>`, and
   so on. `maxFrames` is as for `AnimationFrames`. It runs `ffprobe`, `ffmpeg`
   and `magick`.
-  - ffprobe picks the first video stream that is not an attached picture and
-    reads its size, display rotation, duration (the stream's, else the
-    container's), frame count and colour transfer. Output is upright, so a
+  - ffprobe picks the video stream flagged default that is not an attached
+    picture, else the first video stream that is not one, and reads its size,
+    display rotation, duration (the stream's, else the container's), frame
+    count and colour transfer. Output is upright, so a
     stream rotated by 90 or 270 degrees gives portrait files. An input with no
     video stream is an error.
   - The samples are the centres of `maxFrames` equal intervals of the
@@ -102,6 +103,11 @@ tools itself because the input is untrusted:
   - `Image.TimeMS` is the seek target in ms; the file shows the first frame at
     or after it. A seeked sample has no known frame index, so `Image.Frame` is
     always 0.
+  - Every ffprobe and ffmpeg run opens its input with `-protocol_whitelist
+    file`, so a nested input cannot reach the network, and the pinned `-f`
+    demuxer; for `mov` also `-enable_drefs 0`, so a track's reference to an
+    external data file is not followed. Each ffmpeg run also sets
+    `-threads 4` (decoder), `-filter_threads 4` and `-max_alloc` of 1 GiB.
 
 `path` and `dir` may be relative. Each call returns a `Usage`: the CPU time
 summed over every tool run of the call and the largest peak resident set size
@@ -116,9 +122,11 @@ names the type found. The decoder is then pinned to that type, so no tool
 picks a format from content. Image headers are read without decoding pixels
 (`-ping`) and an input is refused when a frame is wider or taller than 16384
 pixels or has more than 100 million, when an animation has more than 2000
-frames or more than a billion pixels in all, or when a video stream is wider
-or taller than 16384. These refusals wrap `ErrTooLarge`, naming the cap and
-the values. The numbers are provisional.
+frames or more than a billion pixels in all, when a video stream is wider or
+taller than 16384 or longer than six hours (the stream's duration, else the
+container's), or when a video container holds more than 32 streams. These
+refusals wrap `ErrTooLarge`, naming the cap and the values. The numbers are
+provisional.
 
 **The policy.** Tools run with `exec.CommandContext`, in the Processor's
 directory, with an environment of exactly `MAGICK_CONFIGURE_PATH`,
