@@ -22,7 +22,7 @@ type Processor struct {
 	tools map[string]string
 	run   Runner
 	// compose runs the GIF compositor; tests replace it.
-	compose func(ctx context.Context, req composeRequest, onFrame func(path string, profiled bool) error) (*Usage, error)
+	compose func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error)
 }
 
 // NewProcessor resolves ImageMagick and FFmpeg, checks that the sandbox every
@@ -126,7 +126,7 @@ func (p *Processor) env(m *meter) Env {
 			m.add(res.Usage)
 			return res, err
 		},
-		compose: func(ctx context.Context, req composeRequest, onFrame func(path string, profiled bool) error) error {
+		compose: func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) error {
 			usage, err := p.compose(ctx, req, onFrame)
 			m.add(usage)
 			return err

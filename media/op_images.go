@@ -317,8 +317,11 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	sourceFrames := len(infos)
 	selected := selectFrames(frameCount(maxFrames, sourceFrames, true), sourceFrames)
 	if dec.name == "gif" {
-		profileFrom := slices.IndexFunc(infos, func(f FrameInfo) bool { return f.hasICC })
-		return e.gifFrames(ctx, path, enc, dir, selected, gifGeometry{len(infos), cw, ch, tw, th, resize, profileFrom})
+		own := make([]bool, len(infos))
+		for i, f := range infos {
+			own[i] = f.hasICC
+		}
+		return e.gifFrames(ctx, path, enc, dir, selected, gifGeometry{len(infos), cw, ch, tw, th, resize, own})
 	}
 	profiled, err := selectedProfiled(infos, selected)
 	if err != nil {
@@ -396,8 +399,8 @@ type gifGeometry struct {
 	cw, ch       int // canvas
 	tw, th       int // output size
 	resize       bool
-	// profileFrom is the first frame that carries an ICC profile, or -1.
-	profileFrom int
+	// own[i] is set when the header read found an ICC profile on frame i.
+	own []bool
 }
 
 // gifFrames writes the selected frames of a GIF. The sandboxed compositor
@@ -405,9 +408,9 @@ type gifGeometry struct {
 // selected frame as a full-canvas PAM file; ImageMagick encodes them in
 // batches as they arrive, so it never holds more than a batch.
 //
-// The compositor says which frames carry the GIF's ICC profile, as they do
-// after -coalesce. Those are assigned the profile and converted to sRGB; the
-// others are left as they are. A batch never mixes the two.
+// The compositor says which ICC profile, if any, each frame carries, as the
+// frames do after -coalesce. A frame is assigned its profile and converted to
+// sRGB; one without is left as it is. A batch holds frames of one profile.
 func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, g gifGeometry) ([]Image, error) {
 	tail := []string{}
 	if enc.format == JPEG {
@@ -419,8 +422,13 @@ func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir strin
 	tail = append(tail, "-strip")
 
 	var images []Image
-	err := withProfile(dir, g.profileFrom >= 0, func(srgbPath string) error {
-		defer func() { _ = os.Remove(filepath.Join(dir, gifProfileName)) }()
+	err := withProfile(dir, slices.Contains(g.own, true), func(srgbPath string) error {
+		usedProfiles := map[int]bool{}
+		defer func() {
+			for id := range usedProfiles {
+				_ = os.Remove(filepath.Join(dir, gifProfileName(id)))
+			}
+		}()
 		encoder := &sampleEncoder{
 			env: e, coder: "pam", enc: enc, dir: dir, framePixels: g.cw * g.ch,
 			keep: func(i, n, w, h int) {
@@ -428,12 +436,12 @@ func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir strin
 			},
 		}
 		var pending []string
-		pendingProfiled := false
+		pendingProfile := 0
 		flush := func() error {
 			defer removeFiles(pending)
 			encoder.middle = []string{"-auto-orient"}
-			if pendingProfiled {
-				encoder.middle = append(encoder.middle, colorArgs(filepath.Join(dir, gifProfileName), true)...)
+			if pendingProfile > 0 {
+				encoder.middle = append(encoder.middle, colorArgs(filepath.Join(dir, gifProfileName(pendingProfile)), true)...)
 				encoder.middle = append(encoder.middle, colorArgs(srgbPath, true)...)
 			}
 			encoder.middle = append(encoder.middle, tail...)
@@ -444,19 +452,22 @@ func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir strin
 		ordinal := 0
 		req := composeRequest{
 			path: path, dir: dir, selected: selected, inFlight: encoder.batchSize(),
-			frames: g.sourceFrames, width: g.cw, height: g.ch, profileFrom: g.profileFrom,
+			frames: g.sourceFrames, width: g.cw, height: g.ch, own: g.own,
 		}
-		err := e.compose(ctx, req, func(p string, profiled bool) error {
+		err := e.compose(ctx, req, func(p string, profile int) error {
 			if ordinal >= len(selected) {
 				return errors.New("the compositor wrote more frames than selected")
 			}
 			ordinal++
-			if len(pending) > 0 && profiled != pendingProfiled {
+			if len(pending) > 0 && profile != pendingProfile {
 				if err := flush(); err != nil {
 					return err
 				}
 			}
-			pendingProfiled = profiled
+			pendingProfile = profile
+			if profile > 0 {
+				usedProfiles[profile] = true
+			}
 			pending = append(pending, p)
 			if len(pending) >= encoder.batchSize() {
 				return flush()

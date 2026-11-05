@@ -84,12 +84,14 @@ tools itself because the input is untrusted:
     ImageMagick encodes the frames a batch per run (at most 16 million input
     pixels, about 256 MiB), resizing, flattening on white for JPEG and
     stripping metadata. Memory is about one byte per pixel of every frame in the
-    compositor plus one batch in ImageMagick. A GIF's ICC profile (the
-    `ICCRGBG1012` extension) is written beside the frames, and the frames that
-    carry it, as they do after `-coalesce`, are assigned it and converted to
-    sRGB. A GIF that ends between blocks without its trailer is decoded as
-    ImageMagick does; one truncated inside a block, with a frame outside the
-    logical screen or with two different profiles is refused.
+    compositor plus one batch in ImageMagick. A GIF's ICC profiles (the
+    `ICCRGBG1012` extension, any number of distinct ones) are written beside
+    the frames as they are first needed. Each frame carries the profile it has
+    after `-coalesce`, and is assigned it and converted to sRGB; ImageMagick
+    gets a separate run wherever the profile changes, never more than one per
+    frame. A GIF that ends between blocks without its trailer is decoded as
+    ImageMagick does; one truncated inside a block or with a frame outside the
+    logical screen is refused.
   - A WebP is read by ImageMagick, which composites every frame before it
     selects any, so its memory grows with the number of frames.
 - `Processor.VideoFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`

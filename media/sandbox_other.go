@@ -19,6 +19,6 @@ func (p *Processor) runTool(context.Context, string, ...string) (Result, error) 
 	return Result{}, sandboxAvailable()
 }
 
-func (p *Processor) composeGIF(context.Context, composeRequest, func(string, bool) error) (*Usage, error) {
+func (p *Processor) composeGIF(context.Context, composeRequest, func(string, int) error) (*Usage, error) {
 	return nil, sandboxAvailable()
 }

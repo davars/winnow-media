@@ -152,7 +152,7 @@ func TestCompositorMatchesMagickCoalesce(t *testing.T) {
 			all = append(all, i)
 		}
 		var frames []*image.NRGBA
-		err = compositeGIF(g, layout.width, layout.height, layout.own, all, func(_ int, c *image.NRGBA, _ bool) error {
+		err = compositeGIF(g, layout.width, layout.height, layout.own, all, func(_ int, c *image.NRGBA, _ int) error {
 			cp := image.NewNRGBA(c.Bounds())
 			copy(cp.Pix, c.Pix)
 			frames = append(frames, cp)
@@ -273,7 +273,7 @@ func TestPAMReadsBackIdentically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = compositeGIF(dec, w, h, nil, []int{1}, func(_ int, c *image.NRGBA, _ bool) error { canvas = c; return nil })
+	err = compositeGIF(dec, w, h, nil, []int{1}, func(_ int, c *image.NRGBA, _ int) error { canvas = c; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

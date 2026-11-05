@@ -79,4 +79,4 @@ type Env struct {
 
 // composer composites the selected frames of a GIF in the sandbox and calls
 // onFrame with the path of each as it is written.
-type composer func(ctx context.Context, req composeRequest, onFrame func(path string, profiled bool) error) error
+type composer func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) error
