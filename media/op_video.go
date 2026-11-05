@@ -43,6 +43,7 @@ type videoInfo struct {
 	durationMS    int64
 	frames        int // 0 when unknown
 	transfer      string
+	streams       int // streams in the container, of every kind
 }
 
 // upright returns the dimensions the decoded frames have, which ffmpeg
@@ -65,6 +66,7 @@ type probeJSON struct {
 		RFrameRate    string `json:"r_frame_rate"`
 		ColorTransfer string `json:"color_transfer"`
 		Disposition   struct {
+			Default     int `json:"default"`
 			AttachedPic int `json:"attached_pic"`
 		} `json:"disposition"`
 		SideData []struct {
@@ -76,12 +78,30 @@ type probeJSON struct {
 	} `json:"format"`
 }
 
+// demuxerOptions are the input options set on a demuxer by name. An option
+// is listed only for demuxers that define it: ffmpeg refuses an input option
+// the demuxer does not know.
+var demuxerOptions = map[string][]string{
+	"mov": {"-enable_drefs", "0"},
+}
+
+// inputArgs returns the arguments that open path in ffprobe or ffmpeg: only
+// the file protocol, the demuxer's options and the demuxer itself, so nothing
+// is chosen from content and no nested input is opened over the network.
+func inputArgs(dec decoder, path string) []string {
+	args := []string{"-protocol_whitelist", "file"}
+	args = append(args, demuxerOptions[dec.name]...)
+	return append(args, "-f", dec.name, "-i", path)
+}
+
 func probeVideo(ctx context.Context, env Env, dec decoder, path string) (videoInfo, error) {
-	res, err := env.Run(ctx, "ffprobe",
-		"-v", "error", "-f", dec.name, "-of", "json",
-		"-show_entries", "stream=index,codec_type,width,height,duration,nb_frames,r_frame_rate,color_transfer"+
-			":stream_disposition=attached_pic:stream_side_data=rotation:format=duration",
-		"-i", path)
+	args := append([]string{
+		"-v", "error", "-of", "json",
+		"-show_entries", "stream=index,codec_type,width,height,duration,nb_frames,r_frame_rate,color_transfer" +
+			":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration",
+	},
+		inputArgs(dec, path)...)
+	res, err := env.Run(ctx, "ffprobe", args...)
 	if err != nil {
 		return videoInfo{}, fmt.Errorf("probing video: %w", err)
 	}
@@ -93,14 +113,25 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 	if err := json.Unmarshal(out, &p); err != nil {
 		return videoInfo{}, fmt.Errorf("parsing probe output: %w", err)
 	}
-	for _, s := range p.Streams {
+	pick := -1
+	for i, s := range p.Streams {
 		if s.CodecType != "video" || s.Disposition.AttachedPic != 0 {
 			continue
 		}
+		if s.Disposition.Default == 1 {
+			pick = i
+			break
+		}
+		if pick < 0 {
+			pick = i
+		}
+	}
+	if pick >= 0 {
+		s := p.Streams[pick]
 		if s.Width < 1 || s.Height < 1 {
 			return videoInfo{}, fmt.Errorf("video stream reports size %dx%d", s.Width, s.Height)
 		}
-		v := videoInfo{stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer}
+		v := videoInfo{stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer, streams: len(p.Streams)}
 		for _, sd := range s.SideData {
 			if sd.Rotation != nil {
 				v.rotation = ((int(math.Round(*sd.Rotation))%360 + 360) % 360)
@@ -111,7 +142,7 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 			seconds, err = strconv.ParseFloat(p.Format.Duration, 64)
 		}
 		if err == nil && seconds > 0 && !math.IsInf(seconds, 0) {
-			v.durationMS = int64(math.Round(seconds * 1000))
+			v.durationMS = int64(math.Round(min(seconds, 1e12) * 1000))
 		}
 		if n, err := strconv.Atoi(s.NbFrames); err == nil && n > 0 {
 			v.frames = n
@@ -171,7 +202,7 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 	if err != nil {
 		return nil, err
 	}
-	if err := checkVideoSize(info.width, info.height); err != nil {
+	if err := checkVideoInfo(info); err != nil {
 		return nil, err
 	}
 	w, h := info.upright()
@@ -204,11 +235,15 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 		scratch = append(scratch, path)
 		args := []string{
 			"-hide_banner", "-nostdin", "-v", "error", "-y",
+			"-max_alloc", strconv.Itoa(ffmpegMaxAlloc),
+			"-filter_threads", strconv.Itoa(ffmpegThreads),
 			"-ss", fmt.Sprintf("%d.%03d", t/1000, t%1000),
-			"-f", dec.name, "-i", inputPath,
-			"-map", fmt.Sprintf("0:%d", info.stream),
-			"-an", "-sn", "-dn", "-frames:v", "1",
+			"-threads", strconv.Itoa(ffmpegThreads),
 		}
+		args = append(args, inputArgs(dec, inputPath)...)
+		args = append(args,
+			"-map", fmt.Sprintf("0:%d", info.stream),
+			"-an", "-sn", "-dn", "-frames:v", "1")
 		if filter != "" {
 			args = append(args, "-vf", filter)
 		}

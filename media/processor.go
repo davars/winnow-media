@@ -244,9 +244,12 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 
 // VideoFrames decodes up to maxFrames still images from an MP4, QuickTime,
 // WebM or Matroska file and writes them to dir as frame-NNN.<ext>. The
-// samples are the centres of equal intervals of the first video stream's
-// duration, each taken by its own seek, so the work does not grow with the
-// length of the video. HDR (HLG or PQ) video is tone-mapped to SDR, output is
+// samples are the centres of equal intervals of the duration of the video
+// stream flagged default (else the first), ignoring attached pictures, each
+// taken by its own seek, so the work does not grow with the length of the
+// video. A container with more than 32 streams, a stream longer than six
+// hours or one wider or taller than 16384 pixels gives an error wrapping
+// ErrTooLarge before any frame is decoded. HDR (HLG or PQ) video is tone-mapped to SDR, output is
 // upright whatever the stream's display rotation, and a sample identical to
 // the one before it is dropped, with the files numbered consecutively from 0.
 // Image.TimeMS is the seek target in milliseconds; Image.Frame is 0 because a

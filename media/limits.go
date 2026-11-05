@@ -24,6 +24,18 @@ const (
 	// maxAnimationPixels bounds frames times canvas area, the work of
 	// compositing an animation.
 	maxAnimationPixels = 1_000_000_000
+	// maxStreams is the most streams, of any kind, a video container may hold.
+	maxStreams = 32
+	// maxDurationMS is the longest video stream, in milliseconds.
+	maxDurationMS = 6 * 3600 * 1000
+)
+
+// The ffmpeg decode limits.
+const (
+	// ffmpegThreads bounds the decoder's threads and the filter graph's.
+	ffmpegThreads = 4
+	// ffmpegMaxAlloc is the largest single allocation ffmpeg may make, in bytes.
+	ffmpegMaxAlloc = 1 << 30
 )
 
 // The ImageMagick policy ceilings. Width and height sit above maxDimension
@@ -78,6 +90,18 @@ func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
 		}
 	}
 	return nil
+}
+
+// checkVideoInfo refuses a probed video that has more streams, a longer
+// duration or a larger stored size than the caps allow.
+func checkVideoInfo(v videoInfo) error {
+	if v.streams > maxStreams {
+		return tooLarge("container has %d streams, the limit is %d", v.streams, maxStreams)
+	}
+	if v.durationMS > maxDurationMS {
+		return tooLarge("video lasts %d ms, the limit is %d", v.durationMS, int64(maxDurationMS))
+	}
+	return checkVideoSize(v.width, v.height)
 }
 
 // checkVideoSize refuses a stream whose stored size exceeds maxDimension.
