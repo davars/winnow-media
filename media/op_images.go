@@ -12,15 +12,10 @@ import (
 	"strings"
 )
 
-const (
-	stillName  = "still"
-	framesName = "frames"
-)
-
 //go:embed profiles/sRGB2014.icc.base64
 var srgbProfileBase64 string
 
-// srgbProfile is the sRGB destination profile of the image recipes.
+// srgbProfile is the sRGB destination profile of the image operations.
 var srgbProfile = func() []byte {
 	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(srgbProfileBase64))
 	if err != nil {
@@ -34,62 +29,21 @@ var srgbProfile = func() []byte {
 // run starts, so the name cannot collide.
 const profileName = ".srgb2014.icc"
 
-// imageFormats maps the `format` parameter to the output extension and
-// media type.
-var imageFormats = map[string]struct{ ext, mediaType string }{
-	"jpeg": {".jpg", "image/jpeg"},
-	"webp": {".webp", "image/webp"},
-	"png":  {".png", "image/png"},
+var stillSpec = spec{
+	inputs: []acceptedInput{
+		{"image/heic", decoder{"magick", "heic"}},
+		{"image/heif", decoder{"magick", "heic"}},
+	},
+	tools: []string{"magick"},
 }
 
-func sizingParams() []Param {
-	return []Param{
-		{Name: "max_edge", Kind: KindInt, Min: 16, Max: 16384, Default: "2576"},
-		{Name: "max_area", Kind: KindInt, Min: 256, Max: 100_000_000, Default: "3750000"},
-		{Name: "format", Kind: KindEnum, Values: []string{"jpeg", "webp", "png"}, Default: "jpeg"},
-		{Name: "quality", Kind: KindInt, Min: 1, Max: 100, Default: "90"},
-	}
+var animationSpec = spec{
+	inputs: []acceptedInput{
+		{"image/gif", decoder{"magick", "gif"}},
+		{"image/webp", decoder{"magick", "webp"}},
+	},
+	tools: []string{"magick"},
 }
-
-var imageOutputTypes = []string{"image/jpeg", "image/webp", "image/png"}
-
-func stillRecipe() Recipe {
-	return Recipe{
-		Name:     stillName,
-		Revision: 1,
-		Inputs: []Input{
-			{MediaType: "image/heic", Decoder: Decoder{Tool: "magick", Name: "heic"}},
-			{MediaType: "image/heif", Decoder: Decoder{Tool: "magick", Name: "heic"}},
-		},
-		Params: sizingParams(),
-		Outputs: Output{
-			MediaTypes: slicesClone(imageOutputTypes),
-			Fields:     []Field{FieldSourceFrame, FieldSourceTimeMS, FieldWidth, FieldHeight},
-		},
-		Engines: []string{"magick"},
-	}
-}
-
-func framesRecipe() Recipe {
-	return Recipe{
-		Name:     framesName,
-		Revision: 1,
-		Inputs: []Input{
-			{MediaType: "image/gif", Decoder: Decoder{Tool: "magick", Name: "gif"}},
-			{MediaType: "image/webp", Decoder: Decoder{Tool: "magick", Name: "webp"}},
-		},
-		Params: append([]Param{
-			{Name: "max_frames", Kind: KindInt, Min: 1, Max: 64, Default: "16"},
-		}, sizingParams()...),
-		Outputs: Output{
-			MediaTypes: slicesClone(imageOutputTypes),
-			Fields:     []Field{FieldSourceFrame, FieldSourceTimeMS, FieldWidth, FieldHeight},
-		},
-		Engines: []string{"magick"},
-	}
-}
-
-func slicesClone(s []string) []string { return append([]string(nil), s...) }
 
 // sceneHeader is what one scene's header says, before any pixels decode.
 type sceneHeader struct {
@@ -103,9 +57,9 @@ type sceneHeader struct {
 
 // identifyScenes reads the headers of the scenes selected by selector ("" for
 // all, "[0]" for the first) of path, decoded with decoder.
-func identifyScenes(ctx context.Context, env Env, decoder Decoder, path, selector string) ([]sceneHeader, error) {
+func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector string) ([]sceneHeader, error) {
 	args := append([]string{"identify"}, LimitArgs()...)
-	args = append(args, "-format", "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n", decoder.Name+":"+path+selector)
+	args = append(args, "-format", "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n", dec.name+":"+path+selector)
 	res, err := env.Run(ctx, "magick", args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading headers: %w", err)
@@ -170,10 +124,10 @@ func fitSize(w, h, maxEdge, maxArea int) (tw, th int, resize bool) {
 	return tw, th, true
 }
 
-// imagePipeline describes the decode and pixel stages the image recipes
+// imagePipeline describes the decode and pixel stages the image operations
 // share.
 type imagePipeline struct {
-	decoder     Decoder
+	decoder     decoder
 	inputPath   string
 	selector    string // appended to the input path, "[0]" for a still
 	coalesce    bool
@@ -190,7 +144,7 @@ type imagePipeline struct {
 // conversion that needed it.
 func (p imagePipeline) args() []string {
 	args := append([]string{}, LimitArgs()...)
-	args = append(args, p.decoder.Name+":"+p.inputPath+p.selector)
+	args = append(args, p.decoder.name+":"+p.inputPath+p.selector)
 	if p.coalesce {
 		args = append(args, "-coalesce")
 		if p.deleteExpr != "" {
@@ -210,7 +164,7 @@ func (p imagePipeline) args() []string {
 
 // withProfile makes the sRGB profile available as a file for the duration of
 // fn when profiled is set. The file lives in outDir, so it follows the
-// output directory's ownership and is gone before the recipe returns.
+// output directory's ownership and is gone before the operation returns.
 func withProfile(outDir string, profiled bool, fn func(profilePath string) error) error {
 	if !profiled {
 		return fn("")
@@ -256,65 +210,105 @@ func identifySizes(ctx context.Context, env Env, paths []string) ([][2]int, erro
 	return sizes, nil
 }
 
-type imageParams struct {
-	maxEdge, maxArea, quality int
-	format                    string
-}
-
-func readImageParams(p paramValues) imageParams {
-	return imageParams{
-		maxEdge: p.int("max_edge"), maxArea: p.int("max_area"),
-		quality: p.int("quality"), format: p.str("format"),
-	}
-}
-
-func runStill(ctx context.Context, env Env, in runInput) ([]OutputFile, error) {
-	ip := readImageParams(in.params)
-	format := imageFormats[ip.format]
-
-	scenes, err := identifyScenes(ctx, env, in.decoder, in.inputPath, "[0]")
+// Still decodes the first image of a HEIC or HEIF source (image/heic,
+// image/heif) and writes it to dir as still.<ext> in the encoding's format.
+// The output is upright, converted to sRGB when the source carries an ICC
+// profile, flattened onto white for JPEG and free of metadata.
+//
+// dir must exist and be empty. Every argument is validated before any tool
+// runs; a source type the operation does not accept gives an error wrapping
+// ErrUnsupportedType. On failure Still removes what it wrote, leaving dir
+// empty.
+func (e Env) Still(ctx context.Context, src Source, enc Encoding, dir string) (Image, error) {
+	ec, err := enc.resolve()
 	if err != nil {
-		return nil, err
+		return Image{}, fmt.Errorf("still: %w", err)
+	}
+	dec, err := e.prepare(stillSpec, src, dir)
+	if err != nil {
+		return Image{}, fmt.Errorf("still: %w", err)
+	}
+	images, err := inDir(dir, func() ([]Image, error) {
+		img, err := e.still(ctx, dec, src.Path, ec, dir)
+		return []Image{img}, err
+	})
+	if err != nil {
+		return Image{}, fmt.Errorf("still: %w", err)
+	}
+	return images[0], nil
+}
+
+func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, dir string) (Image, error) {
+	scenes, err := identifyScenes(ctx, e, dec, path, "[0]")
+	if err != nil {
+		return Image{}, err
 	}
 	head := scenes[0]
 	w, h := uprightSize(head.width, head.height, head.orientation)
 	if w < 1 || h < 1 {
-		return nil, fmt.Errorf("input reports size %dx%d", w, h)
+		return Image{}, fmt.Errorf("input reports size %dx%d", w, h)
 	}
-	tw, th, resize := fitSize(w, h, ip.maxEdge, ip.maxArea)
+	tw, th, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
 
-	name := "still" + format.ext
-	err = withProfile(in.outputDir, head.hasICC, func(profilePath string) error {
+	name := "still" + enc.ext
+	err = withProfile(dir, head.hasICC, func(profilePath string) error {
 		p := imagePipeline{
-			decoder: in.decoder, inputPath: in.inputPath, selector: "[0]",
+			decoder: dec, inputPath: path, selector: "[0]",
 			profilePath: profilePath, profiled: head.hasICC,
-			flatten: ip.format == "jpeg",
+			flatten: enc.format == JPEG,
 		}
 		if resize {
 			p.resizeTo = &[2]int{tw, th}
 		}
-		args := append(p.args(), "-quality", strconv.Itoa(ip.quality), filepath.Join(in.outputDir, name))
-		_, err := env.Run(ctx, "magick", args...)
+		args := append(p.args(), "-quality", strconv.Itoa(enc.quality), filepath.Join(dir, name))
+		_, err := e.Run(ctx, "magick", args...)
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encoding still: %w", err)
+		return Image{}, fmt.Errorf("encoding still: %w", err)
 	}
-	sizes, err := identifySizes(ctx, env, []string{filepath.Join(in.outputDir, name)})
+	sizes, err := identifySizes(ctx, e, []string{filepath.Join(dir, name)})
 	if err != nil {
-		return nil, err
+		return Image{}, err
 	}
-	return []OutputFile{{
-		Name: name, MediaType: format.mediaType,
-		Width: sizes[0][0], Height: sizes[0][1],
-	}}, nil
+	return Image{Name: name, Width: sizes[0][0], Height: sizes[0][1]}, nil
 }
 
-func runFrames(ctx context.Context, env Env, in runInput) ([]OutputFile, error) {
-	ip := readImageParams(in.params)
-	format := imageFormats[ip.format]
+// AnimationFrames decodes a GIF or animated WebP source (image/gif,
+// image/webp), composites its frames, samples up to maxFrames of them evenly
+// and writes each to dir as frame-NNN.<ext>. A sampled frame identical to
+// the one before it after resizing is dropped and the files are numbered
+// consecutively from 0; Image.Frame is the index of the source frame a file
+// shows. Output is as for Still.
+//
+// maxFrames 0 means 16; otherwise it must be 1 to 64. dir must exist and be
+// empty. Every argument is validated before any tool runs; a source type the
+// operation does not accept gives an error wrapping ErrUnsupportedType. On
+// failure AnimationFrames removes what it wrote, leaving dir empty.
+func (e Env) AnimationFrames(ctx context.Context, src Source, enc Encoding, maxFrames int, dir string) ([]Image, error) {
+	ec, err := enc.resolve()
+	if err != nil {
+		return nil, fmt.Errorf("animation frames: %w", err)
+	}
+	frames, err := resolveFrames(maxFrames)
+	if err != nil {
+		return nil, fmt.Errorf("animation frames: %w", err)
+	}
+	dec, err := e.prepare(animationSpec, src, dir)
+	if err != nil {
+		return nil, fmt.Errorf("animation frames: %w", err)
+	}
+	images, err := inDir(dir, func() ([]Image, error) {
+		return e.animationFrames(ctx, dec, src.Path, ec, frames, dir)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("animation frames: %w", err)
+	}
+	return images, nil
+}
 
-	scenes, err := identifyScenes(ctx, env, in.decoder, in.inputPath, "")
+func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc encoding, maxFrames int, dir string) ([]Image, error) {
+	scenes, err := identifyScenes(ctx, e, dec, path, "")
 	if err != nil {
 		return nil, err
 	}
@@ -332,27 +326,27 @@ func runFrames(ctx context.Context, env Env, in runInput) ([]OutputFile, error) 
 	if cw < 1 || ch < 1 {
 		return nil, fmt.Errorf("input reports size %dx%d", cw, ch)
 	}
-	tw, th, resize := fitSize(cw, ch, ip.maxEdge, ip.maxArea)
+	tw, th, resize := fitSize(cw, ch, enc.maxEdge, enc.maxArea)
 
 	sourceFrames := len(infos)
-	selected := selectFrames(frameCount(in.params.int("max_frames"), sourceFrames, true), sourceFrames)
+	selected := selectFrames(frameCount(maxFrames, sourceFrames, true), sourceFrames)
 	profiled, err := selectedProfiled(infos, selected)
 	if err != nil {
 		return nil, err
 	}
 
 	var kept []int
-	err = withProfile(in.outputDir, profiled, func(profilePath string) error {
+	err = withProfile(dir, profiled, func(profilePath string) error {
 		p := imagePipeline{
-			decoder: in.decoder, inputPath: in.inputPath, coalesce: true,
+			decoder: dec, inputPath: path, coalesce: true,
 			deleteExpr:  DeleteExpr(selected, sourceFrames),
 			profilePath: profilePath, profiled: profiled,
-			flatten: ip.format == "jpeg",
+			flatten: enc.format == JPEG,
 		}
 		if resize {
 			p.resizeTo = &[2]int{tw, th}
 		}
-		probeOut, err := env.Run(ctx, "magick", append(p.args(), "-format", "%s %#\n", "info:")...)
+		probeOut, err := e.Run(ctx, "magick", append(p.args(), "-format", "%s %#\n", "info:")...)
 		if err != nil {
 			return fmt.Errorf("probing selected frames: %w", err)
 		}
@@ -373,9 +367,9 @@ func runFrames(ctx context.Context, env Env, in runInput) ([]OutputFile, error) 
 		}
 
 		p.deleteExpr = DeleteExpr(kept, sourceFrames)
-		pattern := strings.ReplaceAll(filepath.Join(in.outputDir, "frame-"), "%", "%%") + "%03d" + format.ext
-		args := append(p.args(), "-scene", "0", "+adjoin", "-quality", strconv.Itoa(ip.quality), pattern)
-		if _, err := env.Run(ctx, "magick", args...); err != nil {
+		pattern := strings.ReplaceAll(filepath.Join(dir, "frame-"), "%", "%%") + "%03d" + enc.ext
+		args := append(p.args(), "-scene", "0", "+adjoin", "-quality", strconv.Itoa(enc.quality), pattern)
+		if _, err := e.Run(ctx, "magick", args...); err != nil {
 			return fmt.Errorf("encoding frames: %w", err)
 		}
 		return nil
@@ -384,7 +378,7 @@ func runFrames(ctx context.Context, env Env, in runInput) ([]OutputFile, error) 
 		return nil, err
 	}
 
-	names, err := frameFileNames(in.outputDir, format.ext)
+	names, err := frameFileNames(dir, enc.ext)
 	if err != nil {
 		return nil, err
 	}
@@ -393,26 +387,17 @@ func runFrames(ctx context.Context, env Env, in runInput) ([]OutputFile, error) 
 	}
 	paths := make([]string, len(names))
 	for i, n := range names {
-		paths[i] = filepath.Join(in.outputDir, n)
+		paths[i] = filepath.Join(dir, n)
 	}
-	sizes, err := identifySizes(ctx, env, paths)
+	sizes, err := identifySizes(ctx, e, paths)
 	if err != nil {
 		return nil, err
 	}
-	times := timestamps(frameDelays(infos))
-	files := make([]OutputFile, len(names))
+	images := make([]Image, len(names))
 	for i, n := range names {
-		src := kept[i]
-		if src < 0 || src >= len(times) {
-			return nil, fmt.Errorf("probe reported source frame %d outside the %d-frame source", src, len(times))
-		}
-		files[i] = OutputFile{
-			Name: n, MediaType: format.mediaType,
-			Width: sizes[i][0], Height: sizes[i][1],
-			SourceFrame: src, SourceTimeMS: times[src],
-		}
+		images[i] = Image{Name: n, Width: sizes[i][0], Height: sizes[i][1], Frame: kept[i]}
 	}
-	return files, nil
+	return images, nil
 }
 
 // frameFileNames lists the numbered frame files in dir, in order, and

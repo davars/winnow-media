@@ -6,7 +6,7 @@ closure. Licensed under AGPL-3.0.
 
 This repository currently contains the tool closure, the Go package that
 finds it, and the `media` package that builds the tools' command lines.
-Hardening and recipes are coming.
+Hardening is coming.
 
 ## The `tool` package
 
@@ -48,59 +48,45 @@ cancelled, and where scratch files live.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts.
 
-### Recipes and the executor
+### Operations
 
-A recipe is a declared transformation of one input file into still images.
-`Recipes()` returns every declaration, plain data: name, revision, accepted
-input media types (each with its decoder pin, the ImageMagick coder), typed
-parameters (name, kind `int` or `enum`, range or allowed values, default), the
-output media types and per-file metadata fields it fills, and the tools
-(`engines`) it runs.
+An operation turns one staged input file into upright, sized sRGB images in
+an output directory. Each is a method of `Env` and needs only `Env.Run`:
 
-`NewExecutor(env, names...)` enables a subset by name and fails on an unknown
-or repeated name. It needs only `Env.Run`.
+- `Env.Still(ctx, Source, Encoding, dir) (Image, error)` accepts `image/heic`
+  and `image/heif` (ImageMagick coder `heic`) and writes `still.<ext>`.
+- `Env.AnimationFrames(ctx, Source, Encoding, maxFrames, dir) ([]Image, error)`
+  accepts `image/gif` (coder `gif`) and `image/webp` (coder `webp`) and writes
+  `frame-000.<ext>`, `frame-001.<ext>`, and so on. `maxFrames` (0 for 16,
+  otherwise 1-64) bounds the evenly spaced frames sampled from the composited
+  animation; a frame identical to the one before it after resizing is dropped,
+  and `Image.Frame` records the source frame each file came from.
 
-`Executor.Execute(ctx, Request)` runs one recipe over one input:
+`Source` is the staged file (`Path`) and the media type the caller asserts for
+it (`Type`); the type selects the decoder pin. A type the operation does not
+accept gives an error wrapping `ErrUnsupportedType`.
 
-- `Recipe` and `Params` (`map[string]string`; omitted ones take their
-  declared defaults). The request is validated before any tool runs: an
-  unknown or not enabled recipe, unknown parameter, unparsable or
-  out-of-range integer, disallowed enum value, input type the recipe does not
-  accept, or non-empty output directory is an error.
-- `InputPath` is one file the driver has already staged, and `InputType` the
-  media type the driver asserts for it; the type selects the decoder pin.
-- `OutputDir` is an existing, empty directory the driver owns. Execute names
-  its own output files and moves no bytes beyond reading the input and writing
-  there. On error it removes everything it wrote.
+`Encoding` sizes and encodes each output; zero fields take the defaults.
+`Format` is `JPEG` (default), `WebP` or `PNG`. `Quality` is 1-100 (default 90),
+`MaxEdge` the longest side in pixels, 16-16384 (default 2576), and `MaxArea`
+the pixel count, 256-100000000 (default 3750000). The output satisfies both
+bounds with one resample, is never upscaled, is upright, is converted to sRGB
+when the source carries an ICC profile, has transparency flattened onto white
+for JPEG, and carries no metadata. The sRGB profile is embedded in the library
+and exists as a temporary dot-file in the output directory only while a tool
+runs.
 
-The `Response` has one `OutputFile` per file (name relative to the output
-directory, SHA-256, size, media type, width, height, source frame index and
-source timestamp in ms) and an `Accounting`: tool runs, CPU time summed and
-peak RSS maximised over the runs (`Usage`, nil when any run reported none),
-bytes in and bytes out.
+`dir` is an existing, empty directory the caller owns; the operation names its
+own output files and moves no bytes beyond reading the source and writing
+there. Every argument is validated before any tool runs, so a value out of
+range, an unaccepted type or a non-empty `dir` is an error with nothing
+written. On any later failure the operation removes what it wrote and `dir` is
+empty again. Each `Image` has the file's `Name` relative to `dir`, its `Width`
+and `Height`, and `Frame` (the animation frame index) and `TimeMS` (the video
+sample time, 0 for operations that do not sample a video).
 
-`Executor.Describe(ctx)` reports, for each tool the enabled recipes run, its
-name, the first line of its version output and its executable path with
-symbolic links resolved, plus `tool.FlakeRevision()` and the enabled recipes'
-declarations.
-
-Both recipes share these parameters: `max_edge` (longest side in pixels,
-16-16384, default 2576), `max_area` (pixel count, 256-100000000, default
-3750000), `format` (`jpeg`, `webp` or `png`, default `jpeg`) and `quality`
-(1-100, default 90). The output satisfies both bounds with one resample, is
-never upscaled, is upright, is converted to sRGB when the source carries an
-ICC profile, has transparency flattened onto white for JPEG, and carries no
-metadata. The sRGB profile is embedded in the library and exists as a
-temporary dot-file in the output directory only while a tool runs.
-
-- `still` accepts `image/heic` and `image/heif` (ImageMagick coder `heic`) and
-  writes `still.<ext>`.
-- `frames` accepts `image/gif` (coder `gif`) and `image/webp` (coder `webp`)
-  and writes `frame-000.<ext>`, `frame-001.<ext>`, and so on. Extra parameter
-  `max_frames` (1-64, default 16) bounds the evenly spaced frames sampled from
-  the composited animation; a frame identical to the one before it after
-  resizing is dropped, and each file records the source frame it came from and
-  that frame's start time.
+The accepted media types, decoder pins and tools of each operation are
+internal.
 
 The same inputs, arguments and tool binaries give the same output bytes;
 callers pass policy values (quality, sizes, ceilings) in explicitly.
