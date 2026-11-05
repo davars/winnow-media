@@ -73,10 +73,11 @@ type Env struct {
 	Run   Runner
 	Stage Stager
 
-	// compose runs the GIF compositor; it is set only by a Processor.
+	// compose runs the frame compositor; it is set only by a Processor.
 	compose composer
 }
 
-// composer composites the selected frames of a GIF in the sandbox and calls
-// onFrame with the path of each as it is written.
+// composer composites the selected frames of a GIF or animated WebP in the
+// sandbox and calls onFrame with the path of each as it is written. profile is
+// the id of the ICC profile the frame carries, or 0.
 type composer func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) error

@@ -10,9 +10,37 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       toolSystems = systems ++ [ "x86_64-darwin" "aarch64-darwin" ];
 
-      toolNames = [ "exiftool" "file" "ffmpeg" "imagemagick" "poppler-utils" "pandoc" "catdoc" "lynx" ];
+      toolNames = [ "exiftool" "file" "ffmpeg" "imagemagick" "poppler-utils" "pandoc" "catdoc" "lynx" "webp-frames" ];
 
-      toolPackages = pkgs: nixpkgs.lib.genAttrs toolNames (name: pkgs.${name});
+      # Tools this repository builds. webp-frames links the pinned libwebp,
+      # the build ImageMagick links, so it adds no store path of its own
+      # beyond the program.
+      ownTools = {
+        webp-frames = pkgs: pkgs.stdenv.mkDerivation {
+          pname = "webp-frames";
+          version = "1";
+          src = ./tools/webp-frames;
+          buildInputs = [ pkgs.libwebp ];
+          buildPhase = ''
+            runHook preBuild
+            $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpdemux -lwebp
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 webp-frames $out/bin/webp-frames
+            runHook postInstall
+          '';
+          meta.mainProgram = "webp-frames";
+        };
+      };
+
+      toolPackages = pkgs: nixpkgs.lib.genAttrs toolNames (name:
+        if ownTools ? ${name} then ownTools.${name} pkgs else pkgs.${name});
+
+      # Programs the tests use to build inputs; they are not part of the tool
+      # closure.
+      testToolPackages = pkgs: [ pkgs.libwebp ];
 
       # Unknown names fail evaluation rather than being skipped.
       toolDir = { system, tools }:
@@ -112,7 +140,7 @@
           src = lib.cleanSource ./.;
 
           tools = toolPackages pkgs;
-          allTools = builtins.attrValues tools;
+          allTools = builtins.attrValues tools ++ testToolPackages pkgs;
 
           # A Go-only gate: no dependencies to vendor, output is an empty file.
           gate = name: nativeBuildInputs: script: buildGoModule {
@@ -146,7 +174,7 @@
 
           # The measurement harness runs the Processor, which resolves
           # magick, ffmpeg and ffprobe, and generates inputs with the same tools.
-          measureTools = [ "imagemagick" "ffmpeg" ];
+          measureTools = [ "imagemagick" "ffmpeg" "webp-frames" ];
           measure = buildGoModule {
             pname = "measure";
             version = "0";
@@ -157,20 +185,51 @@
             meta.mainProgram = "measure";
           };
 
-          probeTools = [ "imagemagick" ];
+          probeTools = [ "imagemagick" "webp-frames" ];
           probeDir = toolDir { inherit system; tools = probeTools; };
           probe = probeWith (ldflags { inherit system; tools = probeTools; });
 
           closure = pkgs.closureInfo { rootPaths = [ probe ]; };
 
+          webpFrames = tools.webp-frames;
+          webpFramesClosure = pkgs.closureInfo { rootPaths = [ webpFrames ]; };
+          imagemagickClosure = pkgs.closureInfo { rootPaths = [ pkgs.imagemagick ]; };
+
           closureCheck = pkgs.runCommand "winnow-media-closure-check" { } ''
-            got=$(${probe}/bin/toolprobe | head -n1)
+            got=$(${probe}/bin/toolprobe | sed -n 1p)
             want=${probeDir}/magick
             if [ "$got" != "$want" ]; then
               echo "toolprobe resolved '$got', want '$want'" >&2
               exit 1
             fi
             "$got" -version >/dev/null
+            got=$(${probe}/bin/toolprobe | sed -n 3p)
+            want=${probeDir}/webp-frames
+            if [ "$got" != "$want" ]; then
+              echo "toolprobe resolved webp-frames as '$got', want '$want'" >&2
+              exit 1
+            fi
+
+            # webp-frames links the libwebp ImageMagick links, and nothing of
+            # its closure is outside ImageMagick's but the program itself.
+            if ! grep -qxF ${pkgs.libwebp} ${webpFramesClosure}/store-paths; then
+              echo "libwebp ${pkgs.libwebp} missing from webp-frames' closure" >&2
+              exit 1
+            fi
+            if ! grep -qxF ${pkgs.libwebp} ${imagemagickClosure}/store-paths; then
+              echo "libwebp ${pkgs.libwebp} missing from ImageMagick's closure" >&2
+              exit 1
+            fi
+            extra=$(sort ${webpFramesClosure}/store-paths | comm -23 - <(sort ${imagemagickClosure}/store-paths) | grep -vxF ${webpFrames} || true)
+            if [ -n "$extra" ]; then
+              echo "webp-frames adds store paths beyond ImageMagick's closure:" >&2
+              echo "$extra" >&2
+              exit 1
+            fi
+            if ! grep -qxF ${webpFrames} ${closure}/store-paths; then
+              echo "webp-frames missing from the probe's runtime closure" >&2
+              exit 1
+            fi
 
             if ! grep -qxF ${pkgs.imagemagick} ${closure}/store-paths; then
               echo "imagemagick ${pkgs.imagemagick} missing from the probe's runtime closure" >&2

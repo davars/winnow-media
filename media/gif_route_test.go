@@ -444,7 +444,7 @@ func TestProfilesThatChangeOnEveryFrameCostOneRunPerFrame(t *testing.T) {
 			if strings.HasPrefix(a, "pam:") {
 				inputs++
 			}
-			if strings.Contains(a, ".gif-profile-") {
+			if strings.Contains(a, ".profile-") {
 				profiles++
 			}
 		}

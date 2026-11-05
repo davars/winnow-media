@@ -253,15 +253,27 @@ func helperError(ctx context.Context, name string, res helperResult, err error, 
 	return nil
 }
 
-// composeGIF runs the GIF compositor as the sandbox helper's tool: this
-// executable, started again with compositorEnv set, under the same limits and
-// filter as any tool. onFrame is called, in order, with the path of each
-// frame as the compositor finishes it; if it fails the compositor is stopped
-// and its error returned. The usage returned covers the compositor.
-func (p *Processor) composeGIF(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, err
+// composeFrames runs a frame compositor as the sandbox helper's tool, under
+// the same limits and filter as any tool: the GIF compositor, which is this
+// executable started again with compositorEnv set, or the external tool the
+// request names. onFrame is called, in order, with the path of each frame as
+// the compositor finishes it; if it fails the compositor is stopped and its
+// error returned. The usage returned covers the compositor.
+func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error) {
+	cfg := helperConfig{Args: req.args(), Dir: p.dir}
+	name := "gif compositor"
+	if req.external != "" {
+		path, ok := p.tools[req.external]
+		if !ok {
+			return nil, fmt.Errorf("unknown tool %q", req.external)
+		}
+		cfg.Tool, cfg.Env, name = path, p.environ(), req.external
+	} else {
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		cfg.Tool, cfg.Env = exe, []string{compositorEnv + "=1"}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -273,13 +285,12 @@ func (p *Processor) composeGIF(ctx context.Context, req composeRequest, onFrame 
 		return err
 	}}
 	var stderr tailBuffer
-	cfg := helperConfig{Tool: exe, Args: req.args(), Env: []string{compositorEnv + "=1"}, Dir: p.dir}
 	res, state, err := runHelper(ctx, cfg, lines, &stderr)
 	usage := UsageOf(state)
 	if lines.err != nil {
 		return usage, lines.err
 	}
-	return usage, helperError(ctx, "gif compositor", res, err, bytes.TrimSpace(stderr.buf))
+	return usage, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
 }
 
 // helperMain is the sandbox helper: it applies the sandbox to itself, runs

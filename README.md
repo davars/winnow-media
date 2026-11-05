@@ -57,15 +57,15 @@ tools itself because the input is untrusted:
 
 - `Init()` must be the first call in `main` and in `TestMain` of any program
   that creates a `Processor`; see [the sandbox](#the-sandbox).
-- `NewProcessor(ctx) (*Processor, error)` resolves `magick`, `ffmpeg` and
-  `ffprobe` with the `tool` package, creates a private directory with
-  `os.MkdirTemp`, installs a generated ImageMagick policy there and reads it
-  back with `magick -list policy` and `-list resource`. It returns an error,
-  removing the directory, unless the first policy file listed is the
-  installed one with exactly the rules written, no other file contributes
-  a rule and no resource limit reads back above the ceiling written
-  (ImageMagick may lower one, such as threads to the host's CPUs). `Close`
-  removes the directory.
+- `NewProcessor(ctx) (*Processor, error)` resolves `magick`, `ffmpeg`,
+  `ffprobe` and `webp-frames` with the `tool` package, creates a private
+  directory with `os.MkdirTemp`, installs a generated ImageMagick policy there
+  and reads it back with `magick -list policy` and `-list resource`. It
+  returns an error, removing the directory, unless the first policy file
+  listed is the installed one with exactly the rules written, no other file
+  contributes a rule and no resource limit reads back above the ceiling
+  written (ImageMagick may lower one, such as threads to the host's CPUs).
+  `Close` removes the directory.
 - `Processor.Still(ctx, path, Encoding, dir) (Image, Usage, error)` accepts
   HEIC and HEIF (ImageMagick coder `heic`) and writes `still.<ext>`.
 - `Processor.AnimationFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
@@ -92,8 +92,29 @@ tools itself because the input is untrusted:
     frame. A GIF that ends between blocks without its trailer is decoded as
     ImageMagick does; one truncated inside a block or with a frame outside the
     logical screen is refused.
-  - A WebP is read by ImageMagick, which composites every frame before it
-    selects any, so its memory grows with the number of frames.
+  - An animated WebP is composited by `webp-frames`
+    (`tools/webp-frames/webp-frames.c`), a small C program linked against the
+    pinned libwebp, run as a sandbox tool. The header read, the caps and the
+    refusals come first, so the program never starts for an input they refuse.
+    It runs libwebp's animation decoder (`WebPAnimDecoder`), which composites
+    one frame at a time, and writes each selected frame as an uncompressed PAM
+    file, waiting for the files to be encoded as the GIF compositor does;
+    ImageMagick encodes them in the same batches. The program is told the
+    canvas and frame count of the header read and refuses a file that differs.
+    Memory is two canvases in the program plus one batch in ImageMagick, and
+    does not grow with the number of frames. The file's ICC profile, if it has
+    one, is written like a GIF's, assigned to the frames and converted to sRGB;
+    ImageMagick's own decode of an animated WebP ignores it, as it ignores the
+    EXIF orientation, so an oriented animation is output as stored. A still
+    WebP, and an animated one ImageMagick reads as a single image, are read by
+    ImageMagick as before. Against `-coalesce` the pixels are identical except
+    where frames are blended over earlier content (blending without disposal),
+    which differs by at most 1 level of alpha, 1 or 2 of colour where the
+    result is opaque and 2 where it is partly transparent; and canvas no frame
+    covers is transparent, where ImageMagick makes it opaque black if the file
+    declares no alpha. The output of an opaque animation can differ in file
+    shape (PNG colour type) and in the resampling filter ImageMagick picks for
+    frames it gives an alpha channel.
 - `Processor.VideoFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
   accepts MP4 and QuickTime (ffmpeg demuxer `mov`) and WebM and Matroska
   (demuxer `matroska`) and writes `frame-000.<ext>`, `frame-001.<ext>`, and
@@ -228,7 +249,9 @@ returns at once and changes nothing. The helper
 
 The GIF compositor is one of these tools: the helper starts the program's own
 executable as it, with a marker that `Init` recognises, so it runs under the
-same limits and filter and its CPU and peak memory count in `Usage`.
+same limits and filter and its CPU and peak memory count in `Usage`. The
+animated WebP compositor, `webp-frames`, is another, started from the tool
+directory like `magick`.
 
 The tool's environment and arguments are exactly those the `Processor`
 passes; nothing about the helper reaches it. The consumer gets no
@@ -278,10 +301,13 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
 - `lib.checkGoModPin { goModText, rev }` and `lib.assertGoModPin goModPath`:
   see [the pin check](#the-pin-check).
 - `checks.<system>`: `test` (go test, with all the tools on `PATH` so the
-  tool-dependent tests run instead of skipping), `lint` (golangci-lint), `gofumpt`, and
+  tool-dependent tests run instead of skipping; the WebP tests also use
+  `cwebp` and `webpmux` from libwebp, which are on the test `PATH` only),
+  `lint` (golangci-lint), `gofumpt`, and
   `pin` (the fixtures for the pin check), and `closure`, which builds a small probe binary the way a consumer would and
-  asserts that it resolves `magick` from the injected directory and that
-  ImageMagick is in the binary's runtime closure.
+  asserts that it resolves `magick` and `webp-frames` from the injected
+  directory, that both are in the binary's runtime closure, and that the
+  libwebp `webp-frames` links is the one ImageMagick links.
 - `packages.<system>.measure` and `apps.<system>.measure` (Linux): the
   measurement harness, with ImageMagick and FFmpeg from this flake.
 - `devShells.<system>.default`: Go, golangci-lint, gofumpt and all the tools.
@@ -323,7 +349,7 @@ animation. `-list` prints the input names.
         vendorHash = "...";
         ldflags = winnow-media.lib.ldflags {
           inherit system;
-          tools = [ "imagemagick" "ffmpeg" ];
+          tools = [ "imagemagick" "ffmpeg" "webp-frames" ];
         };
       };
     };
