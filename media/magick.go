@@ -52,13 +52,17 @@ func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, bu
 // starts with them, and callers building their own invocations over the
 // package's artifacts should too. The slice is fresh on every call.
 func LimitArgs() []string {
-	return []string{
+	return append([]string{
 		"-limit", "memory", "1GiB",
 		"-limit", "map", "2GiB",
 		"-limit", "area", "512MP",
 		"-limit", "time", "300",
-	}
+	}, ExtraLimitArgs...)
 }
+
+// ExtraLimitArgs is appended to LimitArgs. It exists on the measurement
+// branch only, to run the operations under tighter limits.
+var ExtraLimitArgs []string
 
 // DeleteExpr renders the magick -delete argument dropping every one of
 // sourceFrames frames that keep does not name. It returns "" when nothing is

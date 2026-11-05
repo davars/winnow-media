@@ -58,8 +58,19 @@ func main() {
 		repeat      = flag.Int("repeat", 1, "runs per input; wall time and CPU are medians")
 		extra       = flag.String("extra", "", "comma-separated extra animations, each kind:frames:WxH, e.g. gif:1000:600x600")
 		list        = flag.Bool("list", false, "list the input names and stop")
+		variants    = flag.String("variants", "", "comma-separated variants (today, spill-512, spill-256, go); each run is a child process")
+		child       = flag.Bool("child", false, "internal: run one operation for a parent")
+		childOp     = flag.String("op", "", "internal: operation of -child")
+		childVar    = flag.String("variant", "today", "internal: variant of -child")
 	)
 	flag.Parse()
+	if *child {
+		if flag.NArg() != 1 {
+			fatal(fmt.Errorf("-child takes one input path"))
+		}
+		runChild(context.Background(), *childOp, *childVar, flag.Arg(0))
+		return
+	}
 	if flag.NArg() != 1 || *repeat < 1 || (*genOnly && *measureOnly) {
 		fmt.Fprintln(os.Stderr, "usage: measure [-only name] [-gen-only | -measure-only] [-repeat N] [-extra kind:frames:WxH,...] <dir>")
 		os.Exit(2)
@@ -91,6 +102,14 @@ func main() {
 		}
 	}
 	if *genOnly {
+		return
+	}
+	if *variants != "" {
+		rows, err := measureVariants(ctx, dir, specs, strings.Split(*variants, ","))
+		if err != nil {
+			fatal(err)
+		}
+		printVariantTable(rows)
 		return
 	}
 	rows, err := measure(ctx, dir, specs, *repeat)
