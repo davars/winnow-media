@@ -385,8 +385,8 @@ func TestVideoFramesStripsMetadata(t *testing.T) {
 func TestVideoFramesCleansUpOnFailure(t *testing.T) {
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "160x120", 10, 4)
-	// Calls: probe, 4 samples, signatures, encode, identify.
-	for _, failAfter := range []int{1, 3, 6, 7, 8} {
+	// Calls: probe, 4 samples, 1 encode of the 4.
+	for _, failAfter := range []int{1, 3, 5, 6} {
 		p := requireProcessor(t)
 		rec := record(p)
 		rec.failAfter = failAfter
@@ -578,5 +578,78 @@ func TestVideoToolRunsShareTheInputArguments(t *testing.T) {
 	}
 	if seen["ffprobe"] != 1 || seen["ffmpeg"] < 2 {
 		t.Errorf("calls seen = %v", seen)
+	}
+}
+
+func TestVideoFramesEncodeAtMostOneBatchPerMagickRun(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	// Two 160x120 samples per run.
+	old := encodeBatchPixels
+	encodeBatchPixels = 2 * 160 * 120
+	t.Cleanup(func() { encodeBatchPixels = old })
+	rec := record(p)
+	images, _ := videoInto(t, p, sdrClip(t, env, "160x120", 10, 4), Encoding{}, 5)
+	if len(images) < 3 {
+		t.Fatalf("%d images, want several", len(images))
+	}
+	inputs, runs := 0, 0
+	for _, call := range rec.calls {
+		if call[0] != "magick" {
+			continue
+		}
+		n := 0
+		for _, a := range call[1:] {
+			if strings.HasPrefix(a, "png:") {
+				n++
+			}
+		}
+		if n > 2 {
+			t.Errorf("magick run names %d input frames, the batch is 2: %q", n, call)
+		}
+		inputs += n
+		if n > 0 {
+			runs++
+		}
+	}
+	if inputs < len(images) || runs < 2 {
+		t.Errorf("%d inputs in %d runs for %d images", inputs, runs, len(images))
+	}
+}
+
+func TestVideoFramesDedupesAcrossBatches(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	old := encodeBatchPixels
+	encodeBatchPixels = 160 * 120
+	t.Cleanup(func() { encodeBatchPixels = old })
+	src := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=0x3070c0:size=160x120:rate=10:duration=6",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
+	images, out := videoInto(t, p, src, Encoding{}, 4)
+	if len(images) != 1 {
+		t.Fatalf("images = %+v", images)
+	}
+	if got := dirNames(t, out); !slices.Equal(got, []string{"frame-000.jpg"}) {
+		t.Errorf("output dir holds %v", got)
+	}
+}
+
+func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	out := filepath.Join(t.TempDir(), "100%d-%03d%%")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	images, _, err := p.VideoFrames(context.Background(), sdrClip(t, env, "160x120", 10, 4), Encoding{}, 3, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, im := range images {
+		want = append(want, im.Name)
+	}
+	if got := dirNames(t, out); len(want) == 0 || !slices.Equal(got, want) {
+		t.Errorf("output dir holds %v, want %v", got, want)
 	}
 }

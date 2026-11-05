@@ -98,8 +98,10 @@ tools itself because the input is untrusted:
     convert the primaries to BT.709, tone-map with `hable`, and return to the
     BT.709 transfer and matrix. Other video gets no colour filter.
   - ffmpeg scales once, to the size the shared bounds give, and writes each
-    sample as PNG to a hidden scratch file in `dir`. One magick run encodes
-    them to the encoding's format and quality with metadata stripped; a sample
+    sample as PNG to a hidden scratch file in `dir`. Magick encodes the
+    samples to the encoding's format and quality with metadata stripped, a few
+    per run (at most 16 million input pixels, about 256 MiB), so ImageMagick
+    never holds more than that however many samples there are; a sample
     identical to the one before it (by ImageMagick signature) is dropped. The
     scratch files are removed before `VideoFrames` returns.
   - `Image.TimeMS` is the seek target in ms; the file shows the first frame at
