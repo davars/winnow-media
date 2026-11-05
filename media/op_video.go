@@ -194,6 +194,16 @@ func sampleTimesMS(v videoInfo, maxFrames int) []int64 {
 	return times
 }
 
+// ffmpegArgs returns the arguments every ffmpeg run starts with: no banner,
+// no stdin, errors only, and the allocation and filter-thread bounds.
+func ffmpegArgs() []string {
+	return []string{
+		"-hide_banner", "-nostdin", "-v", "error", "-y",
+		"-max_alloc", strconv.Itoa(ffmpegMaxAlloc),
+		"-filter_threads", strconv.Itoa(ffmpegThreads),
+	}
+}
+
 // samplePrefix names the lossless intermediates inside the output directory.
 const samplePrefix = ".sample-"
 
@@ -233,13 +243,9 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 	for i, t := range times {
 		path := filepath.Join(dir, fmt.Sprintf("%s%03d.png", samplePrefix, i))
 		scratch = append(scratch, path)
-		args := []string{
-			"-hide_banner", "-nostdin", "-v", "error", "-y",
-			"-max_alloc", strconv.Itoa(ffmpegMaxAlloc),
-			"-filter_threads", strconv.Itoa(ffmpegThreads),
+		args := append(ffmpegArgs(),
 			"-ss", fmt.Sprintf("%d.%03d", t/1000, t%1000),
-			"-threads", strconv.Itoa(ffmpegThreads),
-		}
+			"-threads", strconv.Itoa(ffmpegThreads))
 		args = append(args, inputArgs(dec, inputPath)...)
 		args = append(args,
 			"-map", fmt.Sprintf("0:%d", info.stream),
@@ -247,7 +253,7 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 		if filter != "" {
 			args = append(args, "-vf", filter)
 		}
-		args = append(args, "-c:v", "png", path)
+		args = append(args, "-c:v", "png", "-update", "1", path)
 		if _, err := e.Run(ctx, "ffmpeg", args...); err != nil {
 			return nil, fmt.Errorf("sampling frame at %d ms: %w", t, err)
 		}
@@ -261,50 +267,113 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 		return nil, errors.New("no frame could be sampled")
 	}
 
-	sigArgs := append([]string{"identify"}, LimitArgs()...)
-	sigArgs = append(sigArgs, "-format", "%#\n")
+	var paths []string
 	for _, s := range samples {
-		sigArgs = append(sigArgs, "png:"+s.path)
+		paths = append(paths, s.path)
 	}
-	res, err := e.Run(ctx, "magick", sigArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("comparing samples: %w", err)
+	var images []Image
+	encoder := sampleEncoder{
+		env: e, coder: "png", middle: []string{"-strip"}, enc: enc, dir: dir, framePixels: tw * th,
+		keep: func(i, n, w, h int) {
+			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, TimeMS: samples[i].timeMS})
+		},
 	}
-	sigs := strings.Split(strings.TrimRight(string(res.Stdout), "\n"), "\n")
-	if len(sigs) != len(samples) {
-		return nil, fmt.Errorf("compared %d signatures for %d samples", len(sigs), len(samples))
-	}
-	var kept []sample
-	for i, s := range samples {
-		if i > 0 && sigs[i] == sigs[i-1] {
-			continue
-		}
-		kept = append(kept, s)
-	}
-
-	encode := append([]string{}, LimitArgs()...)
-	for _, s := range kept {
-		encode = append(encode, "png:"+s.path)
-	}
-	pattern := strings.ReplaceAll(filepath.Join(dir, "frame-"), "%", "%%") + "%03d" + enc.ext
-	encode = append(encode, "-strip", "-scene", "0", "+adjoin", "-quality", strconv.Itoa(enc.quality), pattern)
-	if _, err := e.Run(ctx, "magick", encode...); err != nil {
-		return nil, fmt.Errorf("encoding frames: %w", err)
-	}
-
-	names := make([]string, len(kept))
-	paths := make([]string, len(kept))
-	for i := range kept {
-		names[i] = fmt.Sprintf("frame-%03d%s", i, enc.ext)
-		paths[i] = filepath.Join(dir, names[i])
-	}
-	sizes, err := identifySizes(ctx, e, paths)
-	if err != nil {
+	if err := encoder.encodeSamples(ctx, paths); err != nil {
 		return nil, err
 	}
-	images := make([]Image, len(kept))
-	for i, s := range kept {
-		images[i] = Image{Name: names[i], Width: sizes[i][0], Height: sizes[i][1], TimeMS: s.timeMS}
-	}
 	return images, nil
+}
+
+// frameName is the name of the n-th output frame.
+func frameName(n int, ext string) string {
+	return fmt.Sprintf("frame-%03d%s", n, ext)
+}
+
+// encodeBatchPixels bounds the input pixels one ImageMagick run reads: at
+// 16 bytes per pixel, 256 MiB, a quarter of the policy's memory ceiling.
+var encodeBatchPixels = 16_000_000
+
+// sampleEncoder encodes lossless samples to output frames in dir, one
+// ImageMagick run per batch of samples, and drops a sample whose pixels equal
+// those of the one before it, also across batches. Kept frames are numbered
+// consecutively from 0.
+type sampleEncoder struct {
+	env    Env
+	coder  string // ImageMagick coder of the samples
+	middle []string
+	enc    encoding
+	dir    string
+	// framePixels is the pixel count of each sample; it sets the batch size.
+	framePixels int
+	// keep is called for each kept sample with its index among all the
+	// samples given, its output number and its size.
+	keep func(i, n, w, h int)
+
+	lastSig string
+	seen, n int
+}
+
+// batchSize is the number of samples one run reads: at least one, at most
+// what encodeBatchPixels allows.
+func (s *sampleEncoder) batchSize() int {
+	return max(1, encodeBatchPixels/max(1, s.framePixels))
+}
+
+// encode encodes batch, the next samples in order.
+func (s *sampleEncoder) encode(ctx context.Context, batch []string) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	args := append([]string{}, LimitArgs()...)
+	for _, p := range batch {
+		args = append(args, s.coder+":"+p)
+	}
+	args = append(args, s.middle...)
+	pattern := strings.ReplaceAll(filepath.Join(s.dir, ".enc-"), "%", "%%") + "%d" + s.enc.ext
+	args = append(args, "-quality", strconv.Itoa(s.enc.quality), "+adjoin", "-scene", "0",
+		"-write", pattern, "-format", "%#|%w|%h\n", "info:")
+	res, err := s.env.Run(ctx, "magick", args...)
+	if err != nil {
+		return fmt.Errorf("encoding frames %d to %d: %w", s.seen, s.seen+len(batch)-1, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
+	if len(lines) != len(batch) {
+		return fmt.Errorf("encoding frames %d to %d: %d results", s.seen, s.seen+len(batch)-1, len(lines))
+	}
+	for j, line := range lines {
+		tmp := filepath.Join(s.dir, ".enc-"+strconv.Itoa(j)+s.enc.ext)
+		f := strings.Split(line, "|")
+		if len(f) != 3 {
+			return fmt.Errorf("encoding frame %d: unexpected output %q", s.seen+j, line)
+		}
+		if s.seen+j > 0 && f[0] == s.lastSig {
+			if err := os.Remove(tmp); err != nil {
+				return err
+			}
+			continue
+		}
+		w, err1 := strconv.Atoi(f[1])
+		h, err2 := strconv.Atoi(f[2])
+		if err1 != nil || err2 != nil {
+			return fmt.Errorf("encoding frame %d: unexpected size %q", s.seen+j, line)
+		}
+		if err := os.Rename(tmp, filepath.Join(s.dir, frameName(s.n, s.enc.ext))); err != nil {
+			return err
+		}
+		s.lastSig = f[0]
+		s.keep(s.seen+j, s.n, w, h)
+		s.n++
+	}
+	s.seen += len(batch)
+	return nil
+}
+
+// encodeSamples encodes samples, all of s.framePixels pixels, in batches.
+func (s *sampleEncoder) encodeSamples(ctx context.Context, samples []string) error {
+	for batch := s.batchSize(); len(samples) > 0; samples = samples[min(batch, len(samples)):] {
+		if err := s.encode(ctx, samples[:min(batch, len(samples))]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
