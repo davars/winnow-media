@@ -144,6 +144,19 @@
             ldflags = probeLdflags;
           };
 
+          # The measurement harness runs the Processor, which resolves
+          # magick, ffmpeg and ffprobe, and generates inputs with the same tools.
+          measureTools = [ "imagemagick" "ffmpeg" ];
+          measure = buildGoModule {
+            pname = "measure";
+            version = "0";
+            inherit src;
+            vendorHash = null;
+            subPackages = [ "internal/cmd/measure" ];
+            ldflags = ldflags { inherit system; tools = measureTools; };
+            meta.mainProgram = "measure";
+          };
+
           probeTools = [ "imagemagick" ];
           probeDir = toolDir { inherit system; tools = probeTools; };
           probe = probeWith (ldflags { inherit system; tools = probeTools; });
@@ -167,14 +180,23 @@
           '';
         in
         {
-          inherit pkgs tools allTools golangci-lint buildGoModule gate closureCheck;
+          inherit pkgs tools allTools golangci-lint buildGoModule gate closureCheck measure;
         };
     in
     {
       packages = nixpkgs.lib.genAttrs toolSystems (system:
         toolPackages nixpkgs.legacyPackages.${system} // {
           default = toolDir { inherit system; tools = toolNames; };
+        } // nixpkgs.lib.optionalAttrs (builtins.elem system systems) {
+          measure = (perSystem system).measure;
         });
+
+      apps = nixpkgs.lib.genAttrs systems (system: {
+        measure = {
+          type = "app";
+          program = "${(perSystem system).measure}/bin/measure";
+        };
+      });
 
       lib = { inherit toolDir ldflags checkGoModPin assertGoModPin; };
 
