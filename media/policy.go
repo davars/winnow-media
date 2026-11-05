@@ -242,7 +242,8 @@ func resourceNumber(s string) (float64, error) {
 }
 
 // checkEffectiveResources requires each resource rule in want to read back
-// as the same quantity.
+// at or below the quantity written. ImageMagick lowers some limits to fit the
+// host (threads to its CPUs), and a lower limit is still within the ceiling.
 func checkEffectiveResources(limits map[string]string, want []policyRule) error {
 	for _, r := range want {
 		if r.domain != "resource" {
@@ -260,15 +261,16 @@ func checkEffectiveResources(limits map[string]string, want []policyRule) error 
 		if err != nil {
 			return err
 		}
-		if g != w {
-			return fmt.Errorf("resource %s is %q, want %q", r.name, got, r.value)
+		if g > w {
+			return fmt.Errorf("resource %s is %q, above the ceiling %q", r.name, got, r.value)
 		}
 	}
 	return nil
 }
 
 // verifyPolicy reads the policy ImageMagick will apply back from the tool and
-// refuses unless it is exactly the installed one.
+// refuses unless the rules are exactly the installed ones and no resource
+// limit is above its ceiling.
 func (p *Processor) verifyPolicy(ctx context.Context, want []policyRule) error {
 	res, err := p.run(ctx, "magick", "-list", "policy")
 	if err != nil {

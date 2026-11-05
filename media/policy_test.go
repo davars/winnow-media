@@ -101,6 +101,15 @@ func TestEffectiveResources(t *testing.T) {
 	if err := checkEffectiveResources(limits, want); err != nil {
 		t.Errorf("matching limits refused: %v", err)
 	}
+	for _, lower := range []struct{ from, to string }{
+		{"Thread: 4", "Thread: 3"},
+		{"Memory: 1GiB", "Memory: 512MiB"},
+	} {
+		got := parseResourceList([]byte(strings.Replace(listed, lower.from, lower.to, 1)))
+		if err := checkEffectiveResources(got, want); err != nil {
+			t.Errorf("limits with %q refused: %v", lower.to, err)
+		}
+	}
 	for _, change := range []struct{ from, to string }{
 		{"Memory: 1GiB", "Memory: 3GiB"},
 		{"Time: 5 minutes", "Time: 6 minutes"},
