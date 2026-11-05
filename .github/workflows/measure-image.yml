@@ -2,7 +2,7 @@ name: measure-image
 
 on:
   push:
-    branches: [measure-image]
+    branches: [measure-image, measure-image-sandbox]
 
 permissions:
   contents: read
