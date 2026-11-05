@@ -1,0 +1,350 @@
+package media
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+const policyRefusal = "security policy"
+
+// runMagick runs magick through the processor's own runner.
+func runMagick(p *Processor, args ...string) (Result, error) {
+	return p.run(context.Background(), "magick", args...)
+}
+
+// mvgFile writes a vector drawing that composites the text file textPath.
+func mvgFile(t *testing.T, textPath string) string {
+	t.Helper()
+	return writeFile(t, "draw.mvg", []byte("push graphic-context\nviewbox 0 0 64 64\n"+
+		"image over 0,0 0,0 'text:"+textPath+"'\npop graphic-context\n"))
+}
+
+// gifBytes returns a GIF whose logical screen and only frame are w x h.
+func gifBytes(w, h int) []byte {
+	b := []byte("GIF89a")
+	b = binary.LittleEndian.AppendUint16(b, uint16(w))
+	b = binary.LittleEndian.AppendUint16(b, uint16(h))
+	b = append(b, 0x80, 0, 0, 0, 0, 0, 255, 255, 255)
+	b = append(b, 0x2C, 0, 0, 0, 0)
+	b = binary.LittleEndian.AppendUint16(b, uint16(w))
+	b = binary.LittleEndian.AppendUint16(b, uint16(h))
+	return append(b, 0, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B)
+}
+
+func TestRunnerEnvironmentIgnoresCallerConfiguration(t *testing.T) {
+	p := requireProcessor(t)
+	widening := `<policymap>
+<policy domain="resource" name="memory" value="8GiB"/>
+<policy domain="coder" rights="read|write" pattern="{MVG,TEXT,PNG}"/>
+</policymap>`
+	home, xdg := t.TempDir(), t.TempDir()
+	for _, path := range []string{
+		filepath.Join(home, ".config", "ImageMagick", "policy.xml"),
+		filepath.Join(xdg, "ImageMagick", "policy.xml"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(widening), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	secret := writeFile(t, "secret.txt", []byte("secret"))
+	out := filepath.Join(t.TempDir(), "out.png")
+	_, err := runMagick(p, "mvg:"+mvgFile(t, secret), "png:"+out)
+	if err == nil || !strings.Contains(err.Error(), policyRefusal) {
+		t.Fatalf("MVG read with a widening user policy: err = %v, want a policy refusal", err)
+	}
+}
+
+func TestRunnerRefusesDangerousCoders(t *testing.T) {
+	p := requireProcessor(t)
+	text := writeFile(t, "secret.txt", []byte("secret"))
+	out := filepath.Join(t.TempDir(), "out.png")
+	for _, input := range []string{
+		"mvg:" + mvgFile(t, text),
+		"text:" + text,
+		"msl:" + text,
+		"ps:" + text,
+		"eps:" + text,
+		"pdf:" + text,
+		"https://example.invalid/x.png",
+		"http://example.invalid/x.png",
+		"@" + text,
+	} {
+		t.Run(input[:strings.IndexAny(input, ":@")+1], func(t *testing.T) {
+			_, err := runMagick(p, input, "png:"+out)
+			if err == nil || !strings.Contains(err.Error(), policyRefusal) {
+				t.Errorf("err = %v, want a policy refusal", err)
+			}
+			if _, err := os.Stat(out); err == nil {
+				t.Error("output was written")
+			}
+		})
+	}
+}
+
+func TestMVGGivenToOperationsIsUnsupportedWithoutRunningATool(t *testing.T) {
+	p := requireProcessor(t)
+	rec := record(p)
+	mvg := mvgFile(t, writeFile(t, "secret.txt", []byte("secret")))
+	if _, _, err := p.Still(context.Background(), mvg, Encoding{}, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("Still: err = %v, want ErrUnsupportedType", err)
+	}
+	if _, _, err := p.AnimationFrames(context.Background(), mvg, Encoding{}, 0, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("AnimationFrames: err = %v, want ErrUnsupportedType", err)
+	}
+	if n := rec.count(); n != 0 {
+		t.Errorf("%d tool runs", n)
+	}
+}
+
+func TestPNGNamedGIFIsUnsupportedWithoutRunningATool(t *testing.T) {
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	rec := record(p)
+	png := filepath.Join(t.TempDir(), "x.gif")
+	magick(t, env, "-size", "8x8", "xc:red", "png:"+png)
+	_, _, err := p.AnimationFrames(context.Background(), png, Encoding{}, 0, t.TempDir())
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("err = %v, want ErrUnsupportedType", err)
+	}
+	if n := rec.count(); n != 0 {
+		t.Errorf("%d tool runs", n)
+	}
+}
+
+func zipBytes(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	w := zip.NewWriter(&b)
+	f, err := w.Create("payload.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.Write([]byte("payload"))
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	clean := writeGIF(t, env, solid, 6)
+	cleanData, err := os.ReadFile(clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantImages, cleanOut := framesInto(t, p, clean, Encoding{}, 0)
+
+	for name, tail := range map[string][]byte{
+		"zip":          zipBytes(t),
+		"hls playlist": []byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1,\nfile:///etc/passwd\n#EXT-X-ENDLIST\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeFile(t, "x.gif", append(slices.Clone(cleanData), tail...))
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
+			images, out := framesInto(t, p, path, Encoding{}, 0)
+			if !slices.Equal(images, wantImages) {
+				t.Errorf("images = %+v, want %+v", images, wantImages)
+			}
+			for _, img := range images {
+				got, err := os.ReadFile(filepath.Join(out, img.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, err := os.ReadFile(filepath.Join(cleanOut, img.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got, want) {
+					t.Errorf("%s differs from the clean GIF's frame", img.Name)
+				}
+			}
+			for _, call := range rec.calls {
+				if !slices.ContainsFunc(call, func(a string) bool {
+					return strings.HasPrefix(a, "gif:"+path) || strings.HasPrefix(a, out)
+				}) {
+					t.Errorf("run %q neither pins the gif decoder nor reads an output", call)
+				}
+			}
+		})
+	}
+}
+
+func TestInputSizeCap(t *testing.T) {
+	p := requireProcessor(t)
+	rec := record(p)
+	header := gifBytes(1, 1)
+	over := writeFile(t, "big.gif", header)
+	if err := os.Truncate(over, maxInputBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := p.AnimationFrames(context.Background(), over, Encoding{}, 0, t.TempDir())
+	if !errors.Is(err, ErrTooLarge) {
+		t.Errorf("one byte over the cap: err = %v, want ErrTooLarge", err)
+	}
+	if n := rec.count(); n != 0 {
+		t.Errorf("%d tool runs for an oversize file", n)
+	}
+
+	exact := writeFile(t, "exact.gif", header)
+	if err := os.Truncate(exact, maxInputBytes); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = p.AnimationFrames(context.Background(), exact, Encoding{}, 0, t.TempDir())
+	if errors.Is(err, ErrTooLarge) {
+		t.Errorf("exactly the cap was refused as too large: %v", err)
+	}
+}
+
+func TestHeaderCapRefusesBeforeDecoding(t *testing.T) {
+	p := requireProcessor(t)
+	for name, g := range map[string][]byte{
+		"too wide":        gifBytes(maxDimension+1, 10),
+		"too tall":        gifBytes(10, maxDimension+1),
+		"too many pixels": gifBytes(maxDimension, maxDimension),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
+			out := t.TempDir()
+			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "big.gif", g), Encoding{}, 0, out)
+			if !errors.Is(err, ErrTooLarge) {
+				t.Fatalf("err = %v, want ErrTooLarge", err)
+			}
+			if rec.count() != 1 || !slices.Contains(rec.calls[0], "-ping") {
+				t.Errorf("runs before refusal: %q, want the one header read", rec.calls)
+			}
+			if got := dirNames(t, out); len(got) != 0 {
+				t.Errorf("output dir holds %v", got)
+			}
+		})
+	}
+}
+
+func TestCheckSceneHeaders(t *testing.T) {
+	frames := func(n, w, h int) []sceneHeader {
+		s := make([]sceneHeader, n)
+		for i := range s {
+			s[i] = sceneHeader{width: w, height: h, canvasW: w, canvasH: h}
+		}
+		return s
+	}
+	cases := []struct {
+		name     string
+		scenes   []sceneHeader
+		animated bool
+		tooLarge bool
+	}{
+		{"small", frames(3, 64, 48), true, false},
+		{"frame count at cap", frames(maxAnimationFrames, 8, 8), true, false},
+		{"frame count over cap", frames(maxAnimationFrames+1, 8, 8), true, true},
+		{"frame count unchecked for a still", frames(maxAnimationFrames+1, 8, 8), false, false},
+		{"dimension at cap", frames(1, maxDimension, 100), false, false},
+		{"width over cap", frames(1, maxDimension+1, 1), false, true},
+		{"height over cap", frames(1, 1, maxDimension+1), false, true},
+		{"canvas width over cap", []sceneHeader{{width: 10, height: 10, canvasW: maxDimension + 1, canvasH: 10}}, false, true},
+		{"frame pixels over cap", frames(1, 12000, 12000), false, true},
+		{"frame pixels at cap", frames(1, 10000, 10000), false, false},
+		{"total pixels at cap", frames(1000, 1000, 1000), true, false},
+		{"total pixels over cap", frames(1001, 1000, 1000), true, true},
+		{"total pixels uses largest canvas", append(frames(1000, 10, 10), sceneHeader{width: 1000, height: 1000, canvasW: 1000, canvasH: 1000}), true, true},
+	}
+	for _, c := range cases {
+		err := checkSceneHeaders(c.scenes, c.animated)
+		if got := errors.Is(err, ErrTooLarge); got != c.tooLarge || (err != nil && !got) {
+			t.Errorf("%s: err = %v, want ErrTooLarge = %v", c.name, err, c.tooLarge)
+		}
+	}
+	if err := checkVideoSize(maxDimension, maxDimension); err != nil {
+		t.Errorf("video at cap: %v", err)
+	}
+	if err := checkVideoSize(maxDimension+1, 1); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("wide video: err = %v", err)
+	}
+	if err := checkVideoSize(1, maxDimension+1); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("tall video: err = %v", err)
+	}
+}
+
+func TestWebPProfileIsReadFromTheDecodedImage(t *testing.T) {
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	path := filepath.Join(t.TempDir(), "icc.webp")
+	magick(t, env, "-size", "100x80", "gradient:red-blue", "+profile", "*", "-profile", writeSRGBProfile(t), path)
+	var m meter
+	scenes, err := readHeaders(context.Background(), p.env(&m), decoder{"magick", "webp"}, path, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scenes) != 1 || !scenes[0].hasICC {
+		t.Errorf("scenes = %+v, want one with an ICC profile", scenes)
+	}
+}
+
+func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	var runs []Usage
+	inner := p.run
+	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
+		res, err := inner(ctx, name, args...)
+		if res.Usage != nil {
+			runs = append(runs, *res.Usage)
+		}
+		return res, err
+	}
+	check := func(t *testing.T, got Usage) {
+		t.Helper()
+		var cpu time.Duration
+		var peak int64
+		for _, u := range runs {
+			cpu += u.CPU
+			peak = max(peak, u.MaxRSS)
+		}
+		if len(runs) < 2 {
+			t.Fatalf("%d measured runs", len(runs))
+		}
+		if got.CPU != cpu || got.MaxRSS != peak {
+			t.Errorf("usage = %+v, want CPU %v and peak %d", got, cpu, peak)
+		}
+		if got.CPU <= 0 || got.MaxRSS <= 0 {
+			t.Errorf("usage = %+v, want non-zero", got)
+		}
+	}
+	t.Run("success", func(t *testing.T) {
+		runs = nil
+		_, usage, err := p.AnimationFrames(context.Background(), writeGIF(t, env, solid, 4), Encoding{}, 0, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(t, usage)
+	})
+	t.Run("failure", func(t *testing.T) {
+		runs = nil
+		rec := record(p)
+		defer func() { p.run = rec.inner }()
+		rec.failAfter = 2
+		_, usage, err := p.AnimationFrames(context.Background(), writeGIF(t, env, solid, 4), Encoding{}, 0, t.TempDir())
+		if err == nil {
+			t.Fatal("operation succeeded")
+		}
+		check(t, usage)
+	})
+}

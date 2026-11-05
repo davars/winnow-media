@@ -14,12 +14,14 @@ import (
 
 var videoSpec = spec{
 	inputs: []acceptedInput{
-		{"video/mp4", decoder{"ffmpeg", "mov"}},
-		{"video/quicktime", decoder{"ffmpeg", "mov"}},
-		{"video/webm", decoder{"ffmpeg", "matroska"}},
-		{"video/x-matroska", decoder{"ffmpeg", "matroska"}},
+		{typeMP4, decoder{"ffmpeg", "mov"}},
+		{typeMOV, decoder{"ffmpeg", "mov"}},
+		{typeWebM, decoder{"ffmpeg", "matroska"}},
+		{typeMKV, decoder{"ffmpeg", "matroska"}},
 	},
-	tools: []string{"ffprobe", "ffmpeg", "magick"},
+	tools:  []string{"ffprobe", "ffmpeg", "magick"},
+	reads:  append([]string{"png"}, outputCoders...),
+	writes: outputCoders,
 }
 
 // hdrToSDRFilter linearizes HDR video, converts its primaries to BT.709,
@@ -164,46 +166,12 @@ func sampleTimesMS(v videoInfo, maxFrames int) []int64 {
 // samplePrefix names the lossless intermediates inside the output directory.
 const samplePrefix = ".sample-"
 
-// VideoFrames decodes up to maxFrames still images from a video source
-// (video/mp4, video/quicktime, video/webm, video/x-matroska) and writes them
-// to dir as frame-NNN.<ext>. The samples are the centres of equal intervals
-// of the first video stream's duration, each taken by its own seek, so the
-// work does not grow with the length of the video. HDR (HLG or PQ) video is
-// tone-mapped to SDR, output is upright whatever the stream's display
-// rotation, and a sample identical to the one before it is dropped, with the
-// files numbered consecutively from 0. Image.TimeMS is the seek target in
-// milliseconds; Image.Frame is 0 because a seeked sample has no known frame
-// index. Output is otherwise as for Still.
-//
-// maxFrames 0 means 16; otherwise it must be 1 to 64. dir must exist and be
-// empty. Every argument is validated before any tool runs; a source type the
-// operation does not accept gives an error wrapping ErrUnsupportedType. On
-// failure VideoFrames removes what it wrote, leaving dir empty.
-func (e Env) VideoFrames(ctx context.Context, src Source, enc Encoding, maxFrames int, dir string) ([]Image, error) {
-	ec, err := enc.resolve()
-	if err != nil {
-		return nil, fmt.Errorf("video frames: %w", err)
-	}
-	frames, err := resolveFrames(maxFrames)
-	if err != nil {
-		return nil, fmt.Errorf("video frames: %w", err)
-	}
-	dec, err := e.prepare(videoSpec, src, dir)
-	if err != nil {
-		return nil, fmt.Errorf("video frames: %w", err)
-	}
-	images, err := inDir(dir, func() ([]Image, error) {
-		return e.videoFrames(ctx, dec, src.Path, ec, frames, dir)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("video frames: %w", err)
-	}
-	return images, nil
-}
-
 func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
 	info, err := probeVideo(ctx, e, dec, inputPath)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkVideoSize(info.width, info.height); err != nil {
 		return nil, err
 	}
 	w, h := info.upright()

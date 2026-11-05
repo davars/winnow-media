@@ -29,20 +29,28 @@ var srgbProfile = func() []byte {
 // run starts, so the name cannot collide.
 const profileName = ".srgb2014.icc"
 
+// outputCoders are the coders of the output formats; ImageMagick selects the
+// coder from the file extension, so JPEG files are handled by "jpg".
+var outputCoders = []string{"jpeg", "jpg", "png", "webp"}
+
 var stillSpec = spec{
 	inputs: []acceptedInput{
-		{"image/heic", decoder{"magick", "heic"}},
-		{"image/heif", decoder{"magick", "heic"}},
+		{typeHEIC, decoder{"magick", "heic"}},
+		{typeHEIF, decoder{"magick", "heic"}},
 	},
-	tools: []string{"magick"},
+	tools:  []string{"magick"},
+	reads:  append([]string{"icc"}, outputCoders...),
+	writes: outputCoders,
 }
 
 var animationSpec = spec{
 	inputs: []acceptedInput{
-		{"image/gif", decoder{"magick", "gif"}},
-		{"image/webp", decoder{"magick", "webp"}},
+		{typeGIF, decoder{"magick", "gif"}},
+		{typeWebP, decoder{"magick", "webp"}},
 	},
-	tools: []string{"magick"},
+	tools:  []string{"magick"},
+	reads:  append([]string{"icc"}, outputCoders...),
+	writes: append([]string{"info"}, outputCoders...),
 }
 
 // sceneHeader is what one scene's header says, before any pixels decode.
@@ -55,10 +63,41 @@ type sceneHeader struct {
 	orientation   string
 }
 
-// identifyScenes reads the headers of the scenes selected by selector ("" for
-// all, "[0]" for the first) of path, decoded with decoder.
-func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector string) ([]sceneHeader, error) {
+// readHeaders reads the headers of the scenes selected by selector ("" for
+// all, "[0]" for the first) of path, decoded with decoder, and refuses ones
+// that exceed the caps before any pixel is decoded.
+func readHeaders(ctx context.Context, env Env, dec decoder, path, selector string, animated bool) ([]sceneHeader, error) {
+	scenes, err := identifyScenes(ctx, env, dec, path, selector, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSceneHeaders(scenes, animated); err != nil {
+		return nil, err
+	}
+	// libwebp's header read skips the ICC chunk, so the profile is read from
+	// the decoded image, which the caps now allow.
+	if dec.name == "webp" {
+		full, err := identifyScenes(ctx, env, dec, path, selector, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(full) != len(scenes) {
+			return nil, fmt.Errorf("reading headers: %d scenes, then %d", len(scenes), len(full))
+		}
+		for i := range scenes {
+			scenes[i].hasICC = full[i].hasICC
+		}
+	}
+	return scenes, nil
+}
+
+// identifyScenes runs one identify over the scenes selected by selector. ping
+// reads headers only.
+func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector string, ping bool) ([]sceneHeader, error) {
 	args := append([]string{"identify"}, LimitArgs()...)
+	if ping {
+		args = append(args, "-ping")
+	}
 	args = append(args, "-format", "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n", dec.name+":"+path+selector)
 	res, err := env.Run(ctx, "magick", args...)
 	if err != nil {
@@ -210,36 +249,8 @@ func identifySizes(ctx context.Context, env Env, paths []string) ([][2]int, erro
 	return sizes, nil
 }
 
-// Still decodes the first image of a HEIC or HEIF source (image/heic,
-// image/heif) and writes it to dir as still.<ext> in the encoding's format.
-// The output is upright, converted to sRGB when the source carries an ICC
-// profile, flattened onto white for JPEG and free of metadata.
-//
-// dir must exist and be empty. Every argument is validated before any tool
-// runs; a source type the operation does not accept gives an error wrapping
-// ErrUnsupportedType. On failure Still removes what it wrote, leaving dir
-// empty.
-func (e Env) Still(ctx context.Context, src Source, enc Encoding, dir string) (Image, error) {
-	ec, err := enc.resolve()
-	if err != nil {
-		return Image{}, fmt.Errorf("still: %w", err)
-	}
-	dec, err := e.prepare(stillSpec, src, dir)
-	if err != nil {
-		return Image{}, fmt.Errorf("still: %w", err)
-	}
-	images, err := inDir(dir, func() ([]Image, error) {
-		img, err := e.still(ctx, dec, src.Path, ec, dir)
-		return []Image{img}, err
-	})
-	if err != nil {
-		return Image{}, fmt.Errorf("still: %w", err)
-	}
-	return images[0], nil
-}
-
 func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, dir string) (Image, error) {
-	scenes, err := identifyScenes(ctx, e, dec, path, "[0]")
+	scenes, err := readHeaders(ctx, e, dec, path, "[0]", false)
 	if err != nil {
 		return Image{}, err
 	}
@@ -274,41 +285,8 @@ func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, 
 	return Image{Name: name, Width: sizes[0][0], Height: sizes[0][1]}, nil
 }
 
-// AnimationFrames decodes a GIF or animated WebP source (image/gif,
-// image/webp), composites its frames, samples up to maxFrames of them evenly
-// and writes each to dir as frame-NNN.<ext>. A sampled frame identical to
-// the one before it after resizing is dropped and the files are numbered
-// consecutively from 0; Image.Frame is the index of the source frame a file
-// shows. Output is as for Still.
-//
-// maxFrames 0 means 16; otherwise it must be 1 to 64. dir must exist and be
-// empty. Every argument is validated before any tool runs; a source type the
-// operation does not accept gives an error wrapping ErrUnsupportedType. On
-// failure AnimationFrames removes what it wrote, leaving dir empty.
-func (e Env) AnimationFrames(ctx context.Context, src Source, enc Encoding, maxFrames int, dir string) ([]Image, error) {
-	ec, err := enc.resolve()
-	if err != nil {
-		return nil, fmt.Errorf("animation frames: %w", err)
-	}
-	frames, err := resolveFrames(maxFrames)
-	if err != nil {
-		return nil, fmt.Errorf("animation frames: %w", err)
-	}
-	dec, err := e.prepare(animationSpec, src, dir)
-	if err != nil {
-		return nil, fmt.Errorf("animation frames: %w", err)
-	}
-	images, err := inDir(dir, func() ([]Image, error) {
-		return e.animationFrames(ctx, dec, src.Path, ec, frames, dir)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("animation frames: %w", err)
-	}
-	return images, nil
-}
-
 func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc encoding, maxFrames int, dir string) ([]Image, error) {
-	scenes, err := identifyScenes(ctx, e, dec, path, "")
+	scenes, err := readHeaders(ctx, e, dec, path, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -316,10 +294,7 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	var cw, ch int
 	for i, s := range scenes {
 		infos[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
-		w, h := s.canvasW, s.canvasH
-		if w < 1 || h < 1 {
-			w, h = s.width, s.height
-		}
+		w, h := s.canvas()
 		cw, ch = max(cw, w), max(ch, h)
 	}
 	cw, ch = uprightSize(cw, ch, scenes[0].orientation)

@@ -7,19 +7,10 @@ import (
 	"path/filepath"
 )
 
-// ErrUnsupportedType is returned, wrapped with the offending media type, when
-// an operation does not accept the type of its Source. Test for it with
-// errors.Is.
+// ErrUnsupportedType is returned, wrapped with the media type found in the
+// input's bytes, when an operation does not accept that type or the bytes are
+// of no type the package recognizes. Test for it with errors.Is.
 var ErrUnsupportedType = errors.New("unsupported media type")
-
-// Source is one input file the caller has staged. Operations only read it.
-type Source struct {
-	// Path is the staged file.
-	Path string
-	// Type is the media type of the file, as the caller asserts it. It
-	// selects the decoder; an operation accepts only the types it lists.
-	Type string
-}
 
 // Format is the encoding of an output image.
 type Format string
@@ -133,10 +124,15 @@ type decoder struct {
 }
 
 // spec is the internal description of one operation: the media types it
-// accepts, the decoder each is read with, and the tools it runs.
+// accepts, the decoder each is read with, the tools it runs and the
+// ImageMagick coders it uses besides its input decoders.
 type spec struct {
 	inputs []acceptedInput
 	tools  []string
+	// reads and writes name the ImageMagick coders the operation reads and
+	// writes itself: its output formats, which it reads back to measure, and
+	// the intermediates it passes between tools.
+	reads, writes []string
 }
 
 type acceptedInput struct {
@@ -150,31 +146,7 @@ func (s spec) decoderFor(mediaType string) (decoder, error) {
 			return in.decoder, nil
 		}
 	}
-	return decoder{}, fmt.Errorf("%w: %q", ErrUnsupportedType, mediaType)
-}
-
-// prepare checks everything an operation can check before running a tool: the
-// Env, the source and its type, and that dir exists and is empty. It returns
-// the decoder the source's type selects.
-func (e Env) prepare(s spec, src Source, dir string) (decoder, error) {
-	if e.Run == nil {
-		return decoder{}, errors.New("Env.Run is nil")
-	}
-	dec, err := s.decoderFor(src.Type)
-	if err != nil {
-		return decoder{}, err
-	}
-	info, err := os.Stat(src.Path)
-	if err != nil {
-		return decoder{}, fmt.Errorf("source: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return decoder{}, fmt.Errorf("source %s is not a regular file", src.Path)
-	}
-	if err := requireEmptyDir(dir); err != nil {
-		return decoder{}, err
-	}
-	return dec, nil
+	return decoder{}, fmt.Errorf("%w: %s", ErrUnsupportedType, mediaType)
 }
 
 // inDir runs fn, which writes into dir, and empties dir again if it fails.
