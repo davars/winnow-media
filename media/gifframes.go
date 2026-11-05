@@ -3,6 +3,7 @@ package media
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -30,9 +31,9 @@ func gifSampleName(n int) string { return fmt.Sprintf(".sample-%03d.pam", n) }
 // an ICC profile, which ImageMagick attaches to the image that follows it.
 const iccExtension = "ICCRGBG1012"
 
-// gifProfileName is the file the compositor writes the GIF's profile to, in
-// the output directory.
-const gifProfileName = ".gif-profile.icc"
+// gifProfileName is the file the compositor writes the profile with the given
+// id to, in the output directory.
+func gifProfileName(id int) string { return fmt.Sprintf(".gif-profile-%d.icc", id) }
 
 // gifLayout is what scanGIF reads from the block structure of a GIF.
 type gifLayout struct {
@@ -41,20 +42,17 @@ type gifLayout struct {
 	// missingTrailer is set when the data ends between blocks without the
 	// trailer, as ImageMagick accepts.
 	missingTrailer bool
-	// profile is the GIF's ICC profile and profileFrom the index of the
-	// first frame it applies to, or nil and -1. A profile applies from the
-	// frame that follows its extension to the end, because that is how the
-	// frames come out of -coalesce.
-	profile     []byte
-	profileFrom int
-	// own[i] is set when the profile's extension directly precedes frame i.
-	own []bool
+	// profiles holds the distinct ICC profiles in order of first appearance;
+	// the profile with id n is profiles[n-1].
+	profiles [][]byte
+	// own[i] is the id of the profile whose extension directly precedes frame
+	// i, or 0.
+	own []int
 }
 
 // scanGIF walks the blocks of a GIF without decoding any pixels and refuses
 // one that is truncated inside a block, has more than maxFrames frames, has a
-// frame that reaches outside the logical screen or carries more than one
-// distinct ICC profile. A GIF that ends between blocks without a trailer is
+// frame that reaches outside the logical screen. A GIF that ends between blocks without a trailer is
 // accepted. It is what bounds the memory of the decode that follows: frames
 // times canvas.
 func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
@@ -63,8 +61,8 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	}
 	l := gifLayout{
 		width: int(binary.LittleEndian.Uint16(data[6:])), height: int(binary.LittleEndian.Uint16(data[8:])),
-		profileFrom: -1,
 	}
+	ids := map[[sha256.Size]byte]int{}
 	pos := 13
 	if flags := data[10]; flags&0x80 != 0 {
 		pos += 3 << (1 + flags&7)
@@ -128,7 +126,17 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 			w, h := int(binary.LittleEndian.Uint16(data[pos+5:])), int(binary.LittleEndian.Uint16(data[pos+7:]))
 			flags := data[pos+9]
 			l.frames++
-			l.own = append(l.own, pending != nil)
+			id := 0
+			if pending != nil {
+				sum := sha256.Sum256(pending)
+				if id = ids[sum]; id == 0 {
+					l.profiles = append(l.profiles, pending)
+					id = len(l.profiles)
+					ids[sum] = id
+				}
+				pending = nil
+			}
+			l.own = append(l.own, id)
 			if l.frames > maxFrames {
 				return gifLayout{}, fmt.Errorf("GIF has more than %d frames", maxFrames)
 			}
@@ -136,15 +144,6 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 				return gifLayout{}, fmt.Errorf("frame %d reaches outside the %dx%d canvas", l.frames-1, l.width, l.height)
 			}
 			extentW, extentH = max(extentW, left+w), max(extentH, top+h)
-			if pending != nil {
-				switch {
-				case l.profile == nil:
-					l.profile, l.profileFrom = pending, l.frames-1
-				case !bytes.Equal(l.profile, pending):
-					return gifLayout{}, errors.New("GIF carries more than one colour profile")
-				}
-				pending = nil
-			}
 			pos += 10
 			if flags&0x80 != 0 {
 				pos += 3 << (1 + flags&7)
@@ -198,11 +197,11 @@ func decodeGIF(data []byte, maxFrames int) (*gif.GIF, gifLayout, error) {
 // disposal clears the frame's rectangle to transparent, and a frame without a
 // graphic control extension is a frame like any other.
 //
-// own[i] says that frame i has an ICC profile of its own. emit is told whether
-// the canvas carries a profile: ImageMagick gives a coalesced frame the
-// profile of the canvas it was built on, which a frame's own profile replaces
-// and a restore to the previous canvas undoes.
-func compositeGIF(g *gif.GIF, width, height int, own []bool, selected []int, emit func(index int, canvas *image.NRGBA, profiled bool) error) error {
+// own[i] is the id of the ICC profile frame i has of its own, or 0. emit is
+// told the id of the profile the canvas carries, 0 for none: ImageMagick gives
+// a coalesced frame the profile of the canvas it was built on, which a frame's
+// own profile replaces and a restore to the previous canvas undoes.
+func compositeGIF(g *gif.GIF, width, height int, own []int, selected []int, emit func(index int, canvas *image.NRGBA, profile int) error) error {
 	want := map[int]bool{}
 	last := -1
 	for _, i := range selected {
@@ -213,7 +212,7 @@ func compositeGIF(g *gif.GIF, width, height int, own []bool, selected []int, emi
 	var saved *image.NRGBA
 	var prevRect image.Rectangle
 	var prevDisposal byte
-	var profiled, savedProfiled bool
+	var profile, savedProfile int
 	for i, frame := range g.Image {
 		if i > last {
 			break
@@ -227,7 +226,7 @@ func compositeGIF(g *gif.GIF, width, height int, own []bool, selected []int, emi
 		case gif.DisposalPrevious:
 			if saved != nil {
 				copy(canvas.Pix, saved.Pix)
-				profiled = savedProfiled
+				profile = savedProfile
 			}
 		}
 		disposal := byte(0)
@@ -239,20 +238,20 @@ func compositeGIF(g *gif.GIF, width, height int, own []bool, selected []int, emi
 				saved = image.NewNRGBA(canvas.Bounds())
 			}
 			copy(saved.Pix, canvas.Pix)
-			savedProfiled = profiled
+			savedProfile = profile
 			// ImageMagick's canvas before the first frame is a clone of
 			// that frame, profile included.
-			if i == 0 && len(own) > 0 && own[0] {
-				savedProfiled = true
+			if i == 0 && len(own) > 0 && own[0] > 0 {
+				savedProfile = own[0]
 			}
 		}
 		drawOpaque(canvas, frame)
-		if i < len(own) && own[i] {
-			profiled = true
+		if i < len(own) && own[i] > 0 {
+			profile = own[i]
 		}
 		prevRect, prevDisposal = frame.Bounds(), disposal
 		if want[i] {
-			if err := emit(i, canvas, profiled); err != nil {
+			if err := emit(i, canvas, profile); err != nil {
 				return err
 			}
 		}
@@ -303,12 +302,24 @@ type composeRequest struct {
 	// frames, width and height are what the header read found; the GIF must
 	// agree.
 	frames, width, height int
-	// profileFrom is the first frame the header read found a profile on, or
-	// -1; the GIF's profile must start there.
-	profileFrom int
-	selected    []int
+	// own[i] is set when the header read found a profile on frame i; the
+	// GIF must agree.
+	own      []bool
+	selected []int
 	// inFlight is the most frames the compositor leaves unconsumed in dir.
 	inFlight int
+}
+
+// ownMask renders own as a string of 0 and 1, one per frame.
+func ownMask(own []bool) string {
+	b := make([]byte, len(own))
+	for i, o := range own {
+		b[i] = '0'
+		if o {
+			b[i] = '1'
+		}
+	}
+	return string(b)
 }
 
 func (r composeRequest) args() []string {
@@ -318,7 +329,7 @@ func (r composeRequest) args() []string {
 	}
 	return []string{
 		r.path, r.dir, strconv.Itoa(r.inFlight), strconv.Itoa(r.frames),
-		strconv.Itoa(r.width), strconv.Itoa(r.height), strings.Join(idx, ","), strconv.Itoa(r.profileFrom),
+		strconv.Itoa(r.width), strconv.Itoa(r.height), strings.Join(idx, ","), ownMask(r.own),
 	}
 }
 
@@ -334,8 +345,10 @@ func compositorMain() {
 
 // runCompositor decodes the GIF named by args (see composeRequest.args),
 // composites it and writes each selected frame to the output directory as a
-// PAM file, then prints the frame's ordinal and its profile flag on out. A frame is written under
-// a temporary name and renamed, so the reader never sees a partial file. Before
+// PAM file, then prints the frame's ordinal and the id of its profile on out. A frame is written
+// under a temporary name and renamed, so the reader never sees a partial file.
+// A profile is written to its own file before the first frame that uses it.
+// Before
 // writing ordinal n it waits until ordinal n-inFlight has been consumed, that
 // is deleted, so the directory holds about one batch.
 //
@@ -357,10 +370,7 @@ func runCompositor(args []string, out io.Writer) (err error) {
 		}
 	}
 	inFlight, frames, width, height := max(1, nums[0]), nums[1], nums[2], nums[3]
-	profileFrom, err := strconv.Atoi(args[7])
-	if err != nil || profileFrom < -1 {
-		return fmt.Errorf("argument %q is not a frame index", args[7])
-	}
+	mask := args[7]
 	var selected []int
 	for _, s := range strings.Split(args[6], ",") {
 		n, err := strconv.Atoi(s)
@@ -377,18 +387,14 @@ func runCompositor(args []string, out io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	if layout.frames != frames || layout.width != width || layout.height != height || layout.profileFrom != profileFrom {
-		return fmt.Errorf("GIF holds %d frames of %dx%d with a profile from frame %d, the header read found %d of %dx%d from %d",
-			layout.frames, layout.width, layout.height, layout.profileFrom, frames, width, height, profileFrom)
+	if layout.frames != frames || layout.width != width || layout.height != height || ownMask(layout.ownFlags()) != mask {
+		return fmt.Errorf("GIF holds %d frames of %dx%d, the header read found %d of %dx%d, or they differ in their profiles",
+			layout.frames, layout.width, layout.height, frames, width, height)
 	}
-	if layout.profile != nil {
-		if err := os.WriteFile(filepath.Join(dir, gifProfileName), layout.profile, 0o600); err != nil {
-			return err
-		}
-	}
+	written := map[int]bool{}
 
 	ordinal := 0
-	return compositeGIF(g, width, height, layout.own, selected, func(_ int, canvas *image.NRGBA, profiled bool) error {
+	return compositeGIF(g, width, height, layout.own, selected, func(_ int, canvas *image.NRGBA, profile int) error {
 		if ordinal >= inFlight {
 			for {
 				_, err := os.Stat(filepath.Join(dir, gifSampleName(ordinal-inFlight)))
@@ -397,6 +403,12 @@ func runCompositor(args []string, out io.Writer) (err error) {
 				}
 				time.Sleep(2 * time.Millisecond)
 			}
+		}
+		if profile > 0 && !written[profile] {
+			if err := os.WriteFile(filepath.Join(dir, gifProfileName(profile)), layout.profiles[profile-1], 0o600); err != nil {
+				return err
+			}
+			written[profile] = true
 		}
 		name := filepath.Join(dir, gifSampleName(ordinal))
 		f, err := os.Create(name + ".tmp")
@@ -418,25 +430,27 @@ func runCompositor(args []string, out io.Writer) (err error) {
 			_ = os.Remove(name + ".tmp")
 			return err
 		}
-		_, err = fmt.Fprintln(out, ordinal, btoi(profiled))
+		_, err = fmt.Fprintln(out, ordinal, profile)
 		ordinal++
 		return err
 	})
 }
 
-func btoi(b bool) int {
-	if b {
-		return 1
+// ownFlags says which frames have a profile of their own.
+func (l gifLayout) ownFlags() []bool {
+	flags := make([]bool, len(l.own))
+	for i, id := range l.own {
+		flags[i] = id > 0
 	}
-	return 0
+	return flags
 }
 
 // frameLines parses the compositor's output, one line per frame holding its
-// ordinal and whether its canvas carries a profile, and calls onFrame with
+// ordinal and the id of the profile its canvas carries, and calls onFrame with
 // the path of each frame in dir.
 type frameLines struct {
 	dir     string
-	onFrame func(path string, profiled bool) error
+	onFrame func(path string, profile int) error
 	buf     []byte
 	next    int
 	err     error
@@ -451,11 +465,18 @@ func (f *frameLines) Write(p []byte) (int, error) {
 		}
 		line := string(f.buf[:i])
 		f.buf = f.buf[i+1:]
-		if line != fmt.Sprintf("%d 0", f.next) && line != fmt.Sprintf("%d 1", f.next) {
+		fields := strings.Fields(line)
+		var n, id int
+		var err1, err2 error
+		if len(fields) == 2 {
+			n, err1 = strconv.Atoi(fields[0])
+			id, err2 = strconv.Atoi(fields[1])
+		}
+		if len(fields) != 2 || err1 != nil || err2 != nil || n != f.next || id < 0 || id > maxAnimationFrames {
 			f.err = fmt.Errorf("compositor reported %q, expected frame %d", line, f.next)
 			break
 		}
-		f.err = f.onFrame(filepath.Join(f.dir, gifSampleName(f.next)), line[len(line)-1] == '1')
+		f.err = f.onFrame(filepath.Join(f.dir, gifSampleName(f.next)), id)
 		f.next++
 	}
 	if f.err != nil {

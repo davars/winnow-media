@@ -20,7 +20,7 @@ func forbidCompositor(t *testing.T, p *Processor) {
 	t.Helper()
 	old := p.compose
 	t.Cleanup(func() { p.compose = old })
-	p.compose = func(context.Context, composeRequest, func(string, bool) error) (*Usage, error) {
+	p.compose = func(context.Context, composeRequest, func(string, int) error) (*Usage, error) {
 		t.Error("the compositor was started")
 		return nil, nil
 	}
@@ -201,33 +201,67 @@ func withICC(t *testing.T, g, profile []byte, before ...int) []byte {
 
 func TestScanGIFProfile(t *testing.T) {
 	adobe := mustAdobeProfile(t)
-	other := append([]byte{}, adobe...)
-	other[len(other)-1] ^= 0xFF
+	swapped := swappedProfile(t, adobe)
 	g := buildGIF(t, 24, 20, paletteA, []gifFrameSpec{
 		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA},
 		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA, shift: 1},
 		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA, shift: 2},
 	})
 	for name, c := range map[string]struct {
-		data []byte
-		from int
+		data     []byte
+		own      []int
+		profiles int
 	}{
-		"none":                 {g, -1},
-		"before the first":     {withICC(t, g, adobe, 0), 0},
-		"before the second":    {withICC(t, g, adobe, 1), 1},
-		"after the last":       {withICC(t, g, adobe, 3), -1},
-		"the same one twice":   {withICC(t, g, adobe, 0, 2), 0},
-		"first of two applies": {withICC(t, g, adobe, 1, 1), 1},
+		"none":                   {g, []int{0, 0, 0}, 0},
+		"before the first":       {withICC(t, g, adobe, 0), []int{1, 0, 0}, 1},
+		"before the second":      {withICC(t, g, adobe, 1), []int{0, 1, 0}, 1},
+		"after the last":         {withICC(t, g, adobe, 3), []int{0, 0, 0}, 0},
+		"the same one twice":     {withICC(t, g, adobe, 0, 2), []int{1, 0, 1}, 1},
+		"two in turn":            {withICC(t, withICC(t, g, adobe, 0), swapped, 2), []int{1, 0, 2}, 2},
+		"three, the first again": {withICC(t, withICC(t, withICC(t, g, adobe, 0), swapped, 1), adobe, 2), []int{1, 2, 1}, 2},
 	} {
 		l, err := scanGIF(c.data, 10)
-		if err != nil || l.profileFrom != c.from || (c.from >= 0 && !bytes.Equal(l.profile, adobe)) {
-			t.Errorf("%s: from %d, err %v, want from %d", name, l.profileFrom, err, c.from)
+		if err != nil || !slices.Equal(l.own, c.own) || len(l.profiles) != c.profiles {
+			t.Errorf("%s: own %v, %d profiles, err %v, want %v and %d", name, l.own, len(l.profiles), err, c.own, c.profiles)
+		}
+		if err == nil && len(l.profiles) > 0 && !bytes.Equal(l.profiles[0], adobe) {
+			t.Errorf("%s: the first profile is not the one in the file", name)
 		}
 	}
-	two := withICC(t, withICC(t, g, adobe, 2), other, 0)
-	if _, err := scanGIF(two, 10); err == nil || !strings.Contains(err.Error(), "more than one colour profile") {
-		t.Errorf("two different profiles: err = %v", err)
+}
+
+// swappedProfile returns profile with the red and green primaries exchanged,
+// a valid profile that converts colours very differently.
+func swappedProfile(t *testing.T, profile []byte) []byte {
+	t.Helper()
+	out := append([]byte{}, profile...)
+	n := int(binary.BigEndian.Uint32(out[128:]))
+	tags := map[string][2]int{}
+	for i := range n {
+		e := out[132+12*i:]
+		tags[string(e[:4])] = [2]int{int(binary.BigEndian.Uint32(e[4:])), int(binary.BigEndian.Uint32(e[8:]))}
 	}
+	r, g := tags["rXYZ"], tags["gXYZ"]
+	if r[1] != 20 || g[1] != 20 {
+		t.Fatalf("primaries are %v and %v, want XYZ tags of 20 bytes", r, g)
+	}
+	tmp := append([]byte{}, out[r[0]:r[0]+20]...)
+	copy(out[r[0]:], out[g[0]:g[0]+20])
+	copy(out[g[0]:], tmp)
+	return out
+}
+
+// withProfiles returns g with, before each image n for which choices[n] is
+// not 0, the extension of profiles[choices[n]-1]. A choice for the image
+// after the last puts it before the trailer.
+func withProfiles(t *testing.T, g []byte, choices []int, profiles ...[]byte) []byte {
+	t.Helper()
+	for n := len(choices) - 1; n >= 0; n-- {
+		if choices[n] > 0 {
+			g = withICC(t, g, profiles[choices[n]-1], n)
+		}
+	}
+	return g
 }
 
 func mustAdobeProfile(t *testing.T) []byte {
@@ -280,19 +314,31 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 		"mixed":    {1, 2, 3, 1},
 		"previous": {3, 3, 3, 3},
 		"back":     {2, 2, 2, 2},
+		"late":     {1, 1, 3, 3},
 	}
+	// Each placement says, for the images in turn and then for after the last
+	// one, which profile precedes it: 0 none, 1 Adobe RGB, 2 the same with red
+	// and green exchanged.
 	placements := map[string][]int{
-		"before the first":  {0},
-		"before the second": {1},
-		"before the third":  {2},
-		"before the fourth": {3},
-		"after the last":    {4},
-		"twice":             {0, 2},
-		"twice, late":       {1, 3},
+		"A before the first":       {1, 0, 0, 0, 0},
+		"A before the second":      {0, 1, 0, 0, 0},
+		"A before the third":       {0, 0, 1, 0, 0},
+		"A before the fourth":      {0, 0, 0, 1, 0},
+		"A after the last":         {0, 0, 0, 0, 1},
+		"A twice":                  {1, 0, 1, 0, 0},
+		"A twice, late":            {0, 1, 0, 1, 0},
+		"A then B":                 {1, 0, 2, 0, 0},
+		"B then A, late":           {0, 2, 0, 1, 0},
+		"A then B at once":         {1, 2, 0, 0, 0},
+		"alternating":              {1, 2, 1, 2, 0},
+		"B, A, A again, B":         {2, 1, 1, 2, 0},
+		"B only before the second": {0, 2, 0, 0, 0},
+		"A, B, A and B after":      {1, 0, 2, 0, 1},
 	}
 	type fixture struct {
-		name string
-		data []byte
+		name   string
+		data   []byte
+		resize bool // also run with a resize
 	}
 	var cases []fixture
 	for dn, d := range disposals {
@@ -306,10 +352,10 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 		}
 		base := buildGIF(t, 24, 20, paletteA, frames)
 		for pn, at := range placements {
-			data := withICC(t, base, adobe, at...)
-			cases = append(cases, fixture{"disposal " + dn + ", profile " + pn, data})
+			data := withProfiles(t, base, at, adobe, swappedProfile(t, adobe))
+			cases = append(cases, fixture{"disposal " + dn + ", profile " + pn, data, dn == "mixed"})
 			if dn == "mixed" {
-				cases = append(cases, fixture{"disposal " + dn + ", profile " + pn + ", no trailer", data[:len(data)-1]})
+				cases = append(cases, fixture{"disposal " + dn + ", profile " + pn + ", no trailer", data[:len(data)-1], false})
 			}
 		}
 	}
@@ -317,6 +363,9 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 	for _, c := range cases {
 		name, data := c.name, c.data
 		for _, resize := range []bool{false, true} {
+			if resize && !c.resize {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s, resize %v", name, resize), func(t *testing.T) {
 				path := writeFile(t, "x.gif", data)
 				enc := Encoding{Format: PNG}
@@ -365,6 +414,50 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 		}
 	}
 	t.Logf("%d runs, largest difference %d", total, worst)
+}
+
+// TestProfilesThatChangeOnEveryFrameCostOneRunPerFrame checks that a GIF
+// whose frames each carry a different profile gives magick no more runs than
+// there are frames, each with one profile.
+func TestProfilesThatChangeOnEveryFrameCostOneRunPerFrame(t *testing.T) {
+	requireMagick(t)
+	p := requireProcessor(t)
+	adobe := mustAdobeProfile(t)
+	var frames []gifFrameSpec
+	for i := range 6 {
+		frames = append(frames, gifFrameSpec{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA, shift: i})
+	}
+	data := withProfiles(t, buildGIF(t, 24, 20, paletteA, frames), []int{1, 2, 1, 2, 1, 2, 0}, adobe, swappedProfile(t, adobe))
+	rec := record(p)
+	images, out := framesInto(t, p, writeFile(t, "x.gif", data), Encoding{Format: PNG}, 0)
+	if len(images) != 6 {
+		t.Fatalf("%d images, want 6", len(images))
+	}
+	runs := 0
+	for _, call := range rec.calls {
+		if call[0] != "magick" || slices.Contains(call, "identify") {
+			continue
+		}
+		runs++
+		inputs, profiles := 0, 0
+		for _, a := range call[1:] {
+			if strings.HasPrefix(a, "pam:") {
+				inputs++
+			}
+			if strings.Contains(a, ".gif-profile-") {
+				profiles++
+			}
+		}
+		if inputs != 1 || profiles != 1 {
+			t.Errorf("a run names %d frames and %d profiles, want 1 and 1: %q", inputs, profiles, call)
+		}
+	}
+	if runs != 6 {
+		t.Errorf("%d magick runs, want 6", runs)
+	}
+	if got := dirNames(t, out); len(got) != 6 {
+		t.Errorf("output dir holds %v (profile files must be removed)", got)
+	}
 }
 
 func TestProfiledGIFConvertsColours(t *testing.T) {
