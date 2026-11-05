@@ -348,3 +348,56 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 		check(t, usage)
 	})
 }
+
+// manyFrameGIF returns a GIF with a w x h logical screen and n frames of 1x1.
+func manyFrameGIF(w, h, n int) []byte {
+	b := []byte("GIF89a")
+	b = binary.LittleEndian.AppendUint16(b, uint16(w))
+	b = binary.LittleEndian.AppendUint16(b, uint16(h))
+	b = append(b, 0x80, 0, 0, 0, 0, 0, 255, 255, 255)
+	frame := []byte{0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0x02, 0x02, 0x44, 0x01, 0x00}
+	for range n {
+		b = append(b, frame...)
+	}
+	return append(b, 0x3B)
+}
+
+func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
+	p := requireProcessor(t)
+	cases := map[string][]byte{
+		"too many frames":       manyFrameGIF(1, 1, maxAnimationFrames+1),
+		"too many total pixels": manyFrameGIF(1000, 1000, maxAnimationPixels/1_000_000+1),
+	}
+	for name, g := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
+			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "many.gif", g), Encoding{}, 0, t.TempDir())
+			if !errors.Is(err, ErrTooLarge) {
+				t.Fatalf("err = %v, want ErrTooLarge", err)
+			}
+			if rec.count() != 1 || !slices.Contains(rec.calls[0], "-ping") {
+				t.Errorf("runs before refusal: %q, want the one header read", rec.calls)
+			}
+		})
+	}
+}
+
+func TestVideoSizeCapRefusesBeforeSampling(t *testing.T) {
+	var names []string
+	env := Env{Run: func(_ context.Context, name string, _ ...string) (Result, error) {
+		names = append(names, name)
+		return Result{Stdout: []byte(`{"streams":[{"index":0,"codec_type":"video","width":16385,"height":100,"duration":"1.0","nb_frames":"10"}]}`)}, nil
+	}}
+	enc, err := Encoding{}.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.videoFrames(context.Background(), decoder{"ffmpeg", "mov"}, "in", enc, 4, t.TempDir())
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	if !slices.Equal(names, []string{"ffprobe"}) {
+		t.Errorf("tool runs %v, want only ffprobe", names)
+	}
+}
