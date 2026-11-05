@@ -12,6 +12,7 @@
 "-limit"
 "time"
 "300"
+"-ping"
 "-format"
 "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n"
 "heic:$IN/input[0]"

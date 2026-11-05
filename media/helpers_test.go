@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,6 +59,23 @@ func requireMagick(t *testing.T) Env {
 	return testEnv(t)
 }
 
+// requireProcessor returns a Processor over the real tools, closed when the
+// test ends, and skips the test when a tool cannot be found.
+func requireProcessor(t *testing.T) *Processor {
+	t.Helper()
+	for _, name := range []string{"magick", "ffmpeg", "ffprobe"} {
+		if _, err := tool.Resolve(name); err != nil {
+			t.Skip(name + " not available")
+		}
+	}
+	p, err := NewProcessor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
 func magick(t *testing.T, env Env, args ...string) []byte {
 	t.Helper()
 	res, err := env.Run(context.Background(), "magick", args...)
@@ -101,4 +119,34 @@ func animationFrameDifference(t *testing.T, env Env, first, second string, frame
 		t.Fatalf("parsing animation frame %d difference: %v", frame, err)
 	}
 	return value
+}
+
+// writeFile writes data to a new file called name in a fresh directory.
+func writeFile(t *testing.T, name string, data []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// ftypBox returns an ISO base media ftyp box.
+func ftypBox(major string, compatible ...string) []byte {
+	b := binary.BigEndian.AppendUint32(nil, uint32(16+4*len(compatible)))
+	b = append(b, "ftyp"...)
+	b = append(b, major...)
+	b = append(b, 0, 0, 0, 0)
+	for _, c := range compatible {
+		b = append(b, c...)
+	}
+	return b
+}
+
+// ebmlHeader returns an EBML header whose document type is docType.
+func ebmlHeader(docType string) []byte {
+	version := []byte{0x42, 0x86, 0x81, 0x01}
+	doc := append([]byte{0x42, 0x82, 0x80 | byte(len(docType))}, docType...)
+	body := append(version, doc...)
+	return append([]byte{0x1A, 0x45, 0xDF, 0xA3, 0x80 | byte(len(body))}, body...)
 }

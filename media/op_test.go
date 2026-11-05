@@ -20,8 +20,8 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden argv files")
 
-// recorder wraps an Env's Runner, recording every invocation and optionally
-// failing one after it has run for real.
+// recorder wraps a Processor's runner, recording every invocation and
+// optionally failing one after it has run for real.
 type recorder struct {
 	inner Runner
 	mu    sync.Mutex
@@ -48,9 +48,11 @@ func (r *recorder) count() int {
 	return len(r.calls)
 }
 
-func newRecorder(env Env) (*recorder, Env) {
-	r := &recorder{inner: env.Run}
-	return r, Env{Run: r.run, Stage: env.Stage}
+// record routes the processor's tool runs through a new recorder.
+func record(p *Processor) *recorder {
+	r := &recorder{inner: p.run}
+	p.run = r.run
+	return r
 }
 
 func requireExiftool(t *testing.T) {
@@ -118,24 +120,20 @@ func writeGIF(t *testing.T, env Env, colour func(i int) string, frames int) stri
 	return stage(t, path)
 }
 
-func heicSource(path string) Source { return Source{Path: path, Type: "image/heic"} }
-
-func gifSource(path string) Source { return Source{Path: path, Type: "image/gif"} }
-
-func stillInto(t *testing.T, env Env, src Source, enc Encoding) (Image, string) {
+func stillInto(t *testing.T, p *Processor, path string, enc Encoding) (Image, string) {
 	t.Helper()
 	out := t.TempDir()
-	img, err := env.Still(context.Background(), src, enc, out)
+	img, _, err := p.Still(context.Background(), path, enc, out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return img, out
 }
 
-func framesInto(t *testing.T, env Env, src Source, enc Encoding, maxFrames int) ([]Image, string) {
+func framesInto(t *testing.T, p *Processor, path string, enc Encoding, maxFrames int) ([]Image, string) {
 	t.Helper()
 	out := t.TempDir()
-	images, err := env.AnimationFrames(context.Background(), src, enc, maxFrames, out)
+	images, _, err := p.AnimationFrames(context.Background(), path, enc, maxFrames, out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,55 +188,62 @@ func TestFitSize(t *testing.T) {
 
 func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 	real := requireMagick(t)
+	p := requireProcessor(t)
 	heic := writeHEIC(t)
 	gif := writeGIF(t, real, solid, 2)
-	rec, env := newRecorder(real)
+	rec := record(p)
+	garbage := filepath.Join(t.TempDir(), "garbage")
+	if err := os.WriteFile(garbage, []byte("not any media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	webm := writeFile(t, "clip.webm", ebmlHeader("webm"))
 
 	nonEmpty := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonEmpty, "leftover"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	absent := filepath.Join(t.TempDir(), "absent")
-	type call func(src Source, enc Encoding, dir string) error
-	still := func(src Source, enc Encoding, dir string) error {
-		_, err := env.Still(context.Background(), src, enc, dir)
+	type call func(path string, enc Encoding, dir string) error
+	still := func(path string, enc Encoding, dir string) error {
+		_, _, err := p.Still(context.Background(), path, enc, dir)
 		return err
 	}
 	framesN := func(n int) call {
-		return func(src Source, enc Encoding, dir string) error {
-			_, err := env.AnimationFrames(context.Background(), src, enc, n, dir)
+		return func(path string, enc Encoding, dir string) error {
+			_, _, err := p.AnimationFrames(context.Background(), path, enc, n, dir)
 			return err
 		}
 	}
 	cases := []struct {
 		name            string
 		op              call
-		src             Source
+		path            string
 		enc             Encoding
 		dir             string
 		unsupportedType bool
 	}{
-		{"quality too large", still, heicSource(heic), Encoding{Quality: 101}, t.TempDir(), false},
-		{"quality negative", still, heicSource(heic), Encoding{Quality: -1}, t.TempDir(), false},
-		{"max edge too small", still, heicSource(heic), Encoding{MaxEdge: 15}, t.TempDir(), false},
-		{"max edge too large", still, heicSource(heic), Encoding{MaxEdge: 16385}, t.TempDir(), false},
-		{"max area too small", still, heicSource(heic), Encoding{MaxArea: 255}, t.TempDir(), false},
-		{"max area too large", still, heicSource(heic), Encoding{MaxArea: 100_000_001}, t.TempDir(), false},
-		{"unknown format", still, heicSource(heic), Encoding{Format: "gif"}, t.TempDir(), false},
-		{"type not accepted", still, gifSource(gif), Encoding{}, t.TempDir(), true},
-		{"no type", still, Source{Path: heic}, Encoding{}, t.TempDir(), true},
-		{"missing source", still, heicSource(filepath.Join(t.TempDir(), "absent")), Encoding{}, t.TempDir(), false},
-		{"dir not empty", still, heicSource(heic), Encoding{}, nonEmpty, false},
-		{"dir missing", still, heicSource(heic), Encoding{}, absent, false},
-		{"frames: quality too large", framesN(0), gifSource(gif), Encoding{Quality: 101}, t.TempDir(), false},
-		{"frames: too few", framesN(-1), gifSource(gif), Encoding{}, t.TempDir(), false},
-		{"frames: too many", framesN(65), gifSource(gif), Encoding{}, t.TempDir(), false},
-		{"frames: type not accepted", framesN(0), heicSource(heic), Encoding{}, t.TempDir(), true},
-		{"frames: dir not empty", framesN(0), gifSource(gif), Encoding{}, nonEmpty, false},
+		{"quality too large", still, heic, Encoding{Quality: 101}, t.TempDir(), false},
+		{"quality negative", still, heic, Encoding{Quality: -1}, t.TempDir(), false},
+		{"max edge too small", still, heic, Encoding{MaxEdge: 15}, t.TempDir(), false},
+		{"max edge too large", still, heic, Encoding{MaxEdge: 16385}, t.TempDir(), false},
+		{"max area too small", still, heic, Encoding{MaxArea: 255}, t.TempDir(), false},
+		{"max area too large", still, heic, Encoding{MaxArea: 100_000_001}, t.TempDir(), false},
+		{"unknown format", still, heic, Encoding{Format: "gif"}, t.TempDir(), false},
+		{"type not accepted", still, gif, Encoding{}, t.TempDir(), true},
+		{"video to still", still, webm, Encoding{}, t.TempDir(), true},
+		{"unrecognized content", still, garbage, Encoding{}, t.TempDir(), true},
+		{"missing source", still, filepath.Join(t.TempDir(), "absent"), Encoding{}, t.TempDir(), false},
+		{"dir not empty", still, heic, Encoding{}, nonEmpty, false},
+		{"dir missing", still, heic, Encoding{}, absent, false},
+		{"frames: quality too large", framesN(0), gif, Encoding{Quality: 101}, t.TempDir(), false},
+		{"frames: too few", framesN(-1), gif, Encoding{}, t.TempDir(), false},
+		{"frames: too many", framesN(65), gif, Encoding{}, t.TempDir(), false},
+		{"frames: type not accepted", framesN(0), heic, Encoding{}, t.TempDir(), true},
+		{"frames: dir not empty", framesN(0), gif, Encoding{}, nonEmpty, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := c.op(c.src, c.enc, c.dir)
+			err := c.op(c.path, c.enc, c.dir)
 			if err == nil {
 				t.Fatal("operation succeeded")
 			}
@@ -258,6 +263,7 @@ func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 func TestStillOutput(t *testing.T) {
 	requireExiftool(t)
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	src := writeHEIC(t)
 	addMetadata(t, env, src)
 	if got := metadataGroups(t, env, src); !strings.Contains(got, "Artist") || !strings.Contains(got, "GPSLatitude") || !strings.Contains(got, "Creator") {
@@ -273,7 +279,7 @@ func TestStillOutput(t *testing.T) {
 			case PNG:
 				wantType, wantName = "image/png", "still.png"
 			}
-			img, out := stillInto(t, env, heicSource(src), Encoding{Format: format, MaxEdge: 400})
+			img, out := stillInto(t, p, src, Encoding{Format: format, MaxEdge: 400})
 			if img.Name != wantName || img.Width != 300 || img.Height != 400 || img.Frame != 0 || img.TimeMS != 0 {
 				t.Errorf("image = %+v, want %s 300x400 frame 0 at 0ms", img, wantName)
 			}
@@ -295,7 +301,7 @@ func TestStillOutput(t *testing.T) {
 }
 
 func TestStillSizing(t *testing.T) {
-	env := requireMagick(t)
+	p := requireProcessor(t)
 	src := writeHEIC(t) // 480x640 upright
 	cases := []struct {
 		name         string
@@ -309,7 +315,7 @@ func TestStillSizing(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			img, _ := stillInto(t, env, heicSource(src), Encoding{MaxEdge: c.edge, MaxArea: c.area})
+			img, _ := stillInto(t, p, src, Encoding{MaxEdge: c.edge, MaxArea: c.area})
 			if img.Width != c.wantW || img.Height != c.wantH {
 				t.Errorf("got %dx%d, want %dx%d", img.Width, img.Height, c.wantW, c.wantH)
 			}
@@ -319,6 +325,7 @@ func TestStillSizing(t *testing.T) {
 
 func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	dir := t.TempDir()
 	srgb := writeSRGBProfile(t)
 	heic := heicFixtureFile(t, "adobe-256x96")
@@ -330,7 +337,7 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 	naive := filepath.Join(dir, "naive.png")
 	magick(t, env, heic, "-auto-orient", naive)
 
-	img, out := stillInto(t, env, heicSource(stage(t, heic)), Encoding{Format: PNG})
+	img, out := stillInto(t, p, stage(t, heic), Encoding{Format: PNG})
 	if got := dirNames(t, out); !slices.Equal(got, []string{"still.png"}) {
 		t.Errorf("output dir holds %v", got)
 	}
@@ -347,8 +354,9 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 
 func TestFramesSelection(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	src := writeGIF(t, env, solid, 20)
-	images, out := framesInto(t, env, gifSource(src), Encoding{}, 0)
+	images, out := framesInto(t, p, src, Encoding{}, 0)
 	if len(images) != 16 {
 		t.Fatalf("%d images, want 16", len(images))
 	}
@@ -400,8 +408,9 @@ func rgbDistance(t *testing.T, a, b string) int {
 
 func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	src := writeGIF(t, env, func(int) string { return "xc:rgb(10,120,200)" }, 4)
-	images, out := framesInto(t, env, gifSource(src), Encoding{}, 0)
+	images, out := framesInto(t, p, src, Encoding{}, 0)
 	if len(images) != 1 || images[0].Name != "frame-000.jpg" || images[0].Frame != 0 {
 		t.Fatalf("images = %+v", images)
 	}
@@ -412,9 +421,10 @@ func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
 
 func TestFramesRenumbersAfterDedup(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	// Frames 0-1 identical, 2-3 identical: two kept frames, numbered 0 and 1.
 	src := writeGIF(t, env, func(i int) string { return solid(i / 2) }, 4)
-	images, out := framesInto(t, env, gifSource(src), Encoding{}, 0)
+	images, out := framesInto(t, p, src, Encoding{}, 0)
 	var got []int
 	for _, f := range images {
 		got = append(got, f.Frame)
@@ -429,12 +439,13 @@ func TestFramesRenumbersAfterDedup(t *testing.T) {
 
 func TestFramesFlattensTransparencyOnWhite(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "t.gif")
 	magick(t, env, "-size", "40x40", "-dispose", "background", "-delay", "5",
 		"xc:none", "-fill", "red", "-draw", "circle 20,20 20,6",
 		"(", "-size", "40x40", "xc:none", "-fill", "blue", "-draw", "circle 20,20 20,12", ")",
 		"-loop", "0", path)
-	images, out := framesInto(t, env, gifSource(stage(t, path)), Encoding{}, 0)
+	images, out := framesInto(t, p, stage(t, path), Encoding{}, 0)
 	if len(images) != 2 {
 		t.Fatalf("%d images, want 2", len(images))
 	}
@@ -449,13 +460,14 @@ func TestFramesFlattensTransparencyOnWhite(t *testing.T) {
 func TestFramesStripsMetadataAndAcceptsWebP(t *testing.T) {
 	requireExiftool(t)
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "m.webp")
 	magick(t, env, "-size", "300x200", "gradient:red-blue", path)
 	addMetadata(t, env, path)
 	if got := metadataGroups(t, env, path); !strings.Contains(got, "Artist") {
 		t.Fatalf("fixture lacks metadata:\n%s", got)
 	}
-	images, out := framesInto(t, env, Source{Path: stage(t, path), Type: "image/webp"}, Encoding{Format: PNG, MaxEdge: 100}, 0)
+	images, out := framesInto(t, p, stage(t, path), Encoding{Format: PNG, MaxEdge: 100}, 0)
 	if len(images) != 1 || images[0].Width != 100 || images[0].Height != 66 {
 		t.Fatalf("images = %+v", images)
 	}
@@ -466,6 +478,7 @@ func TestFramesStripsMetadataAndAcceptsWebP(t *testing.T) {
 
 func TestFramesSizing(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	src := writeGIF(t, env, solid, 3) // 64x48
 	cases := []struct {
 		name         string
@@ -479,7 +492,7 @@ func TestFramesSizing(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			images, _ := framesInto(t, env, gifSource(src), c.enc, 0)
+			images, _ := framesInto(t, p, src, c.enc, 0)
 			for _, f := range images {
 				if f.Width != c.wantW || f.Height != c.wantH {
 					t.Errorf("%s is %dx%d, want %dx%d", f.Name, f.Width, f.Height, c.wantW, c.wantH)
@@ -491,8 +504,9 @@ func TestFramesSizing(t *testing.T) {
 
 func TestFramesMaxFrames(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	src := writeGIF(t, env, solid, 20)
-	images, _ := framesInto(t, env, gifSource(src), Encoding{}, 4)
+	images, _ := framesInto(t, p, src, Encoding{}, 4)
 	var idx []int
 	for _, f := range images {
 		idx = append(idx, f.Frame)
@@ -520,14 +534,15 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rec, env := newRecorder(real)
+			p := requireProcessor(t)
+			rec := record(p)
 			rec.failAfter = c.failAfter
 			out := t.TempDir()
 			var err error
 			if c.still {
-				_, err = env.Still(context.Background(), heicSource(c.input()), Encoding{}, out)
+				_, _, err = p.Still(context.Background(), c.input(), Encoding{}, out)
 			} else {
-				_, err = env.AnimationFrames(context.Background(), gifSource(c.input()), Encoding{}, 0, out)
+				_, _, err = p.AnimationFrames(context.Background(), c.input(), Encoding{}, 0, out)
 			}
 			if err == nil {
 				t.Fatal("operation succeeded")
@@ -542,16 +557,16 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 func TestGoldenArgv(t *testing.T) {
 	real := requireMagick(t)
 	wide := func() string { return heicFixture(t, "adobe-64x32") }
-	type run func(env Env, input, out string) error
-	still := func(typ string, enc Encoding) run {
-		return func(env Env, input, out string) error {
-			_, err := env.Still(context.Background(), Source{Path: input, Type: typ}, enc, out)
+	type run func(p *Processor, input, out string) error
+	still := func(enc Encoding) run {
+		return func(p *Processor, input, out string) error {
+			_, _, err := p.Still(context.Background(), input, enc, out)
 			return err
 		}
 	}
 	frames := func(enc Encoding, maxFrames int) run {
-		return func(env Env, input, out string) error {
-			_, err := env.AnimationFrames(context.Background(), gifSource(input), enc, maxFrames, out)
+		return func(p *Processor, input, out string) error {
+			_, _, err := p.AnimationFrames(context.Background(), input, enc, maxFrames, out)
 			return err
 		}
 	}
@@ -560,12 +575,12 @@ func TestGoldenArgv(t *testing.T) {
 		input func() string
 		run   run
 	}{
-		{"still-jpeg-default", func() string { return writeHEIC(t) }, still("image/heic", Encoding{})},
+		{"still-jpeg-default", func() string { return writeHEIC(t) }, still(Encoding{})},
 		{
 			"still-png-bounded", func() string { return writeHEIC(t) },
-			still("image/heif", Encoding{Format: PNG, MaxEdge: 400, MaxArea: 100000, Quality: 75}),
+			still(Encoding{Format: PNG, MaxEdge: 400, MaxArea: 100000, Quality: 75}),
 		},
-		{"still-profiled", wide, still("image/heic", Encoding{})},
+		{"still-profiled", wide, still(Encoding{})},
 		{"frames-gif-default", func() string { return writeGIF(t, real, solid, 20) }, frames(Encoding{}, 0)},
 		{
 			"frames-gif-webp-bounded", func() string { return writeGIF(t, real, solid, 10) },
@@ -574,10 +589,11 @@ func TestGoldenArgv(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rec, env := newRecorder(real)
+			p := requireProcessor(t)
+			rec := record(p)
 			input := c.input()
 			out := t.TempDir()
-			if err := c.run(env, input, out); err != nil {
+			if err := c.run(p, input, out); err != nil {
 				t.Fatal(err)
 			}
 			checkGolden(t, c.name, goldenArgv(rec.calls, input, out))
