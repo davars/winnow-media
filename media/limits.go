@@ -58,7 +58,9 @@ const (
 // ErrTooLarge, instead of failing inside the tool. Memory, map and disk
 // together hold the pixel cache of an animation at maxAnimationPixels; time
 // is at least four times the longest ImageMagick operation measured to
-// complete (36 s), an estimate of a slower host's factor.
+// complete (36 s); a Raspberry Pi 5 measured at worst about 4 times a 12-CPU
+// x86_64 host (CPU 4.1 times for 4K HEVC decode, wall time 4.0 times for two
+// 8000x8000 GIF frames).
 const (
 	policyMemory     = "1GiB"
 	policyMap        = "2GiB"

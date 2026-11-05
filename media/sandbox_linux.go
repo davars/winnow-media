@@ -32,10 +32,11 @@ const (
 	limitOpenFiles = "nofile"
 	limitProcesses = "nproc"
 
-	// sandboxCPUSeconds: the heaviest single process measured used 25 s of
-	// CPU; times 4 for a slower host (an estimate, as for the policy time)
-	// and 2 for margin.
-	sandboxCPUSeconds = 200
+	// sandboxCPUSeconds: the heaviest single process measured on the 12-CPU
+	// host was a header read of a long GIF, 25 s of CPU. Times 4.1, the worst
+	// CPU ratio measured on a Raspberry Pi 5 (4K HEVC decode), times a safety
+	// margin of 2, rounded up.
+	sandboxCPUSeconds = 210
 	// sandboxAddressSize: the largest address-space peak measured was 3.2 GiB
 	// (ImageMagick on a 64 MP frame; it aborts below 3.2 GiB), and ffmpeg's
 	// was 2.0 GiB with 28 threads. 8 GiB is 2.4 times the worst and leaves
