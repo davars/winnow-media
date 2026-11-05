@@ -167,3 +167,30 @@ func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
 		t.Errorf("directory after Close: %v", err)
 	}
 }
+
+func TestProcessorPolicyDeniesEverythingFirst(t *testing.T) {
+	rules := processorPolicy()
+	index := func(domain, pattern string) int {
+		for i, r := range rules {
+			if r.domain == domain && r.pattern == pattern && r.rights == "none" {
+				return i
+			}
+		}
+		return -1
+	}
+	if index("delegate", "*") < 0 {
+		t.Error("no deny-all delegate rule")
+	}
+	if index("path", "@*") < 0 {
+		t.Error("no deny of indirect reads")
+	}
+	deny := index("coder", "*")
+	if deny < 0 {
+		t.Fatal("no deny-all coder rule")
+	}
+	for i, r := range rules {
+		if r.domain == "coder" && r.rights != "none" && i < deny {
+			t.Errorf("coder allow %s precedes the deny-all rule", r.pattern)
+		}
+	}
+}
