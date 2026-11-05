@@ -528,9 +528,8 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 		{"still after encode", true, func() string { return writeHEIC(t) }, 2},
 		{"still with profile after encode", true, wide, 2},
 		{"still at encode", true, func() string { return writeHEIC(t) }, 3},
-		{"frames after probe", false, func() string { return writeGIF(t, real, solid, 6) }, 2},
-		{"frames after encode", false, func() string { return writeGIF(t, real, solid, 6) }, 3},
-		{"frames after output identify", false, func() string { return writeGIF(t, real, solid, 6) }, 4},
+		{"frames after header read", false, func() string { return writeGIF(t, real, solid, 6) }, 1},
+		{"frames after encode", false, func() string { return writeGIF(t, real, solid, 6) }, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -551,6 +550,28 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 				t.Errorf("output dir holds %v", got)
 			}
 		})
+	}
+}
+
+// TestGIFFramesCleanUpOnFailureBetweenBatches fails an encode while the
+// compositor is still waiting to write the next batch.
+func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
+	real := requireMagick(t)
+	old := encodeBatchPixels
+	encodeBatchPixels = 2 * 64 * 48
+	t.Cleanup(func() { encodeBatchPixels = old })
+	for _, failAfter := range []int{2, 3, 4} {
+		p := requireProcessor(t)
+		rec := record(p)
+		rec.failAfter = failAfter
+		out := t.TempDir()
+		_, _, err := p.AnimationFrames(context.Background(), writeGIF(t, real, solid, 12), Encoding{}, 6, out)
+		if err == nil {
+			t.Fatalf("failAfter=%d: operation succeeded", failAfter)
+		}
+		if got := dirNames(t, out); len(got) != 0 {
+			t.Errorf("failAfter=%d: output dir holds %v", failAfter, got)
+		}
 	}
 }
 

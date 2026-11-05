@@ -49,7 +49,7 @@ var animationSpec = spec{
 		{typeWebP, decoder{"magick", "webp"}},
 	},
 	tools:  []string{"magick"},
-	reads:  append([]string{"icc"}, outputCoders...),
+	reads:  append([]string{"icc", "pam"}, outputCoders...),
 	writes: append([]string{"info"}, outputCoders...),
 }
 
@@ -319,6 +319,12 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 		return nil, err
 	}
 
+	// The compositor does not carry a colour profile, so a profiled GIF is
+	// read by ImageMagick like a WebP.
+	if dec.name == "gif" && !profiled && e.compose != nil {
+		return e.gifFrames(ctx, path, enc, dir, selected, len(infos), cw, ch, tw, th, resize)
+	}
+
 	var kept []int
 	err = withProfile(dir, profiled, func(profilePath string) error {
 		p := imagePipeline{
@@ -382,6 +388,65 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 		images[i] = Image{Name: n, Width: sizes[i][0], Height: sizes[i][1], Frame: kept[i]}
 	}
 	return images, nil
+}
+
+// gifFrames writes the selected frames of a GIF. The sandboxed compositor
+// decodes the file and composites it one canvas at a time, writing each
+// selected frame as a full-canvas PAM file; ImageMagick encodes them in
+// batches as they arrive, so it never holds more than a batch.
+func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, sourceFrames, cw, ch, tw, th int, resize bool) ([]Image, error) {
+	middle := []string{"-auto-orient"}
+	if enc.format == JPEG {
+		middle = append(middle, "-background", "white", "-alpha", "remove", "-alpha", "off")
+	}
+	if resize {
+		middle = append(middle, "-resize", fmt.Sprintf("%dx%d!", tw, th))
+	}
+	middle = append(middle, "-strip")
+
+	var images []Image
+	encoder := &sampleEncoder{
+		env: e, coder: "pam", middle: middle, enc: enc, dir: dir, framePixels: cw * ch,
+		keep: func(i, n, w, h int) {
+			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})
+		},
+	}
+	var pending []string
+	flush := func() error {
+		defer removeFiles(pending)
+		err := encoder.encode(ctx, pending)
+		pending = nil
+		return err
+	}
+	req := composeRequest{
+		path: path, dir: dir, selected: selected, inFlight: encoder.batchSize(),
+		frames: sourceFrames, width: cw, height: ch,
+	}
+	err := e.compose(ctx, req, func(p string) error {
+		pending = append(pending, p)
+		if len(pending) >= encoder.batchSize() {
+			return flush()
+		}
+		return nil
+	})
+	if err != nil {
+		removeFiles(pending)
+		return nil, err
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	if encoder.seen != len(selected) {
+		return nil, fmt.Errorf("composited %d of %d frames", encoder.seen, len(selected))
+	}
+	return images, nil
+}
+
+// removeFiles deletes paths, ignoring errors.
+func removeFiles(paths []string) {
+	for _, p := range paths {
+		_ = os.Remove(p)
+	}
 }
 
 // frameFileNames lists the numbered frame files in dir, in order, and

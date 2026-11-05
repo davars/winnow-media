@@ -18,3 +18,7 @@ func probeSandbox(context.Context) error { return sandboxAvailable() }
 func (p *Processor) runTool(context.Context, string, ...string) (Result, error) {
 	return Result{}, sandboxAvailable()
 }
+
+func (p *Processor) composeGIF(context.Context, composeRequest, func(string) error) (*Usage, error) {
+	return nil, sandboxAvailable()
+}

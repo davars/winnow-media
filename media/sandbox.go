@@ -31,4 +31,7 @@ func Init() {
 		helperMain()
 		os.Exit(1)
 	}
+	if os.Getenv(compositorEnv) != "" {
+		compositorMain()
+	}
 }

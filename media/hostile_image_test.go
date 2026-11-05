@@ -127,6 +127,7 @@ func requireRefusal(t *testing.T, p *Processor, bounds refusalBounds, op func(pa
 	t.Helper()
 	rec := record(p)
 	defer func() { p.run = rec.inner }()
+	forbidCompositor(t, p)
 	out := t.TempDir()
 	start := time.Now()
 	usage, err := op(writeFile(t, "input", data), out)

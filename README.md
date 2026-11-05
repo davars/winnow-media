@@ -74,6 +74,20 @@ tools itself because the input is untrusted:
   otherwise 1-64) bounds the evenly spaced frames sampled from the composited
   animation; a frame identical to the one before it after resizing is dropped,
   and `Image.Frame` records the source frame each file came from.
+  - A GIF is composited by the library's own decoder, running as the sandbox's
+    tool: the executable started again like `Init`'s helper, under the same
+    limits and filter. It checks the block structure first (frame count, every
+    frame inside the logical screen, a trailer), decodes the frames, composites
+    them one canvas at a time as ImageMagick's `-coalesce` does, and writes each
+    selected frame as an uncompressed PAM file. It waits for the files to be
+    encoded before writing more, so the output directory holds about one batch.
+    ImageMagick encodes the frames a batch per run (at most 16 million input
+    pixels, about 256 MiB), resizing, flattening on white for JPEG and
+    stripping metadata. Memory is about one byte per pixel of every frame in the
+    compositor plus one batch in ImageMagick. A GIF with a colour profile is
+    read by ImageMagick as a WebP is.
+  - A WebP is read by ImageMagick, which composites every frame before it
+    selects any, so its memory grows with the number of frames.
 - `Processor.VideoFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
   accepts MP4 and QuickTime (ffmpeg demuxer `mov`) and WebM and Matroska
   (demuxer `matroska`) and writes `frame-000.<ext>`, `frame-001.<ext>`, and
@@ -139,9 +153,9 @@ wall time in CPU, since the decoder and filters are bound to 4 threads. Its
 peak, 2.8 GiB, is ImageMagick encoding the samples; ffmpeg stays near 300 MiB.
 A 48 MP HEIC takes 8 s and 0.9 GiB. ImageMagick keeps 16 bytes per pixel, so
 animations set the frame and pixel caps: it holds every composited frame
-beside the decoded ones, and a GIF of full-canvas frames completed up to
-185 MP in all and failed at 194 MP, while a single 81 MP frame completed and a
-90 MP one did not. The pixel caps sit below those points. ImageMagick's
+beside the decoded ones, and a GIF of full-canvas frames read by ImageMagick
+completed up to 185 MP in all and failed at 194 MP, while a single 81 MP frame
+completed and a 90 MP one did not. The pixel caps sit below those points. ImageMagick's
 memory, map and disk ceilings (1, 2 and 4 GiB) are unchanged. The time
 ceiling is at least four times the longest ImageMagick run measured (36 s),
 and the ffmpeg allocation limit four times what an 8K frame needs. A
@@ -205,6 +219,10 @@ returns at once and changes nothing. The helper
   killed by a signal is reported as an error. Cancelling the context closes
   the helper's lifeline, on which it kills the tool and its descendants; a
   killed helper takes the tool with it.
+
+The GIF compositor is one of these tools: the helper starts the program's own
+executable as it, with a marker that `Init` recognises, so it runs under the
+same limits and filter and its CPU and peak memory count in `Usage`.
 
 The tool's environment and arguments are exactly those the `Processor`
 passes; nothing about the helper reaches it. The consumer gets no
