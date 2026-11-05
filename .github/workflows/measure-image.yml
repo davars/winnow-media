@@ -1,7 +1,8 @@
 name: measure-image
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [measure-image]
 
 permissions:
   contents: read
