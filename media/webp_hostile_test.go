@@ -157,7 +157,7 @@ func TestWebPFramesRefusesDamagedAnimations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			cmd := exec.Command(exe, writeFile(t, "x.webp", c.data), dir, "100",
-				strconv.Itoa(c.w), strconv.Itoa(c.h), strconv.Itoa(c.frames), "0,1,2,3,4,5")
+				strconv.Itoa(c.w), strconv.Itoa(c.h), strconv.Itoa(c.frames), "0,1,2,3,4,5", "60000")
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			type result struct {
@@ -233,30 +233,33 @@ func TestWebPFramesRefusesBadArguments(t *testing.T) {
 	w, h := strconv.Itoa(webpCanvasW), strconv.Itoa(webpCanvasH)
 	for name, args := range map[string][]string{
 		"no arguments":          {},
-		"too few":               {path, dir, "2", w, h, "4"},
-		"too many":              {path, dir, "2", w, h, "4", "0", "1"},
-		"in-flight zero":        {path, dir, "0", w, h, "4", "0"},
-		"in-flight not a count": {path, dir, "x", w, h, "4", "0"},
-		"negative width":        {path, dir, "2", "-40", h, "4", "0"},
-		"width with a sign":     {path, dir, "2", "+40", h, "4", "0"},
-		"width with a suffix":   {path, dir, "2", "40x", h, "4", "0"},
-		"width zero":            {path, dir, "2", "0", h, "4", "0"},
-		"canvas too large":      {path, dir, "2", "16777216", "16777216", "4", "0"},
-		"frame count zero":      {path, dir, "2", w, h, "0", "0"},
-		"empty selection":       {path, dir, "2", w, h, "4", ""},
-		"frame out of range":    {path, dir, "2", w, h, "4", "4"},
-		"descending":            {path, dir, "2", w, h, "4", "2,1"},
-		"duplicate":             {path, dir, "2", w, h, "4", "1,1"},
-		"empty entry":           {path, dir, "2", w, h, "4", "0,,2"},
-		"trailing comma":        {path, dir, "2", w, h, "4", "0,1,"},
-		"width differs":         {path, dir, "2", "41", h, "4", "0"},
-		"height differs":        {path, dir, "2", w, "29", "4", "0"},
-		"more frames":           {path, dir, "2", w, h, "5", "0"},
-		"fewer frames":          {path, dir, "2", w, h, "3", "0"},
-		"missing file":          {filepath.Join(dir, "missing"), dir, "2", w, h, "4", "0"},
-		"directory as input":    {dir, dir, "2", w, h, "4", "0"},
-		"not a WebP":            {notWebP, dir, "2", w, h, "4", "0"},
-		"output directory gone": {path, filepath.Join(dir, "missing"), "2", w, h, "4", "0"},
+		"too few":               {path, dir, "2", w, h, "4", "0"},
+		"too many":              {path, dir, "2", w, h, "4", "0", "60000", "1"},
+		"no timeout":            {path, dir, "2", w, h, "4", "0"},
+		"timeout zero":          {path, dir, "2", w, h, "4", "0", "0"},
+		"timeout not a count":   {path, dir, "2", w, h, "4", "0", "1s"},
+		"in-flight zero":        {path, dir, "0", w, h, "4", "0", "60000"},
+		"in-flight not a count": {path, dir, "x", w, h, "4", "0", "60000"},
+		"negative width":        {path, dir, "2", "-40", h, "4", "0", "60000"},
+		"width with a sign":     {path, dir, "2", "+40", h, "4", "0", "60000"},
+		"width with a suffix":   {path, dir, "2", "40x", h, "4", "0", "60000"},
+		"width zero":            {path, dir, "2", "0", h, "4", "0", "60000"},
+		"canvas too large":      {path, dir, "2", "16777216", "16777216", "4", "0", "60000"},
+		"frame count zero":      {path, dir, "2", w, h, "0", "0", "60000"},
+		"empty selection":       {path, dir, "2", w, h, "4", "", "60000"},
+		"frame out of range":    {path, dir, "2", w, h, "4", "4", "60000"},
+		"descending":            {path, dir, "2", w, h, "4", "2,1", "60000"},
+		"duplicate":             {path, dir, "2", w, h, "4", "1,1", "60000"},
+		"empty entry":           {path, dir, "2", w, h, "4", "0,,2", "60000"},
+		"trailing comma":        {path, dir, "2", w, h, "4", "0,1,", "60000"},
+		"width differs":         {path, dir, "2", "41", h, "4", "0", "60000"},
+		"height differs":        {path, dir, "2", w, "29", "4", "0", "60000"},
+		"more frames":           {path, dir, "2", w, h, "5", "0", "60000"},
+		"fewer frames":          {path, dir, "2", w, h, "3", "0", "60000"},
+		"missing file":          {filepath.Join(dir, "missing"), dir, "2", w, h, "4", "0", "60000"},
+		"directory as input":    {dir, dir, "2", w, h, "4", "0", "60000"},
+		"not a WebP":            {notWebP, dir, "2", w, h, "4", "0", "60000"},
+		"output directory gone": {path, filepath.Join(dir, "missing"), "2", w, h, "4", "0", "60000"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(exe, args...)
@@ -290,7 +293,7 @@ func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
 	}
 	path := buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 8})
 	dir := t.TempDir()
-	cmd := exec.Command(exe, path, dir, "2", strconv.Itoa(webpCanvasW), strconv.Itoa(webpCanvasH), "8", "0,1,2,3,4,5,6,7")
+	cmd := exec.Command(exe, path, dir, "2", strconv.Itoa(webpCanvasW), strconv.Itoa(webpCanvasH), "8", "0,1,2,3,4,5,6,7", "60000")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -353,9 +356,9 @@ func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
 func TestWebPFramesGoToMagickInBatches(t *testing.T) {
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
-	old := encodeBatchPixels
-	encodeBatchPixels = 2 * webpCanvasW * webpCanvasH
-	t.Cleanup(func() { encodeBatchPixels = old })
+	old, oldTimeout := encodeBatchPixels, composeTimeout
+	encodeBatchPixels, composeTimeout = 2*webpCanvasW*webpCanvasH, 10*time.Second
+	t.Cleanup(func() { encodeBatchPixels, composeTimeout = old, oldTimeout })
 	rec := record(p)
 	path := buildWebP(t, webpCase{codec: "lossy", blend: true, frames: 24})
 	images, out := framesInto(t, p, stage(t, path), Encoding{Format: PNG}, 12)
@@ -419,11 +422,42 @@ func TestWebPFramesStopsAfterTheLastSelectedFrame(t *testing.T) {
 	c := hostileWebPs(t)["corrupt frame pixels"]
 	dir := t.TempDir()
 	out, err := exec.Command(exe, writeFile(t, "x.webp", c.data), dir, "100",
-		strconv.Itoa(c.w), strconv.Itoa(c.h), strconv.Itoa(c.frames), "0,2").CombinedOutput()
+		strconv.Itoa(c.w), strconv.Itoa(c.h), strconv.Itoa(c.frames), "0,2", "60000").CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
 	if got := dirNames(t, dir); !slices.Equal(got, []string{gifSampleName(0), gifSampleName(1)}) {
 		t.Errorf("directory holds %v", got)
+	}
+}
+
+// TestWebPFramesGivesUpOnAnUnconsumedFrame checks that the tool fails, rather
+// than waiting for ever, when the frame it waits on is not consumed within its
+// timeout.
+func TestWebPFramesGivesUpOnAnUnconsumedFrame(t *testing.T) {
+	requireWebPBuilders(t)
+	exe, err := tool.Resolve(webpFramesTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 4})
+	dir := t.TempDir()
+	start := time.Now()
+	cmd := exec.Command(exe, path, dir, "1", strconv.Itoa(webpCanvasW), strconv.Itoa(webpCanvasH), "4", "0,1,2,3", "150")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+		t.Fatalf("err = %v, want exit status 1", err)
+	}
+	if !strings.Contains(stderr.String(), "webp-frames: frame 0 not consumed in 150 ms") {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+	if string(out) != "0 0\n" {
+		t.Errorf("stdout = %q, want only frame 0", out)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %v", d)
 	}
 }

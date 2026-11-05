@@ -477,7 +477,7 @@ func (e Env) compositedFrames(ctx context.Context, path string, enc encoding, di
 		ordinal := 0
 		req := composeRequest{
 			path: path, dir: dir, selected: selected, inFlight: encoder.batchSize(),
-			frames: g.sourceFrames, width: g.cw, height: g.ch, own: g.own, external: g.external,
+			frames: g.sourceFrames, width: g.cw, height: g.ch, own: g.own, external: g.external, consumeTimeout: composeTimeout,
 		}
 		err := e.compose(ctx, req, func(p string, profile int) error {
 			if ordinal >= len(selected) {

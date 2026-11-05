@@ -3,6 +3,7 @@ package media
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrTooLarge is returned, wrapped with the cap and the values that
@@ -55,6 +56,19 @@ const (
 	ffmpegMaxAlloc = 1 << 30
 )
 
+// policyTimeSeconds is the ImageMagick policy's time ceiling, the longest any
+// one run may take. A compositor waits no longer than this for ImageMagick to
+// consume a frame it wrote, since a run that long has already been stopped.
+const policyTimeSeconds = 300
+
+// consumeTimeout is how long a compositor waits for a written frame to be
+// consumed before it fails.
+const consumeTimeout = policyTimeSeconds * time.Second
+
+// composeTimeout is the timeout the operations give a compositor; tests lower
+// it.
+var composeTimeout = consumeTimeout
+
 // The ImageMagick policy ceilings. Width and height sit above maxDimension
 // so that the header read reaches the checks in this package, which report
 // ErrTooLarge, instead of failing inside the tool. Memory, map and disk
@@ -70,7 +84,6 @@ const (
 	policyArea       = "512MP"
 	policyDimension  = "65536"
 	policyListLength = "2048"
-	policyTime       = "300"
 	policyThreads    = "4"
 )
 

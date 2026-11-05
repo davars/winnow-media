@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // forbidCompositor fails the test if the processor starts the GIF
@@ -30,9 +31,9 @@ func TestGIFFramesGoToMagickInBatches(t *testing.T) {
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	// Two 64x48 frames per run.
-	old := encodeBatchPixels
-	encodeBatchPixels = 2 * 64 * 48
-	t.Cleanup(func() { encodeBatchPixels = old })
+	old, oldTimeout := encodeBatchPixels, composeTimeout
+	encodeBatchPixels, composeTimeout = 2*64*48, 10*time.Second
+	t.Cleanup(func() { encodeBatchPixels, composeTimeout = old, oldTimeout })
 	rec := record(p)
 	images, out := framesInto(t, p, writeGIF(t, env, solid, 12), Encoding{}, 6)
 	if len(images) != 6 {
@@ -136,9 +137,11 @@ func TestBrokenGIFsFailCleanly(t *testing.T) {
 func TestRunCompositorRefusesBadArguments(t *testing.T) {
 	for name, args := range map[string][]string{
 		"too few":            {"a"},
-		"not a count":        {"a", "b", "x", "1", "1", "1", "0"},
-		"frame out of range": {"a", "b", "1", "2", "1", "1", "5"},
-		"missing file":       {"/nonexistent.gif", t.TempDir(), "1", "1", "1", "1", "0"},
+		"not a count":        {"a", "b", "x", "1", "1", "1", "0", "0", "1000"},
+		"frame out of range": {"a", "b", "1", "2", "1", "1", "5", "0", "1000"},
+		"missing file":       {"/nonexistent.gif", t.TempDir(), "1", "1", "1", "1", "0", "0", "1000"},
+		"no timeout":         {"/nonexistent.gif", t.TempDir(), "1", "1", "1", "1", "0", "0"},
+		"timeout zero":       {"/nonexistent.gif", t.TempDir(), "1", "1", "1", "1", "0", "0", "0"},
 	} {
 		if err := runCompositor(args, &strings.Builder{}); err == nil {
 			t.Errorf("%s: no error", name)
@@ -476,5 +479,26 @@ func TestProfiledGIFConvertsColours(t *testing.T) {
 	}
 	if d := meanAbsoluteDifference(t, env, filepath.Join(plainOut, "frame-000.png"), filepath.Join(taggedOut, "frame-000.png")); d < 0.002 {
 		t.Errorf("a profiled frame differs from the unprofiled one by %.5f, want a visible conversion", d)
+	}
+}
+
+func TestRunCompositorGivesUpOnAnUnconsumedFrame(t *testing.T) {
+	g := buildGIF(t, 24, 20, paletteA, []gifFrameSpec{
+		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA},
+		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteB},
+		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA, shift: 1},
+	})
+	dir := t.TempDir()
+	start := time.Now()
+	var out strings.Builder
+	err := runCompositor([]string{writeFile(t, "x.gif", g), dir, "1", "3", "24", "20", "0,1,2", "000", "150"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "frame 0 not consumed in 150ms") {
+		t.Fatalf("err = %v", err)
+	}
+	if out.String() != "0 0\n" {
+		t.Errorf("output %q, want only frame 0", out.String())
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %v", d)
 	}
 }

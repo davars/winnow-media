@@ -77,7 +77,7 @@ func processorPolicy() []policyRule {
 		{domain: "resource", name: "width", value: policyDimension},
 		{domain: "resource", name: "height", value: policyDimension},
 		{domain: "resource", name: "list-length", value: policyListLength},
-		{domain: "resource", name: "time", value: policyTime},
+		{domain: "resource", name: "time", value: strconv.Itoa(policyTimeSeconds)},
 		{domain: "resource", name: "thread", value: policyThreads},
 		{domain: "delegate", rights: "none", pattern: "*"},
 		{domain: "coder", rights: "none", pattern: "*"},
