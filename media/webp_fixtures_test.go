@@ -187,7 +187,7 @@ func runWebPFrames(t *testing.T, path string, w, h, frames int) []pamImage {
 	for i := range idx {
 		idx[i] = strconv.Itoa(i)
 	}
-	cmd := exec.Command(exe, path, dir, strconv.Itoa(frames+1), strconv.Itoa(w), strconv.Itoa(h), strconv.Itoa(frames), strings.Join(idx, ","))
+	cmd := exec.Command(exe, path, dir, strconv.Itoa(frames+1), strconv.Itoa(w), strconv.Itoa(h), strconv.Itoa(frames), strings.Join(idx, ","), "60000")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if _, err := cmd.Output(); err != nil {

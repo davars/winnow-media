@@ -1,7 +1,7 @@
 /*
  * webp-frames: write selected, composited frames of an animated WebP.
  *
- *   webp-frames INPUT OUTDIR IN_FLIGHT WIDTH HEIGHT FRAMES INDEX[,INDEX...]
+ *   webp-frames INPUT OUTDIR IN_FLIGHT WIDTH HEIGHT FRAMES INDEX[,INDEX...] TIMEOUT_MS
  *
  * INPUT is decoded with libwebp's animation decoder, which composites each
  * frame onto the canvas (blending and disposal included) and holds one canvas
@@ -23,7 +23,7 @@
  *
  * Before writing frame NNN the tool waits until .sample-(NNN-IN_FLIGHT).pam
  * no longer exists, so the reader's deleting the frames it has consumed bounds
- * how many are on disk. Decoding stops after the last selected frame.
+ * how many are on disk. If that takes longer than TIMEOUT_MS the tool fails. Decoding stops after the last selected frame.
  *
  * Any failure prints a message on standard error and exits 1.
  */
@@ -160,17 +160,28 @@ static int is_opaque(WebPAnimDecoder *dec, int width, int height) {
   return opaque;
 }
 
-/* wait_consumed waits until path no longer exists. */
-static void wait_consumed(const char *path) {
+static long long now_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) fail("reading the clock: %s", strerror(errno));
+  return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* wait_consumed waits until path, frame number n, no longer exists, and fails
+ * if that takes more than timeout_ms. */
+static void wait_consumed(const char *path, long n, long timeout_ms) {
   const struct timespec pause = {0, 2 * 1000 * 1000};
+  const long long deadline = now_ms() + timeout_ms;
   struct stat st;
-  while (stat(path, &st) == 0) nanosleep(&pause, NULL);
+  while (stat(path, &st) == 0) {
+    if (now_ms() > deadline) fail("frame %ld not consumed in %ld ms", n, timeout_ms);
+    nanosleep(&pause, NULL);
+  }
   if (errno != ENOENT) fail("checking %s: %s", path, strerror(errno));
 }
 
 int main(int argc, char **argv) {
   const char *input, *dir;
-  long in_flight, width, height, frames;
+  long in_flight, width, height, frames, timeout_ms;
   long *selected;
   size_t count = 0, next = 0;
   char *list, *tok, *save = NULL;
@@ -184,8 +195,9 @@ int main(int argc, char **argv) {
   uint8_t *row;
   long ordinal = 0;
 
-  if (argc != 8) {
-    fail("usage: webp-frames INPUT OUTDIR IN_FLIGHT WIDTH HEIGHT FRAMES INDEX[,INDEX...] (%d arguments)", argc - 1);
+  if (argc != 9) {
+    fail("usage: webp-frames INPUT OUTDIR IN_FLIGHT WIDTH HEIGHT FRAMES INDEX[,INDEX...] TIMEOUT_MS (%d arguments)",
+         argc - 1);
   }
   input = argv[1];
   dir = argv[2];
@@ -193,6 +205,7 @@ int main(int argc, char **argv) {
   width = parse_count("width", argv[4], 1, 16777216);
   height = parse_count("height", argv[5], 1, 16777216);
   frames = parse_count("frame count", argv[6], 1, MAX_FRAMES);
+  timeout_ms = parse_count("timeout", argv[8], 1, 24L * 3600 * 1000);
   if ((uint64_t)width * (uint64_t)height > MAX_CANVAS_PIXELS) fail("canvas %ldx%ld is too large", width, height);
 
   selected = calloc((size_t)frames, sizeof *selected);
@@ -236,7 +249,7 @@ int main(int argc, char **argv) {
     if (ordinal >= in_flight) {
       snprintf(name, sizeof name, ".sample-%03ld.pam", ordinal - in_flight);
       join(older, sizeof older, dir, name);
-      wait_consumed(older);
+      wait_consumed(older, ordinal - in_flight, timeout_ms);
     }
     snprintf(name, sizeof name, ".sample-%03ld.pam", ordinal);
     join(final, sizeof final, dir, name);

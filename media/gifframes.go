@@ -309,6 +309,9 @@ type composeRequest struct {
 	selected []int
 	// inFlight is the most frames the compositor leaves unconsumed in dir.
 	inFlight int
+	// consumeTimeout is how long the compositor waits for a frame to be
+	// consumed; zero means the package's consumeTimeout.
+	consumeTimeout time.Duration
 	// external names the tool that composites the frames, or is empty for
 	// the GIF compositor of this package.
 	external string
@@ -326,6 +329,14 @@ func ownMask(own []bool) string {
 	return string(b)
 }
 
+func (r composeRequest) timeoutMS() string {
+	d := r.consumeTimeout
+	if d <= 0 {
+		d = consumeTimeout
+	}
+	return strconv.FormatInt(d.Milliseconds(), 10)
+}
+
 func (r composeRequest) args() []string {
 	if r.external != "" {
 		return r.externalArgs()
@@ -337,6 +348,7 @@ func (r composeRequest) args() []string {
 	return []string{
 		r.path, r.dir, strconv.Itoa(r.inFlight), strconv.Itoa(r.frames),
 		strconv.Itoa(r.width), strconv.Itoa(r.height), strings.Join(idx, ","), ownMask(r.own),
+		r.timeoutMS(),
 	}
 }
 
@@ -350,6 +362,7 @@ func (r composeRequest) externalArgs() []string {
 	return []string{
 		r.path, r.dir, strconv.Itoa(r.inFlight),
 		strconv.Itoa(r.width), strconv.Itoa(r.height), strconv.Itoa(r.frames), strings.Join(idx, ","),
+		r.timeoutMS(),
 	}
 }
 
@@ -365,12 +378,12 @@ func compositorMain() {
 
 // runCompositor decodes the GIF named by args (see composeRequest.args),
 // composites it and writes each selected frame to the output directory as a
-// PAM file, then prints the frame's ordinal and the id of its profile on out. A frame is written
-// under a temporary name and renamed, so the reader never sees a partial file.
-// A profile is written to its own file before the first frame that uses it.
-// Before
-// writing ordinal n it waits until ordinal n-inFlight has been consumed, that
-// is deleted, so the directory holds about one batch.
+// PAM file, then prints the frame's ordinal and the id of its profile on out. A
+// frame is written under a temporary name and renamed, so the reader never sees
+// a partial file. A profile is written to its own file before the first frame
+// that uses it. Before writing ordinal n it waits until ordinal n-inFlight has
+// been consumed, that is deleted, so the directory holds about one batch; it
+// fails if that takes longer than the timeout in the last argument.
 //
 // A failure, including a panic, is returned as an error.
 func runCompositor(args []string, out io.Writer) (err error) {
@@ -379,9 +392,14 @@ func runCompositor(args []string, out io.Writer) (err error) {
 			err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
 		}
 	}()
-	if len(args) != 8 {
-		return fmt.Errorf("%d arguments, want 8", len(args))
+	if len(args) != 9 {
+		return fmt.Errorf("%d arguments, want 9", len(args))
 	}
+	timeoutMS, err := strconv.Atoi(args[8])
+	if err != nil || timeoutMS < 1 {
+		return fmt.Errorf("argument %q is not a timeout in milliseconds", args[8])
+	}
+	timeout := time.Duration(timeoutMS) * time.Millisecond
 	path, dir := args[0], args[1]
 	var nums [4]int
 	for i := range nums {
@@ -416,10 +434,14 @@ func runCompositor(args []string, out io.Writer) (err error) {
 	ordinal := 0
 	return compositeGIF(g, width, height, layout.own, selected, func(_ int, canvas *image.NRGBA, profile int) error {
 		if ordinal >= inFlight {
+			deadline := time.Now().Add(timeout)
 			for {
 				_, err := os.Stat(filepath.Join(dir, gifSampleName(ordinal-inFlight)))
 				if errors.Is(err, os.ErrNotExist) {
 					break
+				}
+				if time.Now().After(deadline) {
+					return fmt.Errorf("frame %d not consumed in %v", ordinal-inFlight, timeout)
 				}
 				time.Sleep(2 * time.Millisecond)
 			}
