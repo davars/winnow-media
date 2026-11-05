@@ -49,7 +49,7 @@ var animationSpec = spec{
 		{typeWebP, decoder{"magick", "webp"}},
 	},
 	tools:  []string{"magick"},
-	reads:  append([]string{"icc"}, outputCoders...),
+	reads:  append([]string{"icc", "pam"}, outputCoders...),
 	writes: append([]string{"info"}, outputCoders...),
 }
 

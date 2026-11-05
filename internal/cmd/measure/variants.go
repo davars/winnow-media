@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	"image/png"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -37,10 +37,14 @@ type variantRow struct {
 	WallS     float64 `json:"wall_s"`
 	CPUS      float64 `json:"cpu_s"`
 	MaxRSSMiB float64 `json:"max_rss_mib"`
-	ScratchMB float64 `json:"peak_scratch_mib"`
-	Outputs   int     `json:"outputs"`
-	Error     string  `json:"error,omitempty"`
-	Load      string  `json:"load"`
+	// CgroupPeakMiB is the container's memory.peak after the run, when the
+	// kernel offers one; it is the whole container, so it is meaningful only
+	// when the run is the first thing in it.
+	CgroupPeakMiB float64 `json:"cgroup_peak_mib,omitempty"`
+	ScratchMB     float64 `json:"peak_scratch_mib"`
+	Outputs       int     `json:"outputs"`
+	Error         string  `json:"error,omitempty"`
+	Load          string  `json:"load"`
 }
 
 // childResult is what the child prints on its last line of stdout.
@@ -83,30 +87,31 @@ func runChild(ctx context.Context, op, variant, path string) {
 	fmt.Println(string(line))
 }
 
-// composeGo composites the GIF in this process and writes the selected
-// frames as full-canvas PNGs.
-func composeGo(path string) func(selected []int, dir string) ([]string, error) {
-	return func(selected []int, dir string) ([]string, error) {
+// composeGo composites the GIF in this process and writes each selected frame
+// as a full-canvas PAM file, handing it to emit before compositing the next.
+func composeGo(path string) func(selected []int, dir string, emit func(path string) error) error {
+	return func(selected []int, dir string, emit func(path string) error) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		var paths []string
-		enc := png.Encoder{CompressionLevel: png.BestSpeed}
-		err = gifcomp.Frames(data, selected, func(i int, canvas *image.NRGBA) error {
-			p := filepath.Join(dir, fmt.Sprintf(".sample-%03d.png", len(paths)))
+		n := 0
+		return gifcomp.Frames(data, selected, func(_ int, canvas *image.NRGBA) error {
+			p := filepath.Join(dir, fmt.Sprintf(".sample-%03d.pam", n))
+			n++
 			f, err := os.Create(p)
 			if err != nil {
 				return err
 			}
-			paths = append(paths, p)
-			if err := enc.Encode(f, canvas); err != nil {
+			if err := gifcomp.WritePAM(f, canvas); err != nil {
 				_ = f.Close()
 				return err
 			}
-			return f.Close()
+			if err := f.Close(); err != nil {
+				return err
+			}
+			return emit(p)
 		})
-		return paths, err
 	}
 }
 
@@ -180,6 +185,11 @@ func runVariant(ctx context.Context, self, dir string, s inputSpec, variant, pat
 		r.MaxRSSMiB = float64(u.MaxRSS) / (1 << 20)
 	}
 	r.ScratchMB = float64(peak) / (1 << 20)
+	if b, err := os.ReadFile("/sys/fs/cgroup/memory.peak"); err == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil {
+			r.CgroupPeakMiB = float64(n) / (1 << 20)
+		}
+	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	var res childResult
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &res); err == nil {

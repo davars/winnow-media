@@ -29,13 +29,19 @@ type gifFrameSpec struct {
 
 var (
 	paletteA = color.Palette{
-		color.RGBA{}, color.RGBA{255, 0, 0, 255}, color.RGBA{0, 255, 0, 255},
-		color.RGBA{0, 0, 255, 255}, color.RGBA{250, 250, 20, 255},
+		color.RGBA{},
+		color.RGBA{255, 0, 0, 255},
+		color.RGBA{0, 255, 0, 255},
+		color.RGBA{0, 0, 255, 255},
+		color.RGBA{250, 250, 20, 255},
 	}
 	// paletteB holds the transparent entry in the middle and other colours.
 	paletteB = color.Palette{
-		color.RGBA{10, 20, 30, 255}, color.RGBA{200, 100, 50, 255}, color.RGBA{},
-		color.RGBA{0, 120, 250, 255}, color.RGBA{90, 90, 90, 255},
+		color.RGBA{10, 20, 30, 255},
+		color.RGBA{200, 100, 50, 255},
+		color.RGBA{},
+		color.RGBA{0, 120, 250, 255},
+		color.RGBA{90, 90, 90, 255},
 	}
 )
 
@@ -280,4 +286,36 @@ func withoutGCE(t *testing.T, n int, interlaced bool) []byte {
 		b = append(b, 0)
 	}
 	return append(b, 0x3B)
+}
+
+// TestWritePAMReadsBackIdentically checks that magick reads a written canvas
+// as the same pixels, alpha included.
+func TestWritePAMReadsBackIdentically(t *testing.T) {
+	const w, h = 24, 20
+	g := buildGIF(t, w, h, paletteA, []gifFrameSpec{
+		{rect: image.Rect(0, 0, w, h), disposal: 1, delay: 5, palette: paletteB, shift: 0},
+		{rect: image.Rect(4, 3, 16, 12), disposal: 1, delay: 5, palette: paletteA, shift: 3},
+	})
+	var canvas *image.NRGBA
+	err := Frames(g, []int{1}, func(_ int, c *image.NRGBA) error { canvas = c; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := WritePAM(&buf, canvas); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pam := writeFile(t, "x.pam", buf.Bytes())
+	out := filepath.Join(dir, "x.png")
+	magick(t, "pam:"+pam, "-depth", "8", out)
+	got := readNRGBA(t, out)
+	for y := range h {
+		for x := range w {
+			p, q := canvas.NRGBAAt(x, y), got.NRGBAAt(x, y)
+			if p.A != q.A || (p.A > 0 && p != q) {
+				t.Fatalf("(%d,%d): canvas %v, read back %v", x, y, p, q)
+			}
+		}
+	}
 }

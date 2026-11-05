@@ -4,8 +4,10 @@ package gifcomp
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/gif"
+	"io"
 )
 
 // Frames decodes data and calls emit with the composited canvas after each
@@ -96,4 +98,19 @@ func drawOver(dst *image.NRGBA, src *image.Paletted) {
 			}
 		}
 	}
+}
+
+// WritePAM writes canvas as a PAM image of tuple type RGB_ALPHA, which
+// ImageMagick reads as the "pam" coder without any compression.
+func WritePAM(w io.Writer, canvas *image.NRGBA) error {
+	b := canvas.Bounds()
+	if _, err := fmt.Fprintf(w, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", b.Dx(), b.Dy()); err != nil {
+		return err
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		if _, err := w.Write(canvas.Pix[canvas.PixOffset(b.Min.X, y):][:b.Dx()*4]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

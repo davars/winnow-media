@@ -8,11 +8,12 @@ import (
 
 // GIFFramesComposited is AnimationFrames for a GIF whose frames are
 // composited by compose instead of ImageMagick. compose receives the indices
-// of the selected frames and writes each as a full-canvas PNG at the paths
-// it returns, in order. ImageMagick then encodes each PNG in a run of its
-// own. It exists on the measurement branch only.
+// of the selected frames, in order, and calls emit with the path of a
+// full-canvas PAM file for each. ImageMagick encodes the files in batches as
+// they arrive, and they are deleted after. It exists on the measurement
+// branch only.
 func (p *Processor) GIFFramesComposited(ctx context.Context, path string, enc Encoding, maxFrames int, dir string,
-	compose func(selected []int, dir string) ([]string, error),
+	compose func(selected []int, dir string, emit func(path string) error) error,
 ) ([]Image, Usage, error) {
 	ec, err := enc.resolve()
 	if err != nil {
@@ -40,14 +41,6 @@ func (p *Processor) GIFFramesComposited(ctx context.Context, path string, enc En
 		}
 		tw, th, resize := fitSize(cw, ch, ec.maxEdge, ec.maxArea)
 		selected := selectFrames(frameCount(frames, len(scenes), true), len(scenes))
-		samples, err := compose(selected, in.dir)
-		if err != nil {
-			return nil, err
-		}
-		if len(samples) != len(selected) {
-			return nil, fmt.Errorf("composited %d of %d frames", len(samples), len(selected))
-		}
-		defer removeFiles(samples)
 		middle := []string{"-auto-orient"}
 		if ec.format == JPEG {
 			middle = append(middle, "-background", "white", "-alpha", "remove", "-alpha", "off")
@@ -57,10 +50,37 @@ func (p *Processor) GIFFramesComposited(ctx context.Context, path string, enc En
 		}
 		middle = append(middle, "-strip")
 		var images []Image
-		err = encodeSamples(ctx, env, samples, middle, ec, in.dir, func(i, n, w, h int) {
-			images = append(images, Image{Name: frameName(n, ec.ext), Width: w, Height: h, Frame: selected[i]})
+		encoder := &sampleEncoder{
+			env: env, coder: "pam", middle: middle, enc: ec, dir: in.dir, framePixels: cw * ch,
+			keep: func(i, n, w, h int) {
+				images = append(images, Image{Name: frameName(n, ec.ext), Width: w, Height: h, Frame: selected[i]})
+			},
+		}
+		var pending []string
+		flush := func() error {
+			defer removeFiles(pending)
+			err := encoder.encode(ctx, pending)
+			pending = nil
+			return err
+		}
+		err = compose(selected, in.dir, func(p string) error {
+			pending = append(pending, p)
+			if len(pending) >= encoder.batchSize() {
+				return flush()
+			}
+			return nil
 		})
-		return images, err
+		if err != nil {
+			removeFiles(pending)
+			return nil, err
+		}
+		if err := flush(); err != nil {
+			return nil, err
+		}
+		if encoder.seen != len(selected) {
+			return nil, fmt.Errorf("composited %d of %d frames", encoder.seen, len(selected))
+		}
+		return images, nil
 	})
 	if err != nil {
 		return nil, m.usage, err
