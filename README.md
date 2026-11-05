@@ -121,12 +121,30 @@ type the operation accepts gives an error wrapping `ErrUnsupportedType`, which
 names the type found. The decoder is then pinned to that type, so no tool
 picks a format from content. Image headers are read without decoding pixels
 (`-ping`) and an input is refused when a frame is wider or taller than 16384
-pixels or has more than 100 million, when an animation has more than 2000
-frames or more than a billion pixels in all, when a video stream is wider or
+pixels or has more than 64 million, when an animation has more than 2000
+frames or more than 160 million pixels in all, when a video stream is wider or
 taller than 16384 or longer than six hours (the stream's duration, else the
 container's), or when a video container holds more than 32 streams. These
-refusals wrap `ErrTooLarge`, naming the cap and the values. The numbers are
-provisional.
+refusals wrap `ErrTooLarge`, naming the cap and the values.
+
+**Where the numbers come from.** The caps and ceilings were set from
+measurements of the largest inputs they admit, made on a 12-CPU x86_64 host
+with `measure` (below). A 25 MiB 4K 60 fps video, 10-bit HEVC (HLG or PQ) or
+H.264, takes about 2.5 minutes with 64 samples and uses up to 2.7 times its
+wall time in CPU, since the decoder and filters are bound to 4 threads. Its
+peak, 2.8 GiB, is ImageMagick encoding the samples; ffmpeg stays near 300 MiB.
+A 48 MP HEIC takes 8 s and 0.9 GiB. ImageMagick keeps 16 bytes per pixel, so
+animations set the frame and pixel caps: it holds every composited frame
+beside the decoded ones, and a GIF of full-canvas frames completed up to
+185 MP in all and failed at 194 MP, while a single 81 MP frame completed and a
+90 MP one did not. The pixel caps sit below those points. ImageMagick's
+memory, map and disk ceilings (1, 2 and 4 GiB) are unchanged. The time
+ceiling is at least four times the longest ImageMagick run measured (36 s),
+and the ffmpeg allocation limit four times what an 8K frame needs; the factor
+of 4 for a slower host, such as a Raspberry Pi 5, is an estimate. The library
+sets no deadline on a whole operation: a caller
+that wants one passes a context, and on a slow host a 4K video needs several
+minutes of it.
 
 **The policy.** Tools run with `exec.CommandContext`, in the Processor's
 directory, with an environment of exactly `MAGICK_CONFIGURE_PATH`,
@@ -185,7 +203,30 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
   `pin` (the fixtures for the pin check), and `closure`, which builds a small probe binary the way a consumer would and
   asserts that it resolves `magick` from the injected directory and that
   ImageMagick is in the binary's runtime closure.
+- `packages.<system>.measure` and `apps.<system>.measure` (Linux): the
+  measurement harness, with ImageMagick and FFmpeg from this flake.
 - `devShells.<system>.default`: Go, golangci-lint, gofumpt and all the tools.
+
+## Measuring
+
+`internal/cmd/measure` generates the largest inputs the operations accept
+(25 MiB 4K 60 fps HEVC and H.264 video, 48 and 24 MP HEIC, long GIFs and
+animated WebPs) and runs each through a `Processor`, printing wall time, CPU,
+peak RSS, output count and error as JSON lines and as a table. Generated
+inputs are large and are not kept in the repository. The HEIC inputs can be
+generated only where x265 can encode them (x86_64).
+
+```sh
+nix run .#measure -- <dir>                  # generate what is missing, then measure
+nix run .#measure -- -gen-only <dir>        # only generate
+nix run github:davars/winnow-media#measure -- -measure-only <dir>
+```
+
+`-measure-only` runs on another machine, such as an arm64 board, over a
+directory copied from the one `-gen-only` filled. `-only <name>` runs one
+input, `-repeat N` reports median wall time and CPU, and `-extra
+kind:frames:WxH` (`gif`, `gifu` for full-canvas frames, `webp`) adds an
+animation. `-list` prints the input names.
 
 ## Building a binary against the tools
 
