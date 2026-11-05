@@ -141,10 +141,11 @@ runs.
 own output files and moves no bytes beyond reading the source and writing
 there. Every argument is validated before any tool runs, so a value out of
 range, an unaccepted type, an input over a cap or a non-empty `dir` is an
-error with nothing written. On any later failure the operation removes what it wrote and `dir` is
-empty again. Each `Image` has the file's `Name` relative to `dir`, its `Width`
-and `Height`, and `Frame` (the animation frame index) and `TimeMS` (the video
-sample time; 0 for operations that do not sample a video).
+error with nothing written. On any later failure the operation removes what
+it wrote and `dir` is empty again. Each `Image` has the file's `Name`
+relative to `dir`, its `Width` and `Height`, and `Frame` (the animation frame
+index) and `TimeMS` (the video sample time; 0 for operations that do not
+sample a video).
 
 The accepted media types, decoder pins and tools of each operation are
 internal.
