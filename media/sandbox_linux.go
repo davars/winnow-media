@@ -258,15 +258,15 @@ func helperError(ctx context.Context, name string, res helperResult, err error, 
 // filter as any tool. onFrame is called, in order, with the path of each
 // frame as the compositor finishes it; if it fails the compositor is stopped
 // and its error returned. The usage returned covers the compositor.
-func (p *Processor) composeGIF(ctx context.Context, req composeRequest, onFrame func(path string) error) (*Usage, error) {
+func (p *Processor) composeGIF(ctx context.Context, req composeRequest, onFrame func(path string, profiled bool) error) (*Usage, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	lines := &frameLines{dir: req.dir, onFrame: func(path string) error {
-		err := onFrame(path)
+	lines := &frameLines{dir: req.dir, onFrame: func(path string, profiled bool) error {
+		err := onFrame(path, profiled)
 		if err != nil {
 			cancel()
 		}

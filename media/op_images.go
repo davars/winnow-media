@@ -4,10 +4,12 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -314,15 +316,13 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 
 	sourceFrames := len(infos)
 	selected := selectFrames(frameCount(maxFrames, sourceFrames, true), sourceFrames)
+	if dec.name == "gif" {
+		profileFrom := slices.IndexFunc(infos, func(f FrameInfo) bool { return f.hasICC })
+		return e.gifFrames(ctx, path, enc, dir, selected, gifGeometry{len(infos), cw, ch, tw, th, resize, profileFrom})
+	}
 	profiled, err := selectedProfiled(infos, selected)
 	if err != nil {
 		return nil, err
-	}
-
-	// The compositor does not carry a colour profile, so a profiled GIF is
-	// read by ImageMagick like a WebP.
-	if dec.name == "gif" && !profiled && e.compose != nil {
-		return e.gifFrames(ctx, path, enc, dir, selected, len(infos), cw, ch, tw, th, resize)
 	}
 
 	var kept []int
@@ -390,54 +390,93 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	return images, nil
 }
 
+// gifGeometry is what the header read and the sizing decided about a GIF.
+type gifGeometry struct {
+	sourceFrames int
+	cw, ch       int // canvas
+	tw, th       int // output size
+	resize       bool
+	// profileFrom is the first frame that carries an ICC profile, or -1.
+	profileFrom int
+}
+
 // gifFrames writes the selected frames of a GIF. The sandboxed compositor
 // decodes the file and composites it one canvas at a time, writing each
 // selected frame as a full-canvas PAM file; ImageMagick encodes them in
 // batches as they arrive, so it never holds more than a batch.
-func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, sourceFrames, cw, ch, tw, th int, resize bool) ([]Image, error) {
-	middle := []string{"-auto-orient"}
+//
+// The compositor says which frames carry the GIF's ICC profile, as they do
+// after -coalesce. Those are assigned the profile and converted to sRGB; the
+// others are left as they are. A batch never mixes the two.
+func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, g gifGeometry) ([]Image, error) {
+	tail := []string{}
 	if enc.format == JPEG {
-		middle = append(middle, "-background", "white", "-alpha", "remove", "-alpha", "off")
+		tail = append(tail, "-background", "white", "-alpha", "remove", "-alpha", "off")
 	}
-	if resize {
-		middle = append(middle, "-resize", fmt.Sprintf("%dx%d!", tw, th))
+	if g.resize {
+		tail = append(tail, "-resize", fmt.Sprintf("%dx%d!", g.tw, g.th))
 	}
-	middle = append(middle, "-strip")
+	tail = append(tail, "-strip")
 
 	var images []Image
-	encoder := &sampleEncoder{
-		env: e, coder: "pam", middle: middle, enc: enc, dir: dir, framePixels: cw * ch,
-		keep: func(i, n, w, h int) {
-			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})
-		},
-	}
-	var pending []string
-	flush := func() error {
-		defer removeFiles(pending)
-		err := encoder.encode(ctx, pending)
-		pending = nil
-		return err
-	}
-	req := composeRequest{
-		path: path, dir: dir, selected: selected, inFlight: encoder.batchSize(),
-		frames: sourceFrames, width: cw, height: ch,
-	}
-	err := e.compose(ctx, req, func(p string) error {
-		pending = append(pending, p)
-		if len(pending) >= encoder.batchSize() {
-			return flush()
+	err := withProfile(dir, g.profileFrom >= 0, func(srgbPath string) error {
+		defer func() { _ = os.Remove(filepath.Join(dir, gifProfileName)) }()
+		encoder := &sampleEncoder{
+			env: e, coder: "pam", enc: enc, dir: dir, framePixels: g.cw * g.ch,
+			keep: func(i, n, w, h int) {
+				images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})
+			},
+		}
+		var pending []string
+		pendingProfiled := false
+		flush := func() error {
+			defer removeFiles(pending)
+			encoder.middle = []string{"-auto-orient"}
+			if pendingProfiled {
+				encoder.middle = append(encoder.middle, colorArgs(filepath.Join(dir, gifProfileName), true)...)
+				encoder.middle = append(encoder.middle, colorArgs(srgbPath, true)...)
+			}
+			encoder.middle = append(encoder.middle, tail...)
+			err := encoder.encode(ctx, pending)
+			pending = nil
+			return err
+		}
+		ordinal := 0
+		req := composeRequest{
+			path: path, dir: dir, selected: selected, inFlight: encoder.batchSize(),
+			frames: g.sourceFrames, width: g.cw, height: g.ch, profileFrom: g.profileFrom,
+		}
+		err := e.compose(ctx, req, func(p string, profiled bool) error {
+			if ordinal >= len(selected) {
+				return errors.New("the compositor wrote more frames than selected")
+			}
+			ordinal++
+			if len(pending) > 0 && profiled != pendingProfiled {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+			pendingProfiled = profiled
+			pending = append(pending, p)
+			if len(pending) >= encoder.batchSize() {
+				return flush()
+			}
+			return nil
+		})
+		if err != nil {
+			removeFiles(pending)
+			return err
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		if encoder.seen != len(selected) {
+			return fmt.Errorf("composited %d of %d frames", encoder.seen, len(selected))
 		}
 		return nil
 	})
 	if err != nil {
-		removeFiles(pending)
 		return nil, err
-	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	if encoder.seen != len(selected) {
-		return nil, fmt.Errorf("composited %d of %d frames", encoder.seen, len(selected))
 	}
 	return images, nil
 }
