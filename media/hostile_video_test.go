@@ -195,7 +195,9 @@ func TestHLSPlaylistClaimedAsMP4(t *testing.T) {
 // whitelist argument itself.
 func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
 	requireFFmpeg(t)
-	p := requireProcessor(t)
+	// Unsandboxed, so that the whitelist is the only thing between the
+	// demuxer and the network.
+	env := testEnv(t)
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -204,7 +206,7 @@ func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
 	t.Cleanup(srv.Close)
 	playlist := writeFile(t, "x.m3u8", hlsPlaylist(srv.URL+"/segment.ts"))
 	run := func(args ...string) {
-		_, _ = p.run(context.Background(), "ffprobe", append(append([]string{"-v", "quiet"}, args...), "-f", "hls", "-i", playlist)...)
+		_, _ = env.Run(context.Background(), "ffprobe", append(append([]string{"-v", "quiet"}, args...), "-f", "hls", "-i", playlist)...)
 	}
 
 	// Control: with the network protocols allowed the demuxer fetches the
@@ -216,9 +218,30 @@ func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
 	hits.Store(0)
 
 	args := inputArgs(decoder{"ffprobe", "hls"}, playlist)
-	_, _ = p.run(context.Background(), "ffprobe", append([]string{"-v", "quiet"}, args...)...)
+	_, _ = env.Run(context.Background(), "ffprobe", append([]string{"-v", "quiet"}, args...)...)
 	if n := hits.Load(); n != 0 {
 		t.Errorf("the segment was requested %d times despite the whitelist", n)
+	}
+}
+
+// The sandbox refuses the socket itself, so a tool whose own whitelist
+// allowed the network still cannot reach it.
+func TestSandboxBlocksNetworkSegmentsWhenTheWhitelistAllowsThem(t *testing.T) {
+	requireFFmpeg(t)
+	p := requireProcessor(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	playlist := writeFile(t, "x.m3u8", hlsPlaylist(srv.URL+"/segment.ts"))
+	res, err := p.run(context.Background(), "ffprobe", "-v", "error", "-protocol_whitelist", "file,http,tcp,crypto", "-f", "hls", "-i", playlist)
+	if n := hits.Load(); n != 0 {
+		t.Errorf("the segment was requested %d times through the sandbox", n)
+	}
+	if err == nil || !strings.Contains(err.Error(), "not permitted") {
+		t.Errorf("err = %v, stdout %q; want a refused socket", err, res.Stdout)
 	}
 }
 
