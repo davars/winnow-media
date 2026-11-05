@@ -6,8 +6,8 @@ closure. Licensed under AGPL-3.0.
 
 This repository currently contains the tool closure, the Go package that
 finds it, and the `media` package that builds the tools' command lines and
-runs them on untrusted input. A sandbox for the tool processes (resource
-limits and a system-call filter) is coming.
+runs them on untrusted input inside a sandbox (resource limits, a
+system-call filter and cleanup of leftover processes).
 
 ## The `tool` package
 
@@ -55,6 +55,8 @@ An operation turns one input file into upright, sized sRGB images in an
 output directory. The operations are methods of a `Processor`, which runs the
 tools itself because the input is untrusted:
 
+- `Init()` must be the first call in `main` and in `TestMain` of any program
+  that creates a `Processor`; see [the sandbox](#the-sandbox).
 - `NewProcessor(ctx) (*Processor, error)` resolves `magick`, `ffmpeg` and
   `ffprobe` with the `tool` package, creates a private directory with
   `os.MkdirTemp`, installs a generated ImageMagick policy there and reads it
@@ -146,7 +148,7 @@ sets no deadline on a whole operation: a caller
 that wants one passes a context, and on a slow host a 4K video needs several
 minutes of it.
 
-**The policy.** Tools run with `exec.CommandContext`, in the Processor's
+**The policy.** Tools run through the sandbox helper, in the Processor's
 directory, with an environment of exactly `MAGICK_CONFIGURE_PATH`,
 `MAGICK_TEMPORARY_PATH`, `TMPDIR` and `LC_ALL=C`: no `PATH`, `HOME` or
 `XDG_CONFIG_HOME`, so no configuration file of the caller's can widen the
@@ -180,6 +182,55 @@ internal.
 
 The same inputs, arguments and tool binaries give the same output bytes;
 callers pass policy values (quality, sizes, ceilings) in explicitly.
+
+## The sandbox
+
+Every tool the `Processor` runs goes through a helper: the program's own
+executable, started again with a marker in its environment. `media.Init()`
+detects the marker, runs the helper and never returns; in any other process it
+returns at once and changes nothing. The helper
+
+- sets `no_new_privs` and these limits (soft and hard), each above the
+  largest value measured for a tool within the caps: CPU 200 s, address space
+  8 GiB, file size 5 GiB, open files 1024, and tasks the user's current count
+  plus 512;
+- installs a seccomp filter, in pure Go, that makes `socket` and `socketpair`
+  fail with `EPERM`, kills a process using another system-call ABI (32-bit
+  or x32), and allows everything else;
+- becomes a child subreaper, runs the tool as its child, and after the tool
+  exits kills and reaps every process left under it, orphans included. A tool
+  killed by a signal is reported as an error. Cancelling the context closes
+  the helper's lifeline, on which it kills the tool and its descendants; a
+  killed helper takes the tool with it.
+
+The tool's environment and arguments are exactly those the `Processor`
+passes; nothing about the helper reaches it. The consumer gets no
+process-wide side effect. `NewProcessor` refuses to return unless `Init` was
+called, and then starts the helper once in a probe mode that tries `socket`
+under the filter and reads the limits back; it requires the call denied and
+every limit set. The helper's rusage includes the tool's, so `Usage` is the
+tool's (a 48 MP HEIC measured 919 MiB and 12.7 s of CPU directly and the
+same through the helper), and the helper adds about 13 ms to a run.
+
+The sandbox needs Linux on amd64 or arm64; elsewhere `NewProcessor` returns
+an error (the `Env` functions still work). Landlock is not used: the nodes
+this was built for have none, so file confinement rests on the container.
+A deployment for hostile input must supply it: a Deployment of its own with
+no shared network namespace, a non-root user, a read-only root filesystem,
+all capabilities dropped, `allowPrivilegeEscalation: false`, no secrets in
+the container, a size-limited scratch volume and a memory limit, and a
+network policy denying egress.
+
+The limits come from per-process peaks sampled from `/proc` while `measure`
+ran its inputs on a 12-CPU x86_64 host: ImageMagick used up to 3.2 GiB of
+address space (a 64 MP frame; it aborts when the limit is 3.0 GiB and works
+at 3.3 GiB), 25 s of CPU (a header read of a long GIF) and 199 descriptors;
+ffmpeg used 2.0 GiB, 9 s and 28 threads on 4K HEVC (decoder frame threads,
+the filter pool and the scaler's threads, which follow the host's CPU
+count). `RLIMIT_NPROC` counts every task of the real user, so it is set
+relative to the count when the helper starts and bounds forks only where the
+user has nothing else running, such as a container with its own uid; it is
+not enforced for root.
 
 ## Flake outputs
 
@@ -258,6 +309,9 @@ separate contents list.
 
 ## Rules for consumers
 
+- **Call `media.Init()` first in `main` and in `TestMain`,** before flags,
+  servers or anything with side effects: the `Processor` starts the program
+  again as its sandbox helper.
 - **No `nixpkgs.follows` on this input.** The tools must come from this
   flake's own locked nixpkgs; following the consumer's would change the
   binaries underneath the library.
