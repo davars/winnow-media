@@ -10,23 +10,36 @@ import (
 // it with errors.Is.
 var ErrTooLarge = errors.New("input too large")
 
-// The caps below are provisional. They are the one place the limits are
-// stated; the ImageMagick policy ceilings are derived from them.
+// The caps below are the one place the limits are stated; the ImageMagick
+// policy ceilings are derived from them. Each was set from measurements of the
+// largest inputs it admits, made with internal/cmd/measure on a 12-CPU x86_64
+// host (see the README).
 const (
-	// maxInputBytes is the largest input file, inclusive.
+	// maxInputBytes is the largest input file, inclusive. It is a requirement
+	// of the callers, not a measurement.
 	maxInputBytes = 25 << 20
 	// maxDimension is the largest width or height of any frame or stream.
+	// WebP cannot exceed 16383, and a 16000x16000 video decodes within the
+	// policy.
 	maxDimension = 16384
-	// maxFramePixels is the largest pixel count of one frame.
-	maxFramePixels = 100_000_000
-	// maxAnimationFrames is the most frames an animation may hold.
+	// maxFramePixels is the largest pixel count of one frame. A one-colour GIF
+	// frame of 81 MP completes under the policy and one of 90 MP does not, and
+	// two 64 MP frames complete.
+	maxFramePixels = 64_000_000
+	// maxAnimationFrames is the most frames an animation may hold. 2000
+	// frames complete in under 20 s whatever the canvas, and the count is
+	// below the policy's list length.
 	maxAnimationFrames = 2000
 	// maxAnimationPixels bounds frames times canvas area, the work of
-	// compositing an animation.
-	maxAnimationPixels = 1_000_000_000
-	// maxStreams is the most streams, of any kind, a video container may hold.
+	// compositing an animation. ImageMagick holds every composited frame at
+	// 16 bytes per pixel beside the decoded ones: an animation of full-canvas
+	// frames completes at 185 MP and fails at 194 MP.
+	maxAnimationPixels = 160_000_000
+	// maxStreams is the most streams, of any kind, a video container may
+	// hold. It is a structural bound, not a measured one.
 	maxStreams = 32
-	// maxDurationMS is the longest video stream, in milliseconds.
+	// maxDurationMS is the longest video stream, in milliseconds. Sampling
+	// seeks, so a six-hour video costs what a short one does.
 	maxDurationMS = 6 * 3600 * 1000
 )
 
@@ -34,13 +47,18 @@ const (
 const (
 	// ffmpegThreads bounds the decoder's threads and the filter graph's.
 	ffmpegThreads = 4
-	// ffmpegMaxAlloc is the largest single allocation ffmpeg may make, in bytes.
+	// ffmpegMaxAlloc is the largest single allocation ffmpeg may make, in
+	// bytes. A 4K HDR frame needs 32 MiB, one float plane of the tone-mapping
+	// filters; 1 GiB is four times what an 8K frame needs.
 	ffmpegMaxAlloc = 1 << 30
 )
 
 // The ImageMagick policy ceilings. Width and height sit above maxDimension
 // so that the header read reaches the checks in this package, which report
-// ErrTooLarge, instead of failing inside the tool.
+// ErrTooLarge, instead of failing inside the tool. Memory, map and disk
+// together hold the pixel cache of an animation at maxAnimationPixels; time
+// is at least four times the longest ImageMagick operation measured to
+// complete (36 s), an estimate of a slower host's factor.
 const (
 	policyMemory     = "1GiB"
 	policyMap        = "2GiB"

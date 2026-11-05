@@ -53,6 +53,10 @@ var animationSpec = spec{
 	writes: append([]string{"info"}, outputCoders...),
 }
 
+// listLengthRefusal is what ImageMagick reports when an image list exceeds the
+// policy's list-length ceiling.
+const listLengthRefusal = "list length exceeds limit"
+
 // sceneHeader is what one scene's header says, before any pixels decode.
 type sceneHeader struct {
 	delayCS       int
@@ -101,6 +105,11 @@ func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector st
 	args = append(args, "-format", "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n", dec.name+":"+path+selector)
 	res, err := env.Run(ctx, "magick", args...)
 	if err != nil {
+		// The policy's list length stops the read of a file with more scenes
+		// than it allows, before the frame cap can be checked.
+		if strings.Contains(err.Error(), listLengthRefusal) {
+			return nil, tooLarge("file holds more than %s scenes, the limit is %d", policyListLength, maxAnimationFrames)
+		}
 		return nil, fmt.Errorf("reading headers: %w", err)
 	}
 	trimmed := strings.TrimRight(string(res.Stdout), "\n")
