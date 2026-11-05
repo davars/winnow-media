@@ -163,7 +163,7 @@
           measureImage = pkgs.dockerTools.buildLayeredImage {
             name = "winnow-media-measure";
             tag = "latest";
-            contents = [ measure ];
+            contents = [ measure pkgs.busybox ];
             extraCommands = "mkdir -m 1777 tmp";
             config.Entrypoint = [ "${measure}/bin/measure" ];
           };
