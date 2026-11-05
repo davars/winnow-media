@@ -31,9 +31,10 @@ func gifSampleName(n int) string { return fmt.Sprintf(".sample-%03d.pam", n) }
 // an ICC profile, which ImageMagick attaches to the image that follows it.
 const iccExtension = "ICCRGBG1012"
 
-// gifProfileName is the file the compositor writes the profile with the given
-// id to, in the output directory.
-func gifProfileName(id int) string { return fmt.Sprintf(".gif-profile-%d.icc", id) }
+// composedProfileName is the file a compositor writes the ICC profile with the
+// given id to, in the output directory, before the first frame that carries
+// it.
+func composedProfileName(id int) string { return fmt.Sprintf(".profile-%d.icc", id) }
 
 // gifLayout is what scanGIF reads from the block structure of a GIF.
 type gifLayout struct {
@@ -308,6 +309,9 @@ type composeRequest struct {
 	selected []int
 	// inFlight is the most frames the compositor leaves unconsumed in dir.
 	inFlight int
+	// external names the tool that composites the frames, or is empty for
+	// the GIF compositor of this package.
+	external string
 }
 
 // ownMask renders own as a string of 0 and 1, one per frame.
@@ -323,6 +327,9 @@ func ownMask(own []bool) string {
 }
 
 func (r composeRequest) args() []string {
+	if r.external != "" {
+		return r.externalArgs()
+	}
 	idx := make([]string, len(r.selected))
 	for i, n := range r.selected {
 		idx[i] = strconv.Itoa(n)
@@ -330,6 +337,19 @@ func (r composeRequest) args() []string {
 	return []string{
 		r.path, r.dir, strconv.Itoa(r.inFlight), strconv.Itoa(r.frames),
 		strconv.Itoa(r.width), strconv.Itoa(r.height), strings.Join(idx, ","), ownMask(r.own),
+	}
+}
+
+// externalArgs are the arguments of the webp-frames tool, which is told the
+// header read's canvas and frame count and refuses a file that differs.
+func (r composeRequest) externalArgs() []string {
+	idx := make([]string, len(r.selected))
+	for i, n := range r.selected {
+		idx[i] = strconv.Itoa(n)
+	}
+	return []string{
+		r.path, r.dir, strconv.Itoa(r.inFlight),
+		strconv.Itoa(r.width), strconv.Itoa(r.height), strconv.Itoa(r.frames), strings.Join(idx, ","),
 	}
 }
 
@@ -405,7 +425,7 @@ func runCompositor(args []string, out io.Writer) (err error) {
 			}
 		}
 		if profile > 0 && !written[profile] {
-			if err := os.WriteFile(filepath.Join(dir, gifProfileName(profile)), layout.profiles[profile-1], 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, composedProfileName(profile)), layout.profiles[profile-1], 0o600); err != nil {
 				return err
 			}
 			written[profile] = true

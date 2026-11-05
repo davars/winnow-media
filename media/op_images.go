@@ -50,7 +50,7 @@ var animationSpec = spec{
 		{typeGIF, decoder{"magick", "gif"}},
 		{typeWebP, decoder{"magick", "webp"}},
 	},
-	tools:  []string{"magick"},
+	tools:  []string{"magick", webpFramesTool},
 	reads:  append([]string{"icc", "pam"}, outputCoders...),
 	writes: append([]string{"info"}, outputCoders...),
 }
@@ -80,9 +80,10 @@ func readHeaders(ctx context.Context, env Env, dec decoder, path, selector strin
 	if err := checkSceneHeaders(scenes, animated); err != nil {
 		return nil, err
 	}
-	// libwebp's header read skips the ICC chunk, so the profile is read from
-	// the decoded image, which the caps now allow.
-	if dec.name == "webp" {
+	// libwebp's header read skips the ICC chunk, so the profile of a still is
+	// read from the decoded image, which the caps now allow. An animation is
+	// not decoded here: webp-frames reports its profile with the frames.
+	if dec.name == "webp" && (!animated || len(scenes) == 1) {
 		full, err := identifyScenes(ctx, env, dec, path, selector, false)
 		if err != nil {
 			return nil, err
@@ -308,11 +309,11 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 		w, h := s.canvas()
 		cw, ch = max(cw, w), max(ch, h)
 	}
-	cw, ch = uprightSize(cw, ch, scenes[0].orientation)
 	if cw < 1 || ch < 1 {
 		return nil, fmt.Errorf("input reports size %dx%d", cw, ch)
 	}
-	tw, th, resize := fitSize(cw, ch, enc.maxEdge, enc.maxArea)
+	uw, uh := uprightSize(cw, ch, scenes[0].orientation)
+	tw, th, resize := fitSize(uw, uh, enc.maxEdge, enc.maxArea)
 
 	sourceFrames := len(infos)
 	selected := selectFrames(frameCount(maxFrames, sourceFrames, true), sourceFrames)
@@ -321,7 +322,15 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 		for i, f := range infos {
 			own[i] = f.hasICC
 		}
-		return e.gifFrames(ctx, path, enc, dir, selected, gifGeometry{len(infos), cw, ch, tw, th, resize, own})
+		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
+			sourceFrames: len(infos), cw: cw, ch: ch, tw: tw, th: th, resize: resize, own: own,
+		})
+	}
+	if dec.name == "webp" && len(scenes) > 1 {
+		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
+			sourceFrames: len(infos), cw: cw, ch: ch, tw: tw, th: th, resize: resize,
+			external: webpFramesTool, orientation: scenes[0].orientation,
+		})
 	}
 	profiled, err := selectedProfiled(infos, selected)
 	if err != nil {
@@ -393,25 +402,37 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	return images, nil
 }
 
-// gifGeometry is what the header read and the sizing decided about a GIF.
-type gifGeometry struct {
+// webpFramesTool is the program that composites the frames of an animated
+// WebP.
+const webpFramesTool = "webp-frames"
+
+// compositeGeometry is what the header read and the sizing decided about an
+// animation composited outside ImageMagick.
+type compositeGeometry struct {
 	sourceFrames int
-	cw, ch       int // canvas
+	cw, ch       int // canvas as stored, before any rotation
 	tw, th       int // output size
 	resize       bool
-	// own[i] is set when the header read found an ICC profile on frame i.
+	// own[i] is set when the header read found an ICC profile on frame i. It
+	// is nil for a WebP, whose tool reports the profile with each frame.
 	own []bool
+	// external names the tool that composites, empty for the GIF compositor.
+	external string
+	// orientation is the EXIF orientation the header read found. The
+	// composited frames carry none, so it is applied explicitly.
+	orientation string
 }
 
-// gifFrames writes the selected frames of a GIF. The sandboxed compositor
-// decodes the file and composites it one canvas at a time, writing each
-// selected frame as a full-canvas PAM file; ImageMagick encodes them in
-// batches as they arrive, so it never holds more than a batch.
+// compositedFrames writes the selected frames of a GIF or animated WebP. The
+// sandboxed compositor decodes the file and composites it one canvas at a
+// time, writing each selected frame as a full-canvas PAM file; ImageMagick
+// encodes them in batches as they arrive, so it never holds more than a
+// batch.
 //
 // The compositor says which ICC profile, if any, each frame carries, as the
 // frames do after -coalesce. A frame is assigned its profile and converted to
 // sRGB; one without is left as it is. A batch holds frames of one profile.
-func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, g gifGeometry) ([]Image, error) {
+func (e Env) compositedFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, g compositeGeometry) ([]Image, error) {
 	tail := []string{}
 	if enc.format == JPEG {
 		tail = append(tail, "-background", "white", "-alpha", "remove", "-alpha", "off")
@@ -422,11 +443,11 @@ func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir strin
 	tail = append(tail, "-strip")
 
 	var images []Image
-	err := withProfile(dir, slices.Contains(g.own, true), func(srgbPath string) error {
+	err := withProfile(dir, slices.Contains(g.own, true) || g.external != "", func(srgbPath string) error {
 		usedProfiles := map[int]bool{}
 		defer func() {
 			for id := range usedProfiles {
-				_ = os.Remove(filepath.Join(dir, gifProfileName(id)))
+				_ = os.Remove(filepath.Join(dir, composedProfileName(id)))
 			}
 		}()
 		encoder := &sampleEncoder{
@@ -439,9 +460,13 @@ func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir strin
 		pendingProfile := 0
 		flush := func() error {
 			defer removeFiles(pending)
-			encoder.middle = []string{"-auto-orient"}
+			encoder.middle = nil
+			if g.orientation != "" && g.orientation != "Undefined" {
+				encoder.middle = append(encoder.middle, "-orient", g.orientation)
+			}
+			encoder.middle = append(encoder.middle, "-auto-orient")
 			if pendingProfile > 0 {
-				encoder.middle = append(encoder.middle, colorArgs(filepath.Join(dir, gifProfileName(pendingProfile)), true)...)
+				encoder.middle = append(encoder.middle, colorArgs(filepath.Join(dir, composedProfileName(pendingProfile)), true)...)
 				encoder.middle = append(encoder.middle, colorArgs(srgbPath, true)...)
 			}
 			encoder.middle = append(encoder.middle, tail...)
@@ -452,7 +477,7 @@ func (e Env) gifFrames(ctx context.Context, path string, enc encoding, dir strin
 		ordinal := 0
 		req := composeRequest{
 			path: path, dir: dir, selected: selected, inFlight: encoder.batchSize(),
-			frames: g.sourceFrames, width: g.cw, height: g.ch, own: g.own,
+			frames: g.sourceFrames, width: g.cw, height: g.ch, own: g.own, external: g.external,
 		}
 		err := e.compose(ctx, req, func(p string, profile int) error {
 			if ordinal >= len(selected) {

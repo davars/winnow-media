@@ -21,7 +21,8 @@ type Processor struct {
 	dir   string
 	tools map[string]string
 	run   Runner
-	// compose runs the GIF compositor; tests replace it.
+	// compose runs the frame compositor of a GIF or animated WebP; tests
+	// replace it.
 	compose func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error)
 }
 
@@ -46,7 +47,7 @@ func NewProcessor(ctx context.Context) (*Processor, error) {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
 	tools := map[string]string{}
-	for _, name := range []string{"magick", "ffmpeg", "ffprobe"} {
+	for _, name := range []string{"magick", "ffmpeg", "ffprobe", webpFramesTool} {
 		path, err := tool.Resolve(name)
 		if err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
@@ -64,7 +65,7 @@ func NewProcessor(ctx context.Context) (*Processor, error) {
 	}
 	p := &Processor{dir: dir, tools: tools}
 	p.run = p.runTool
-	p.compose = p.composeGIF
+	p.compose = p.composeFrames
 	rules := processorPolicy()
 	if err := p.install(rules); err != nil {
 		_ = p.Close()

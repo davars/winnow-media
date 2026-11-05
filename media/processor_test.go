@@ -346,7 +346,7 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 		input      func(t *testing.T) string
 		compositor bool
 	}{
-		{"webp", webp, false},
+		{"webp", webp, true},
 		{"gif", func(t *testing.T) string { return writeGIF(t, env, solid, 4) }, true},
 	} {
 		t.Run(c.name+" success", func(t *testing.T) {
