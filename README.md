@@ -5,8 +5,9 @@ FFmpeg, Poppler, pandoc and friends) from a pinned, reproducible tool
 closure. Licensed under AGPL-3.0.
 
 This repository currently contains the tool closure, the Go package that
-finds it, and the `media` package that builds the tools' command lines.
-Hardening is coming.
+finds it, and the `media` package that builds the tools' command lines and
+runs them on untrusted input. A sandbox for the tool processes (resource
+limits and a system-call filter) is coming.
 
 ## The `tool` package
 
@@ -23,9 +24,9 @@ paths.
 ## The `media` package
 
 `github.com/davars/winnow-media/media` builds ImageMagick and FFmpeg command
-lines and interprets their output. It does not run programs itself: the caller
-supplies an `Env`, so it decides how tools are resolved, limited and
-cancelled, and where scratch files live.
+lines and interprets their output. Apart from the operations below, it does
+not run programs itself: the caller supplies an `Env`, so it decides how tools
+are resolved, limited and cancelled, and where scratch files live.
 
 - `Env{Run, Stage}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
   (Result, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
@@ -50,22 +51,30 @@ cancelled, and where scratch files live.
 
 ### Operations
 
-An operation turns one staged input file into upright, sized sRGB images in
-an output directory. Each is a method of `Env` and needs only `Env.Run`:
+An operation turns one input file into upright, sized sRGB images in an
+output directory. The operations are methods of a `Processor`, which runs the
+tools itself because the input is untrusted:
 
-- `Env.Still(ctx, Source, Encoding, dir) (Image, error)` accepts `image/heic`
-  and `image/heif` (ImageMagick coder `heic`) and writes `still.<ext>`.
-- `Env.AnimationFrames(ctx, Source, Encoding, maxFrames, dir) ([]Image, error)`
-  accepts `image/gif` (coder `gif`) and `image/webp` (coder `webp`) and writes
+- `NewProcessor(ctx) (*Processor, error)` resolves `magick`, `ffmpeg` and
+  `ffprobe` with the `tool` package, creates a private directory with
+  `os.MkdirTemp`, installs a generated ImageMagick policy there and reads it
+  back with `magick -list policy` and `-list resource`. It returns an error,
+  removing the directory, unless the first policy file listed is the
+  installed one with exactly the rules written and no other file contributes
+  a rule. `Close` removes the directory.
+- `Processor.Still(ctx, path, Encoding, dir) (Image, Usage, error)` accepts
+  HEIC and HEIF (ImageMagick coder `heic`) and writes `still.<ext>`.
+- `Processor.AnimationFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
+  accepts GIF (coder `gif`) and WebP (coder `webp`) and writes
   `frame-000.<ext>`, `frame-001.<ext>`, and so on. `maxFrames` (0 for 16,
   otherwise 1-64) bounds the evenly spaced frames sampled from the composited
   animation; a frame identical to the one before it after resizing is dropped,
   and `Image.Frame` records the source frame each file came from.
-- `Env.VideoFrames(ctx, Source, Encoding, maxFrames, dir) ([]Image, error)`
-  accepts `video/mp4` and `video/quicktime` (ffmpeg demuxer `mov`) and
-  `video/webm` and `video/x-matroska` (demuxer `matroska`) and writes
-  `frame-000.<ext>`, `frame-001.<ext>`, and so on. `maxFrames` is as for
-  `AnimationFrames`. It runs `ffprobe`, `ffmpeg` and `magick`.
+- `Processor.VideoFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
+  accepts MP4 and QuickTime (ffmpeg demuxer `mov`) and WebM and Matroska
+  (demuxer `matroska`) and writes `frame-000.<ext>`, `frame-001.<ext>`, and
+  so on. `maxFrames` is as for `AnimationFrames`. It runs `ffprobe`, `ffmpeg`
+  and `magick`.
   - ffprobe picks the first video stream that is not an attached picture and
     reads its size, display rotation, duration (the stream's, else the
     container's), frame count and colour transfer. Output is upright, so a
@@ -92,9 +101,31 @@ an output directory. Each is a method of `Env` and needs only `Env.Run`:
     or after it. A seeked sample has no known frame index, so `Image.Frame` is
     always 0.
 
-`Source` is the staged file (`Path`) and the media type the caller asserts for
-it (`Type`); the type selects the decoder pin. A type the operation does not
-accept gives an error wrapping `ErrUnsupportedType`.
+`path` and `dir` may be relative. Each call returns a `Usage`: the CPU time
+summed over every tool run of the call and the largest peak resident set size
+of any run, also when the call fails.
+
+**The gate.** Before any tool runs, an operation checks that the input is a
+regular file of at most 25 MiB and takes its type from the file's leading
+bytes: GIF, WebP, HEIC and HEIF, MP4 and QuickTime, WebM and Matroska. The
+name and any claim of the caller are never consulted; a file that is not of a
+type the operation accepts gives an error wrapping `ErrUnsupportedType`, which
+names the type found. The decoder is then pinned to that type, so no tool
+picks a format from content. Image headers are read without decoding pixels
+(`-ping`) and an input is refused when a frame is wider or taller than 16384
+pixels or has more than 100 million, when an animation has more than 2000
+frames or more than a billion pixels in all, or when a video stream is wider
+or taller than 16384. These refusals wrap `ErrTooLarge`, naming the cap and
+the values. The numbers are provisional.
+
+**The policy.** Tools run with `exec.CommandContext`, in the Processor's
+directory, with an environment of exactly `MAGICK_CONFIGURE_PATH`,
+`MAGICK_TEMPORARY_PATH`, `TMPDIR` and `LC_ALL=C`: no `PATH`, `HOME` or
+`XDG_CONFIG_HOME`, so no configuration file of the caller's can widen the
+policy. The generated `policy.xml` is derived from the coders each operation
+uses. It denies every delegate and every coder, then allows the used coders
+for reading, writing or both, denies `@` indirect reads and sets ceilings on
+memory, map, disk, area, width, height, list length, time and threads.
 
 `Encoding` sizes and encodes each output; zero fields take the defaults.
 `Format` is `JPEG` (default), `WebP` or `PNG`. `Quality` is 1-100 (default 90),
@@ -109,8 +140,8 @@ runs.
 `dir` is an existing, empty directory the caller owns; the operation names its
 own output files and moves no bytes beyond reading the source and writing
 there. Every argument is validated before any tool runs, so a value out of
-range, an unaccepted type or a non-empty `dir` is an error with nothing
-written. On any later failure the operation removes what it wrote and `dir` is
+range, an unaccepted type, an input over a cap or a non-empty `dir` is an
+error with nothing written. On any later failure the operation removes what it wrote and `dir` is
 empty again. Each `Image` has the file's `Name` relative to `dir`, its `Width`
 and `Height`, and `Frame` (the animation frame index) and `TimeMS` (the video
 sample time; 0 for operations that do not sample a video).

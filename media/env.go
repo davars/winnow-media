@@ -1,15 +1,20 @@
 // Package media builds and runs the media tools' command lines: bounded WebP
 // encodes of still images and animations (a fallback ladder of dimension
 // ceilings and frame caps, with the frame mapping each encode holds), and
-// animated WebP thumbnails of video. It also offers media operations (Still,
-// AnimationFrames, VideoFrames) that turn one staged input into upright,
-// sized, sRGB images in an output directory.
+// animated WebP thumbnails of video. It also offers media operations that turn
+// one input file into upright, sized, sRGB images in an output directory.
 //
-// The package decides arguments and interprets tool output; it does not run
-// programs itself. A caller supplies a Runner and a Stager through an Env, so
-// it controls how tools are resolved, how long they run and where scratch
-// files live. The same inputs and tool binaries produce the same arguments,
-// and so the same output bytes.
+// The operations (Processor.Still, Processor.AnimationFrames and
+// Processor.VideoFrames) run the tools themselves, for untrusted input: a
+// Processor checks the file's size and type before any tool runs, pins the
+// decoder to the type found, and runs the tools with a fixed environment under
+// a generated ImageMagick policy that it has read back from the tool.
+//
+// The rest of the package decides arguments and interprets tool output
+// without running programs. A caller supplies a Runner and a Stager through
+// an Env, so it controls how tools are resolved, how long they run and where
+// scratch files live. The same inputs and tool binaries produce the same
+// arguments, and so the same output bytes.
 package media
 
 import (
