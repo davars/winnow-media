@@ -21,6 +21,8 @@ type Processor struct {
 	dir   string
 	tools map[string]string
 	run   Runner
+	// compose runs the GIF compositor; tests replace it.
+	compose func(ctx context.Context, req composeRequest, onFrame func(path string) error) (*Usage, error)
 }
 
 // NewProcessor resolves ImageMagick and FFmpeg, checks that the sandbox every
@@ -62,6 +64,7 @@ func NewProcessor(ctx context.Context) (*Processor, error) {
 	}
 	p := &Processor{dir: dir, tools: tools}
 	p.run = p.runTool
+	p.compose = p.composeGIF
 	rules := processorPolicy()
 	if err := p.install(rules); err != nil {
 		_ = p.Close()
@@ -117,14 +120,25 @@ type meter struct{ usage Usage }
 
 // env returns an Env that runs through the Processor and adds each run to m.
 func (p *Processor) env(m *meter) Env {
-	return Env{Run: func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := p.run(ctx, name, args...)
-		if res.Usage != nil {
-			m.usage.CPU += res.Usage.CPU
-			m.usage.MaxRSS = max(m.usage.MaxRSS, res.Usage.MaxRSS)
-		}
-		return res, err
-	}}
+	return Env{
+		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
+			res, err := p.run(ctx, name, args...)
+			m.add(res.Usage)
+			return res, err
+		},
+		compose: func(ctx context.Context, req composeRequest, onFrame func(path string) error) error {
+			usage, err := p.compose(ctx, req, onFrame)
+			m.add(usage)
+			return err
+		},
+	}
+}
+
+func (m *meter) add(u *Usage) {
+	if u != nil {
+		m.usage.CPU += u.CPU
+		m.usage.MaxRSS = max(m.usage.MaxRSS, u.MaxRSS)
+	}
 }
 
 // admitted is an input that passed the gate.

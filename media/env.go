@@ -72,4 +72,11 @@ type Stager func(ext string) (path string, cleanup func(), err error)
 type Env struct {
 	Run   Runner
 	Stage Stager
+
+	// compose runs the GIF compositor; it is set only by a Processor.
+	compose composer
 }
+
+// composer composites the selected frames of a GIF in the sandbox and calls
+// onFrame with the path of each as it is written.
+type composer func(ctx context.Context, req composeRequest, onFrame func(path string) error) error

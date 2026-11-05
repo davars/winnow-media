@@ -115,6 +115,7 @@ func TestPNGNamedGIFIsUnsupportedWithoutRunningATool(t *testing.T) {
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	rec := record(p)
+	forbidCompositor(t, p)
 	png := filepath.Join(t.TempDir(), "x.gif")
 	magick(t, env, "-size", "8x8", "xc:red", "png:"+png)
 	_, _, err := p.AnimationFrames(context.Background(), png, Encoding{}, 0, t.TempDir())
@@ -312,7 +313,13 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 		}
 		return res, err
 	}
-	check := func(t *testing.T, got Usage) {
+	webp := func(t *testing.T) string {
+		path := filepath.Join(t.TempDir(), "x.webp")
+		magick(t, env, "-size", "64x48", "-delay", "5", "xc:red", "-delay", "5", "xc:blue", "-delay", "5", "xc:green", "-loop", "0", path)
+		return stage(t, path)
+	}
+	// The compositor's run is not among the Runner's, and counts on top.
+	check := func(t *testing.T, got Usage, compositor bool) {
 		t.Helper()
 		var cpu time.Duration
 		var peak int64
@@ -323,32 +330,45 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 		if len(runs) < 2 {
 			t.Fatalf("%d measured runs", len(runs))
 		}
-		if got.CPU != cpu || got.MaxRSS != peak {
+		if compositor {
+			if got.CPU <= cpu || got.MaxRSS < peak {
+				t.Errorf("usage = %+v, want more CPU than %v and a peak of at least %d", got, cpu, peak)
+			}
+		} else if got.CPU != cpu || got.MaxRSS != peak {
 			t.Errorf("usage = %+v, want CPU %v and peak %d", got, cpu, peak)
 		}
 		if got.CPU <= 0 || got.MaxRSS <= 0 {
 			t.Errorf("usage = %+v, want non-zero", got)
 		}
 	}
-	t.Run("success", func(t *testing.T) {
-		runs = nil
-		_, usage, err := p.AnimationFrames(context.Background(), writeGIF(t, env, solid, 4), Encoding{}, 0, t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		check(t, usage)
-	})
-	t.Run("failure", func(t *testing.T) {
-		runs = nil
-		rec := record(p)
-		defer func() { p.run = rec.inner }()
-		rec.failAfter = 2
-		_, usage, err := p.AnimationFrames(context.Background(), writeGIF(t, env, solid, 4), Encoding{}, 0, t.TempDir())
-		if err == nil {
-			t.Fatal("operation succeeded")
-		}
-		check(t, usage)
-	})
+	for _, c := range []struct {
+		name       string
+		input      func(t *testing.T) string
+		compositor bool
+	}{
+		{"webp", webp, false},
+		{"gif", func(t *testing.T) string { return writeGIF(t, env, solid, 4) }, true},
+	} {
+		t.Run(c.name+" success", func(t *testing.T) {
+			runs = nil
+			_, usage, err := p.AnimationFrames(context.Background(), c.input(t), Encoding{}, 0, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, usage, c.compositor)
+		})
+		t.Run(c.name+" failure", func(t *testing.T) {
+			runs = nil
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
+			rec.failAfter = 2
+			_, usage, err := p.AnimationFrames(context.Background(), c.input(t), Encoding{}, 0, t.TempDir())
+			if err == nil {
+				t.Fatal("operation succeeded")
+			}
+			check(t, usage, c.compositor)
+		})
+	}
 }
 
 // manyFrameGIF returns a GIF with a w x h logical screen and n frames of 1x1.
@@ -374,6 +394,7 @@ func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
+			forbidCompositor(t, p)
 			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "many.gif", g), Encoding{}, 0, t.TempDir())
 			if !errors.Is(err, ErrTooLarge) {
 				t.Fatalf("err = %v, want ErrTooLarge", err)

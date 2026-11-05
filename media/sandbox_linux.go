@@ -233,21 +233,53 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	var stdout bytes.Buffer
 	var stderr tailBuffer
 	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(), Dir: p.dir}, &stdout, &stderr)
-	out := Result{Stdout: stdout.Bytes(), Usage: UsageOf(state)}
-	tail := bytes.TrimSpace(stderr.buf)
+	return Result{Stdout: stdout.Bytes(), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
+}
+
+// helperError turns the outcome of one helper run into an error, or nil.
+func helperError(ctx context.Context, name string, res helperResult, err error, tail []byte) error {
 	switch {
 	case ctx.Err() != nil:
-		return out, fmt.Errorf("%s: %w: %s", name, ctx.Err(), tail)
+		return fmt.Errorf("%s: %w: %s", name, ctx.Err(), tail)
 	case err != nil:
-		return out, fmt.Errorf("%s: sandbox helper: %w: %s", name, err, tail)
+		return fmt.Errorf("%s: sandbox helper: %w: %s", name, err, tail)
 	case res.Err != "":
-		return out, fmt.Errorf("%s: sandbox helper: %s: %s", name, res.Err, tail)
+		return fmt.Errorf("%s: sandbox helper: %s: %s", name, res.Err, tail)
 	case res.Signal != 0:
-		return out, fmt.Errorf("%s: killed by signal: %s: %s", name, syscall.Signal(res.Signal), tail)
+		return fmt.Errorf("%s: killed by signal: %s: %s", name, syscall.Signal(res.Signal), tail)
 	case res.Code != 0:
-		return out, fmt.Errorf("%s: exit status %d: %s", name, res.Code, tail)
+		return fmt.Errorf("%s: exit status %d: %s", name, res.Code, tail)
 	}
-	return out, nil
+	return nil
+}
+
+// composeGIF runs the GIF compositor as the sandbox helper's tool: this
+// executable, started again with compositorEnv set, under the same limits and
+// filter as any tool. onFrame is called, in order, with the path of each
+// frame as the compositor finishes it; if it fails the compositor is stopped
+// and its error returned. The usage returned covers the compositor.
+func (p *Processor) composeGIF(ctx context.Context, req composeRequest, onFrame func(path string) error) (*Usage, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	lines := &frameLines{dir: req.dir, onFrame: func(path string) error {
+		err := onFrame(path)
+		if err != nil {
+			cancel()
+		}
+		return err
+	}}
+	var stderr tailBuffer
+	cfg := helperConfig{Tool: exe, Args: req.args(), Env: []string{compositorEnv + "=1"}, Dir: p.dir}
+	res, state, err := runHelper(ctx, cfg, lines, &stderr)
+	usage := UsageOf(state)
+	if lines.err != nil {
+		return usage, lines.err
+	}
+	return usage, helperError(ctx, "gif compositor", res, err, bytes.TrimSpace(stderr.buf))
 }
 
 // helperMain is the sandbox helper: it applies the sandbox to itself, runs
