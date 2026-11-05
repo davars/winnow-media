@@ -145,10 +145,9 @@ ceiling is at least four times the longest ImageMagick run measured (36 s),
 and the ffmpeg allocation limit four times what an 8K frame needs. A
 Raspberry Pi 5 measured at worst about 4 times that host: 4.1 times the CPU
 for 4K HEVC decode, and 4.0 times the wall time for two 8000x8000 GIF frames
-(a disk-bound run); peak memory was the same. The library
-sets no deadline on a whole operation: a caller
-that wants one passes a context, and on a slow host a 4K video needs several
-minutes of it.
+(a disk-bound run); peak memory was the same. The library sets no deadline
+on a whole operation: a caller that wants one passes a context, and a 4K
+HEVC video takes 8 minutes on the Raspberry Pi 5.
 
 **The policy.** Tools run through the sandbox helper, in the Processor's
 directory, with an environment of exactly `MAGICK_CONFIGURE_PATH`,
@@ -226,7 +225,8 @@ network policy denying egress.
 The limits come from per-process peaks sampled from `/proc` while `measure`
 ran its inputs on a 12-CPU x86_64 host: ImageMagick used up to 3.2 GiB of
 address space (a 64 MP frame; it aborts when the limit is 3.0 GiB and works
-at 3.3 GiB), 25 s of CPU (a header read of a long GIF) and 199 descriptors;
+at 3.3 GiB), 25 s of CPU (comparing a 4K video's 64 samples) and 199
+descriptors;
 ffmpeg used 2.0 GiB, 9 s and 28 threads on 4K HEVC (decoder frame threads,
 the filter pool and the scaler's threads, which follow the host's CPU
 count). `RLIMIT_NPROC` counts every task of the real user, so it is set
