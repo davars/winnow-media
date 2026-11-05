@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   build:
@@ -17,9 +18,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - run: nix build .#packages.aarch64-linux.measure-image --print-build-logs --out-link image.tar.gz
-      - uses: actions/upload-artifact@v7.0.2
-        with:
-          name: winnow-media-measure-image
-          path: image.tar.gz
-          retention-days: 7
-          compression-level: 0
+      - name: push to ghcr
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nix run nixpkgs#skopeo -- copy \
+            --dest-creds "${{ github.actor }}:$TOKEN" \
+            docker-archive:image.tar.gz \
+            "docker://ghcr.io/davars/winnow-media-measure:sha-${GITHUB_SHA::7}"
