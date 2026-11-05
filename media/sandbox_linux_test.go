@@ -52,6 +52,20 @@ func TestSandboxDeniesSocketCreation(t *testing.T) {
 	}
 }
 
+func TestFilterCoversThreadsThatExistBeforeItIsInstalled(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(self, "--tool", "tsync").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(out)), "socket "+strconv.Itoa(int(syscall.EPERM)); got != want {
+		t.Errorf("the earlier thread's socket call gave %q, want %q", got, want)
+	}
+}
+
 func TestSandboxLeavesOtherSystemCallsAlone(t *testing.T) {
 	p := fakeProcessor(t)
 	res, err := runFake(t, p, "syscalls")
@@ -186,6 +200,8 @@ func TestSandboxKillsAndReapsWhatTheToolLeavesRunning(t *testing.T) {
 	requireGone(t, "grandchild", pids[0])
 }
 
+// Pdeathsig covers the tool only: its own children are reparented when it
+// dies and survive if the helper could not clean up after it.
 func TestToolDiesWithTheHelper(t *testing.T) {
 	p := fakeProcessor(t)
 	pidfile := filepath.Join(t.TempDir(), "pid")
