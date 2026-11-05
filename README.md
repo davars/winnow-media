@@ -258,6 +258,9 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
   ImageMagick is in the binary's runtime closure.
 - `packages.<system>.measure` and `apps.<system>.measure` (Linux): the
   measurement harness, with ImageMagick and FFmpeg from this flake.
+- `packages.<linux system>.measure-image`: the measurement harness and its
+  tools as a container image (`winnow-media-measure:latest`), for hosts without
+  Nix.
 - `devShells.<system>.default`: Go, golangci-lint, gofumpt and all the tools.
 
 ## Measuring
@@ -280,6 +283,34 @@ directory copied from the one `-gen-only` filled. `-only <name>` runs one
 input, `-repeat N` reports median wall time and CPU, and `-extra
 kind:frames:WxH` (`gif`, `gifu` for full-canvas frames, `webp`) adds an
 animation. `-list` prints the input names.
+
+To measure a board that runs k3s and has no Nix or docker, build the image in
+CI: run the `measure-image` workflow (Actions, "Run workflow"), which builds
+the aarch64 image on an arm64 runner and uploads it as an artifact kept for
+seven days. On a machine with `gh`, and with `<dir>` filled by `-gen-only`
+(where x265 can encode the HEIC inputs):
+
+```sh
+gh run download <run-id> -n winnow-media-measure-image
+scp -r image.tar.gz <dir> node:     # the tarball and the input directory
+```
+
+On the node, `ctr` imports the gzipped tarball as it is. The image's
+entrypoint is `measure`, so the arguments after the container id are the
+harness's own, and the inputs are bind-mounted at `/data`:
+
+```sh
+sudo k3s ctr images import image.tar.gz
+sudo k3s ctr images ls | grep winnow-media-measure   # the imported ref
+sudo k3s ctr run --rm \
+  --mount type=bind,src=$PWD/<dir>,dst=/data,options=rbind:ro \
+  docker.io/library/winnow-media-measure:latest measure \
+  -measure-only -repeat 3 /data
+```
+
+Use `-list` in place of the measuring flags to print the input names. The
+image is 2.3 GB unpacked because ffmpeg's closure includes its optional
+libraries.
 
 ## Building a binary against the tools
 

@@ -157,6 +157,17 @@
             meta.mainProgram = "measure";
           };
 
+          # Runs where there is no Nix: the tools reach it through the binary's
+          # ldflags, so the closure is all the image needs. media.NewProcessor
+          # makes its scratch directories with os.MkdirTemp, hence /tmp.
+          measureImage = pkgs.dockerTools.buildLayeredImage {
+            name = "winnow-media-measure";
+            tag = "latest";
+            contents = [ measure ];
+            extraCommands = "mkdir -m 1777 tmp";
+            config.Entrypoint = [ "${measure}/bin/measure" ];
+          };
+
           probeTools = [ "imagemagick" ];
           probeDir = toolDir { inherit system; tools = probeTools; };
           probe = probeWith (ldflags { inherit system; tools = probeTools; });
@@ -180,7 +191,7 @@
           '';
         in
         {
-          inherit pkgs tools allTools golangci-lint buildGoModule gate closureCheck measure;
+          inherit pkgs tools allTools golangci-lint buildGoModule gate closureCheck measure measureImage;
         };
     in
     {
@@ -189,6 +200,7 @@
           default = toolDir { inherit system; tools = toolNames; };
         } // nixpkgs.lib.optionalAttrs (builtins.elem system systems) {
           measure = (perSystem system).measure;
+          measure-image = (perSystem system).measureImage;
         });
 
       apps = nixpkgs.lib.genAttrs systems (system: {
