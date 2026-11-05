@@ -1,0 +1,24 @@
+name: measure-image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31.11.3
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix build .#packages.aarch64-linux.measure-image --print-build-logs --out-link image.tar.gz
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: winnow-media-measure-image
+          path: image.tar.gz
+          retention-days: 7
+          compression-level: 0
