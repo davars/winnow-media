@@ -166,11 +166,11 @@ func stillOp(p *Processor) func(path, dir string) (Usage, error) {
 
 func TestGIFFrameAtTheCapDecodesWithinTheBounds(t *testing.T) {
 	p := requireProcessor(t)
-	const side = 8000
-	if side*side != maxFramePixels {
-		t.Fatalf("fixture is %d pixels, the cap is %d", side*side, int64(maxFramePixels))
+	const w, h = 8000, 6500
+	if w*h != maxFramePixels {
+		t.Fatalf("fixture is %d pixels, the cap is %d", w*h, int64(maxFramePixels))
 	}
-	data := oneColourGIF(t, side, side, 1)
+	data := oneColourGIF(t, w, h, 1)
 	if len(data) > 1<<20 {
 		t.Fatalf("bomb is %d bytes, want a small file", len(data))
 	}
@@ -238,7 +238,7 @@ func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
 	p := requireProcessor(t)
 	bounds := refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}
 	for name, side := range map[string][2]int{
-		"one pixel row over the cap": {8000, 8001},
+		"one pixel row over the cap": {8000, 6501},
 		"100 megapixels":             {10000, 10000},
 	} {
 		t.Run(name, func(t *testing.T) {
