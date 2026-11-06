@@ -532,24 +532,26 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 		{"frames after encode", false, func() string { return writeGIF(t, real, solid, 6) }, 2},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := requireProcessor(t)
-			rec := record(p)
-			rec.failAfter = c.failAfter
-			out := t.TempDir()
-			var err error
-			if c.still {
-				_, _, err = p.Still(context.Background(), c.input(), Encoding{}, out)
-			} else {
-				_, _, err = p.AnimationFrames(context.Background(), c.input(), Encoding{}, 0, out)
-			}
-			if err == nil {
-				t.Fatal("operation succeeded")
-			}
-			if got := dirNames(t, out); len(got) != 0 {
-				t.Errorf("output dir holds %v", got)
-			}
-		})
+		opNames := animationFrameOpNames
+		if c.still {
+			opNames = []string{"still"}
+		}
+		for _, opName := range opNames {
+			t.Run(c.name+"/"+opName, func(t *testing.T) {
+				p := requireProcessor(t)
+				ops := animationFrameOps(p)
+				ops["still"] = stillOp(p)
+				rec := record(p)
+				rec.failAfter = c.failAfter
+				out := t.TempDir()
+				if _, err := ops[opName](c.input(), out); err == nil {
+					t.Fatal("operation succeeded")
+				}
+				if got := dirNames(t, out); len(got) != 0 {
+					t.Errorf("output dir holds %v", got)
+				}
+			})
+		}
 	}
 }
 
@@ -571,6 +573,20 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 		}
 		if got := dirNames(t, out); len(got) != 0 {
 			t.Errorf("failAfter=%d: output dir holds %v", failAfter, got)
+		}
+	}
+	// Header read, then one encode per batch of two of the four frames.
+	for _, failAfter := range []int{2, 3} {
+		p := requireProcessor(t)
+		rec := record(p)
+		rec.failAfter = failAfter
+		out := t.TempDir()
+		_, _, err := p.AnimationFramesAt(context.Background(), writeGIF(t, real, solid, 12), Encoding{}, []int{0, 3, 6, 9}, out)
+		if err == nil {
+			t.Fatalf("AnimationFramesAt failAfter=%d: operation succeeded", failAfter)
+		}
+		if got := dirNames(t, out); len(got) != 0 {
+			t.Errorf("AnimationFramesAt failAfter=%d: output dir holds %v", failAfter, got)
 		}
 	}
 }

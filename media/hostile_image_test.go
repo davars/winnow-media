@@ -148,10 +148,12 @@ func requireRefusal(t *testing.T, p *Processor, bounds refusalBounds, op func(pa
 	}
 }
 
-func animationOp(p *Processor) func(path, dir string) (Usage, error) {
-	return func(path, dir string) (Usage, error) {
-		_, u, err := p.AnimationFrames(context.Background(), path, Encoding{}, 0, dir)
-		return u, err
+// requireAnimationRefusals runs requireRefusal for every entry point that
+// reads an animation.
+func requireAnimationRefusals(t *testing.T, p *Processor, bounds refusalBounds, data []byte) {
+	t.Helper()
+	for name, op := range animationOps(p) {
+		t.Run(name, func(t *testing.T) { requireRefusal(t, p, bounds, op, data) })
 	}
 }
 
@@ -172,19 +174,30 @@ func TestGIFFrameAtTheCapDecodesWithinTheBounds(t *testing.T) {
 	if len(data) > 1<<20 {
 		t.Fatalf("bomb is %d bytes, want a small file", len(data))
 	}
-	start := time.Now()
-	images, usage, err := p.AnimationFrames(context.Background(), writeFile(t, "bomb.gif", data), Encoding{}, 0, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(images) != 1 {
-		t.Errorf("%d images, want 1", len(images))
-	}
-	if wall := time.Since(start); wall > 2*time.Minute {
-		t.Errorf("took %v, the bound is 2m", wall)
-	}
-	if usage.MaxRSS > 4<<30 {
-		t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
+	for name, run := range map[string]func(path string) ([]Image, Usage, error){
+		"AnimationFrames": func(path string) ([]Image, Usage, error) {
+			return p.AnimationFrames(context.Background(), path, Encoding{}, 0, t.TempDir())
+		},
+		"AnimationFramesAt": func(path string) ([]Image, Usage, error) {
+			return p.AnimationFramesAt(context.Background(), path, Encoding{}, []int{0}, t.TempDir())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			images, usage, err := run(writeFile(t, "bomb.gif", data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(images) != 1 {
+				t.Errorf("%d images, want 1", len(images))
+			}
+			if wall := time.Since(start); wall > 2*time.Minute {
+				t.Errorf("took %v, the bound is 2m", wall)
+			}
+			if usage.MaxRSS > 4<<30 {
+				t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
+			}
+		})
 	}
 }
 
@@ -194,19 +207,30 @@ func TestAnimationAtThePixelCapDecodesWithinTheBounds(t *testing.T) {
 	if frames*side*side != maxAnimationPixels || frames > maxAnimationFrames {
 		t.Fatalf("fixture is %d frames of %d pixels, the caps are %d and %d", frames, side*side, maxAnimationFrames, int64(maxAnimationPixels))
 	}
-	start := time.Now()
-	images, usage, err := p.AnimationFrames(context.Background(), writeFile(t, "full.gif", oneColourGIF(t, side, side, frames)), Encoding{}, 0, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(images) == 0 {
-		t.Error("no images")
-	}
-	if wall := time.Since(start); wall > 2*time.Minute {
-		t.Errorf("took %v, the bound is 2m", wall)
-	}
-	if usage.MaxRSS > 4<<30 {
-		t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
+	for name, run := range map[string]func(path string) ([]Image, Usage, error){
+		"AnimationFrames": func(path string) ([]Image, Usage, error) {
+			return p.AnimationFrames(context.Background(), path, Encoding{}, 0, t.TempDir())
+		},
+		"AnimationFramesAt": func(path string) ([]Image, Usage, error) {
+			return p.AnimationFramesAt(context.Background(), path, Encoding{}, []int{0, frames - 1}, t.TempDir())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			images, usage, err := run(writeFile(t, "full.gif", oneColourGIF(t, side, side, frames)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(images) == 0 {
+				t.Error("no images")
+			}
+			if wall := time.Since(start); wall > 2*time.Minute {
+				t.Errorf("took %v, the bound is 2m", wall)
+			}
+			if usage.MaxRSS > 4<<30 {
+				t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
+			}
+		})
 	}
 }
 
@@ -218,14 +242,14 @@ func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
 		"100 megapixels":             {10000, 10000},
 	} {
 		t.Run(name, func(t *testing.T) {
-			requireRefusal(t, p, bounds, animationOp(p), oneColourGIF(t, side[0], side[1], 1))
+			requireAnimationRefusals(t, p, bounds, oneColourGIF(t, side[0], side[1], 1))
 		})
 	}
 }
 
 func TestWebPOfMaximumDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
 	p := requireProcessor(t)
-	requireRefusal(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, animationOp(p), losslessWebP(16383, 16383))
+	requireAnimationRefusals(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, losslessWebP(16383, 16383))
 }
 
 func TestLosslessWebPFixtureIsOneColour(t *testing.T) {
@@ -260,5 +284,5 @@ func TestHEICDeclaringHugeDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
 
 func TestManyFrameGIFIsRefusedAfterTheHeaderRead(t *testing.T) {
 	p := requireProcessor(t)
-	requireRefusal(t, p, refusalBounds{wall: time.Second, maxRSS: 512 << 20}, animationOp(p), manyFrameGIF(1, 1, 10_000))
+	requireAnimationRefusals(t, p, refusalBounds{wall: time.Second, maxRSS: 512 << 20}, manyFrameGIF(1, 1, 10_000))
 }

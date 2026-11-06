@@ -126,13 +126,18 @@ func timestamps(delaysCS []int) []int64 {
 	var elapsedCS int64
 	for i, delay := range delaysCS {
 		out[i] = elapsedCS * 10
-		effective := delay
-		if effective < 2 {
-			effective = 10
-		}
-		elapsedCS += int64(effective)
+		elapsedCS += int64(displayDelayCS(delay))
 	}
 	return out
+}
+
+// displayDelayCS is the delay a frame is displayed for: a stored delay below
+// 2 centiseconds is shown as 10.
+func displayDelayCS(delay int) int {
+	if delay < 2 {
+		return 10
+	}
+	return delay
 }
 
 // EncodeRung encodes inputPath as a WebP at rung and returns the staged

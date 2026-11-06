@@ -1,6 +1,7 @@
 package media
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -64,6 +67,10 @@ type videoInfo struct {
 	rotation      int // display rotation in degrees
 	durationMS    int64
 	frames        int // 0 when unknown
+	declared      int // the container's frame count; 0 when it gives none
+	rate          float64
+	codec         string // empty unless the probe asked for it
+	hasAudio      bool
 	transfer      string
 	streams       int // streams in the container, of every kind
 }
@@ -80,6 +87,7 @@ func (v videoInfo) upright() (int, int) {
 type probeJSON struct {
 	Streams []struct {
 		Index         int    `json:"index"`
+		CodecName     string `json:"codec_name"`
 		CodecType     string `json:"codec_type"`
 		Width         int    `json:"width"`
 		Height        int    `json:"height"`
@@ -116,13 +124,22 @@ func inputArgs(dec decoder, path string) []string {
 	return append(args, "-f", dec.name, "-i", path)
 }
 
+// probeEntries is what ffprobe is asked to show for the sampling operations;
+// probeEntriesWithCodec also asks for each stream's codec name.
+const (
+	probeEntries = "stream=index,codec_type,width,height,duration,nb_frames,r_frame_rate,color_transfer" +
+		":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration"
+	probeEntriesWithCodec = "stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,color_transfer" +
+		":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration"
+)
+
+// probeVideo runs the probe that the sampling operations share.
 func probeVideo(ctx context.Context, env Env, dec decoder, path string) (videoInfo, error) {
-	args := append([]string{
-		"-v", "error", "-of", "json",
-		"-show_entries", "stream=index,codec_type,width,height,duration,nb_frames,r_frame_rate,color_transfer" +
-			":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration",
-	},
-		inputArgs(dec, path)...)
+	return runVideoProbe(ctx, env, dec, path, probeEntries)
+}
+
+func runVideoProbe(ctx context.Context, env Env, dec decoder, path, entries string) (videoInfo, error) {
+	args := append([]string{"-v", "error", "-of", "json", "-show_entries", entries}, inputArgs(dec, path)...)
 	res, err := env.Run(ctx, "ffprobe", args...)
 	if err != nil {
 		return videoInfo{}, fmt.Errorf("probing video: %w", err)
@@ -153,7 +170,15 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 		if s.Width < 1 || s.Height < 1 {
 			return videoInfo{}, fmt.Errorf("video stream reports size %dx%d", s.Width, s.Height)
 		}
-		v := videoInfo{stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer, streams: len(p.Streams)}
+		v := videoInfo{
+			stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer,
+			streams: len(p.Streams), codec: s.CodecName, rate: parseRate(s.RFrameRate),
+		}
+		for _, o := range p.Streams {
+			if o.CodecType == "audio" {
+				v.hasAudio = true
+			}
+		}
 		for _, sd := range s.SideData {
 			if sd.Rotation != nil {
 				v.rotation = ((int(math.Round(*sd.Rotation))%360 + 360) % 360)
@@ -167,7 +192,7 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 			v.durationMS = int64(math.Round(min(seconds, 1e12) * 1000))
 		}
 		if n, err := strconv.Atoi(s.NbFrames); err == nil && n > 0 {
-			v.frames = n
+			v.frames, v.declared = n, n
 		} else if rate := parseRate(s.RFrameRate); rate > 0 && v.durationMS > 0 {
 			v.frames = max(1, int(math.Round(float64(v.durationMS)/1000*rate)))
 		}
@@ -229,65 +254,83 @@ func ffmpegArgs(threads int) []string {
 // samplePrefix names the lossless intermediates inside the output directory.
 const samplePrefix = ".sample-"
 
-func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
+// videoPlan is what the probe decided about sampling a video: the stream,
+// the filter that sizes and tone-maps a frame and the decoder's threads.
+type videoPlan struct {
+	info    videoInfo
+	filter  string
+	tw, th  int // output size
+	threads int
+}
+
+// planVideo probes the video, refuses it if it exceeds a cap and decides how
+// its frames are sized. It is the first step of every video sampling.
+func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, enc encoding) (videoPlan, error) {
 	info, err := probeVideo(ctx, e, dec, inputPath)
 	if err != nil {
-		return nil, err
+		return videoPlan{}, err
 	}
 	if err := checkVideoInfo(info); err != nil {
-		return nil, err
+		return videoPlan{}, err
 	}
 	w, h := info.upright()
 	tw, th, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
-	filter := videoFilter(isHDRTransfer(info.transfer), resize, tw, th)
+	return videoPlan{
+		info:    info,
+		filter:  videoFilter(isHDRTransfer(info.transfer), resize, tw, th),
+		tw:      tw,
+		th:      th,
+		threads: ffmpegThreadsFor(info.width, info.height),
+	}, nil
+}
 
-	times := sampleTimesMS(info, maxFrames)
-	threads := ffmpegThreadsFor(info.width, info.height)
-	var scratch []string
-	defer func() {
-		for _, p := range scratch {
-			_ = os.Remove(p)
-		}
-	}()
-	type sample struct {
-		path   string
-		timeMS int64
+// ffmpegArgs returns the arguments of one ffmpeg run that seeks to seekMS,
+// decodes frames frames of the plan's stream and applies the plan's filter,
+// followed by output.
+func (v videoPlan) ffmpegArgs(dec decoder, inputPath string, seekMS int64, frames int, output ...string) []string {
+	args := append(ffmpegArgs(v.threads),
+		"-ss", fmt.Sprintf("%d.%03d", seekMS/1000, seekMS%1000),
+		"-threads", strconv.Itoa(v.threads))
+	args = append(args, inputArgs(dec, inputPath)...)
+	args = append(args,
+		"-map", fmt.Sprintf("0:%d", v.info.stream),
+		"-an", "-sn", "-dn", "-frames:v", strconv.Itoa(frames))
+	if v.filter != "" {
+		args = append(args, "-vf", v.filter)
 	}
-	var samples []sample
-	for i, t := range times {
-		path := filepath.Join(dir, fmt.Sprintf("%s%03d.png", samplePrefix, i))
-		scratch = append(scratch, path)
-		args := append(ffmpegArgs(threads),
-			"-ss", fmt.Sprintf("%d.%03d", t/1000, t%1000),
-			"-threads", strconv.Itoa(threads))
-		args = append(args, inputArgs(dec, inputPath)...)
-		args = append(args,
-			"-map", fmt.Sprintf("0:%d", info.stream),
-			"-an", "-sn", "-dn", "-frames:v", "1")
-		if filter != "" {
-			args = append(args, "-vf", filter)
-		}
-		args = append(args, "-c:v", "png", "-update", "1", path)
-		if _, err := e.Run(ctx, "ffmpeg", args...); err != nil {
-			return nil, fmt.Errorf("sampling frame at %d ms: %w", t, err)
-		}
-		// A seek past the last frame writes nothing; the sample is skipped.
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		samples = append(samples, sample{path, t})
+	return append(args, output...)
+}
+
+// checkSeekTime refuses a time that is negative or, unless it is 0, not
+// before the end of the video.
+func checkSeekTime(v videoInfo, ms int64) error {
+	if ms < 0 {
+		return fmt.Errorf("time %d ms is negative", ms)
 	}
+	if ms > 0 && ms >= v.durationMS {
+		return fmt.Errorf("time %d ms is not inside the video, whose duration is %d ms (0 when unknown)", ms, v.durationMS)
+	}
+	return nil
+}
+
+// sampledFrame is a lossless frame written by ffmpeg.
+type sampledFrame struct {
+	path   string
+	timeMS int64
+}
+
+// encodeVideoSamples encodes the samples to output frames in dir.
+func (e Env) encodeVideoSamples(ctx context.Context, enc encoding, dir string, plan videoPlan, samples []sampledFrame) ([]Image, error) {
 	if len(samples) == 0 {
 		return nil, errors.New("no frame could be sampled")
 	}
-
-	var paths []string
-	for _, s := range samples {
-		paths = append(paths, s.path)
+	paths := make([]string, len(samples))
+	for i, s := range samples {
+		paths[i] = s.path
 	}
 	var images []Image
 	encoder := sampleEncoder{
-		env: e, coder: "png", middle: []string{"-strip"}, enc: enc, dir: dir, framePixels: tw * th,
+		env: e, coder: "png", middle: []string{"-strip"}, enc: enc, dir: dir, framePixels: plan.tw * plan.th,
 		keep: func(i, n, w, h int) {
 			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, TimeMS: samples[i].timeMS})
 		},
@@ -296,6 +339,103 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 		return nil, err
 	}
 	return images, nil
+}
+
+// videoFrames samples up to maxFrames frames evenly.
+func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
+	return e.videoFramesPicked(ctx, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
+		return sampleTimesMS(info, maxFrames), nil
+	}, dir)
+}
+
+// videoFramesPicked samples the frames at the times pick chooses, given the
+// probe, which must be in ascending order without repeats, each by its own
+// seek.
+func (e Env) videoFramesPicked(ctx context.Context, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
+	plan, err := e.planVideo(ctx, dec, inputPath, enc)
+	if err != nil {
+		return nil, err
+	}
+	times, err := pick(plan.info)
+	if err != nil {
+		return nil, err
+	}
+	var scratch []string
+	defer func() {
+		for _, p := range scratch {
+			_ = os.Remove(p)
+		}
+	}()
+	var samples []sampledFrame
+	for i, t := range times {
+		path := filepath.Join(dir, fmt.Sprintf("%s%03d.png", samplePrefix, i))
+		scratch = append(scratch, path)
+		args := plan.ffmpegArgs(dec, inputPath, t, 1, "-c:v", "png", "-update", "1", path)
+		if _, err := e.Run(ctx, "ffmpeg", args...); err != nil {
+			return nil, fmt.Errorf("sampling frame at %d ms: %w", t, err)
+		}
+		// A seek past the last frame writes nothing; the sample is skipped.
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		samples = append(samples, sampledFrame{path, t})
+	}
+	return e.encodeVideoSamples(ctx, enc, dir, plan, samples)
+}
+
+// runSampleRE matches the scratch files of videoFrameRun, which ffmpeg names
+// by the frame's presentation time in ms relative to the seek.
+var runSampleRE = regexp.MustCompile(`^` + regexp.QuoteMeta(samplePrefix) + `(\d+)\.png$`)
+
+// videoFrameRun samples count consecutive frames from startMS in one ffmpeg
+// run.
+func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
+	plan, err := e.planVideo(ctx, dec, inputPath, enc)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSeekTime(plan.info, startMS); err != nil {
+		return nil, err
+	}
+	var scratch []string
+	defer func() {
+		for _, p := range scratch {
+			_ = os.Remove(p)
+		}
+	}()
+	pattern := strings.ReplaceAll(filepath.Join(dir, samplePrefix), "%", "%%") + "%d.png"
+	// The image muxer names each file by its frame's presentation time, which
+	// -enc_time_base makes milliseconds, so the names carry the real
+	// timestamps of frames the seek decided.
+	args := plan.ffmpegArgs(dec, inputPath, startMS, count,
+		"-c:v", "png", "-fps_mode", "passthrough", "-enc_time_base", "1:1000", "-frame_pts", "1", pattern)
+	_, runErr := e.Run(ctx, "ffmpeg", args...)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var samples []sampledFrame
+	for _, ent := range entries {
+		m := runSampleRE.FindStringSubmatch(ent.Name())
+		if m == nil {
+			continue
+		}
+		path := filepath.Join(dir, ent.Name())
+		scratch = append(scratch, path)
+		rel, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("unexpected sample name %q", ent.Name())
+		}
+		samples = append(samples, sampledFrame{path, startMS + rel})
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("sampling frames from %d ms: %w", startMS, runErr)
+	}
+	slices.SortFunc(samples, func(a, b sampledFrame) int { return cmp.Compare(a.timeMS, b.timeMS) })
+	if len(samples) > count {
+		samples = samples[:count]
+	}
+	return e.encodeVideoSamples(ctx, enc, dir, plan, samples)
 }
 
 // frameName is the name of the n-th output frame.

@@ -297,26 +297,51 @@ func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, 
 	return Image{Name: name, Width: sizes[0][0], Height: sizes[0][1]}, nil
 }
 
-func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc encoding, maxFrames int, dir string) ([]Image, error) {
+// animationLayout is what the header read of an animation decided: the
+// frames, the canvas and the upright size of the canvas.
+type animationLayout struct {
+	infos       []FrameInfo
+	cw, ch      int // canvas as stored, before any rotation
+	uw, uh      int // canvas after rotation
+	orientation string
+}
+
+// readAnimation reads the headers of every frame of path and refuses the file
+// if it exceeds a cap. It is the first step of every animation operation.
+func (e Env) readAnimation(ctx context.Context, dec decoder, path string) (animationLayout, error) {
 	scenes, err := readHeaders(ctx, e, dec, path, "", true)
+	if err != nil {
+		return animationLayout{}, err
+	}
+	l := animationLayout{infos: make([]FrameInfo, len(scenes)), orientation: scenes[0].orientation}
+	for i, s := range scenes {
+		l.infos[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
+		w, h := s.canvas()
+		l.cw, l.ch = max(l.cw, w), max(l.ch, h)
+	}
+	if l.cw < 1 || l.ch < 1 {
+		return animationLayout{}, fmt.Errorf("input reports size %dx%d", l.cw, l.ch)
+	}
+	l.uw, l.uh = uprightSize(l.cw, l.ch, l.orientation)
+	return l, nil
+}
+
+// animationFrames writes the frames pick chooses, given the number of source
+// frames, which must be indices in ascending order without repeats.
+func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc encoding, pick func(sourceFrames int) ([]int, error), dir string) ([]Image, error) {
+	layout, err := e.readAnimation(ctx, dec, path)
 	if err != nil {
 		return nil, err
 	}
-	infos := make([]FrameInfo, len(scenes))
-	var cw, ch int
-	for i, s := range scenes {
-		infos[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
-		w, h := s.canvas()
-		cw, ch = max(cw, w), max(ch, h)
-	}
-	if cw < 1 || ch < 1 {
-		return nil, fmt.Errorf("input reports size %dx%d", cw, ch)
-	}
-	uw, uh := uprightSize(cw, ch, scenes[0].orientation)
-	tw, th, resize := fitSize(uw, uh, enc.maxEdge, enc.maxArea)
+	infos, cw, ch := layout.infos, layout.cw, layout.ch
+	orientation := layout.orientation
+	tw, th, resize := fitSize(layout.uw, layout.uh, enc.maxEdge, enc.maxArea)
 
 	sourceFrames := len(infos)
-	selected := selectFrames(frameCount(maxFrames, sourceFrames, true), sourceFrames)
+	selected, err := pick(sourceFrames)
+	if err != nil {
+		return nil, err
+	}
 	if dec.name == "gif" {
 		own := make([]bool, len(infos))
 		for i, f := range infos {
@@ -326,10 +351,10 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 			sourceFrames: len(infos), cw: cw, ch: ch, tw: tw, th: th, resize: resize, own: own,
 		})
 	}
-	if dec.name == "webp" && len(scenes) > 1 {
+	if dec.name == "webp" && len(infos) > 1 {
 		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
 			sourceFrames: len(infos), cw: cw, ch: ch, tw: tw, th: th, resize: resize,
-			external: webpFramesTool, orientation: scenes[0].orientation,
+			external: webpFramesTool, orientation: orientation,
 		})
 	}
 	profiled, err := selectedProfiled(infos, selected)
