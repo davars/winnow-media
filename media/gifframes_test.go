@@ -10,7 +10,9 @@ import (
 	"image/gif"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -143,16 +145,17 @@ func TestCompositorMatchesMagickCoalesce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		g, layout, err := decodeGIF(data, 1000)
+		dec, err := newGIFDecoder(data, 1000)
 		if err != nil {
 			t.Fatal(err)
 		}
+		layout := dec.layout
 		var all []int
 		for i := range wantNames {
 			all = append(all, i)
 		}
 		var frames []*image.NRGBA
-		err = compositeGIF(g, layout.width, layout.height, layout.own, all, func(_ int, c *image.NRGBA, _ int) error {
+		err = compositeGIF(dec.frame, layout.width, layout.height, layout.own, all, func(_ int, c *image.NRGBA, _ int) error {
 			cp := image.NewNRGBA(c.Bounds())
 			copy(cp.Pix, c.Pix)
 			frames = append(frames, cp)
@@ -269,11 +272,11 @@ func TestPAMReadsBackIdentically(t *testing.T) {
 		{rect: image.Rect(4, 3, 16, 12), disposal: 1, delay: 5, palette: paletteA, shift: 3},
 	})
 	var canvas *image.NRGBA
-	dec, err := gif.DecodeAll(bytes.NewReader(g))
+	dec, err := newGIFDecoder(g, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = compositeGIF(dec, w, h, nil, []int{1}, func(_ int, c *image.NRGBA, _ int) error { canvas = c; return nil })
+	err = compositeGIF(dec.frame, w, h, nil, []int{1}, func(_ int, c *image.NRGBA, _ int) error { canvas = c; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,5 +296,91 @@ func TestPAMReadsBackIdentically(t *testing.T) {
 				t.Fatalf("(%d,%d): canvas %v, read back %v", x, y, p, q)
 			}
 		}
+	}
+}
+
+// compositorPeakRSS runs the compositor as a process over a one-colour GIF of
+// n frames of w x h and returns its peak resident set, having asked for the
+// first and last frame.
+func compositorPeakRSS(t *testing.T, w, h, n int) int64 {
+	t.Helper()
+	path := writeFile(t, "x.gif", oneColourGIF(t, w, h, n))
+	dir := t.TempDir()
+	args := []string{
+		path, dir, "2", strconv.Itoa(n), strconv.Itoa(w), strconv.Itoa(h),
+		fmt.Sprintf("0,%d", n-1), strings.Repeat("0", n), "60000",
+	}
+	cmd := exec.Command(os.Args[0], args...)
+	cmd.Env = append(os.Environ(), compositorEnv+"=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compositor: %v\n%s", err, out)
+	}
+	if got := dirNames(t, dir); len(got) != 2 {
+		t.Fatalf("compositor wrote %v, want 2 frames", got)
+	}
+	usage := UsageOf(cmd.ProcessState)
+	if usage == nil {
+		t.Skip("no resource usage on this platform")
+	}
+	return usage.MaxRSS
+}
+
+// TestCompositorMemoryDoesNotGrowWithFrameCount holds the canvas fixed and
+// multiplies the frames by ten. Holding every decoded frame would add 90
+// frames of 1.5 MB, 135 MB; one frame at a time adds nothing but noise.
+func TestCompositorMemoryDoesNotGrowWithFrameCount(t *testing.T) {
+	const w, h = 1500, 1000
+	few := compositorPeakRSS(t, w, h, 10)
+	many := compositorPeakRSS(t, w, h, 100)
+	const bound = 48 << 20
+	t.Logf("peak RSS: 10 frames %d MiB, 100 frames %d MiB", few>>20, many>>20)
+	if many-few > bound {
+		t.Errorf("100 frames peaked %d MiB above 10 frames, the bound is %d MiB", (many-few)>>20, bound>>20)
+	}
+}
+
+// TestFrameWithoutGraphicControlInheritsDisposal checks that a frame without
+// a graphic control extension has the disposal of the frame before it, as in
+// ImageMagick.
+func TestFrameWithoutGraphicControlInheritsDisposal(t *testing.T) {
+	env := requireMagick(t)
+	const w, h = 40, 30
+	// Frame 0 has disposal 2 and a small rectangle; frame 1 has no extension.
+	g := buildGIF(t, w, h, paletteA, []gifFrameSpec{
+		{rect: image.Rect(0, 0, w, h), disposal: gif.DisposalNone, delay: 5, palette: paletteA, shift: 0},
+		{rect: image.Rect(5, 5, 25, 20), disposal: gif.DisposalBackground, delay: 5, palette: paletteA, shift: 1},
+		{rect: image.Rect(10, 8, 30, 25), disposal: gif.DisposalNone, delay: 5, palette: paletteA, shift: 2},
+		{rect: image.Rect(0, 0, w, h), disposal: gif.DisposalNone, delay: 5, palette: paletteB, shift: 3},
+	})
+	// Remove the graphic control extension of frame 2, which then has frame
+	// 1's disposal.
+	i := bytes.Index(g, []byte{0x21, 0xF9, 0x04})
+	for range 2 {
+		i += 1 + bytes.Index(g[i+1:], []byte{0x21, 0xF9, 0x04})
+	}
+	g = append(g[:i:i], g[i+8:]...)
+	path := writeFile(t, "x.gif", g)
+	want := t.TempDir()
+	magick(t, env, "gif:"+path, "-coalesce", "-depth", "8", "+adjoin", filepath.Join(want, "%03d.png"))
+	dec, err := newGIFDecoder(g, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	err = compositeGIF(dec.frame, w, h, nil, []int{0, 1, 2, 3}, func(i int, c *image.NRGBA, _ int) error {
+		n++
+		b := readNRGBA(t, filepath.Join(want, fmt.Sprintf("%03d.png", i)))
+		for y := range h {
+			for x := range w {
+				p, q := c.NRGBAAt(x, y), b.NRGBAAt(x, y)
+				if p.A != q.A || (p.A > 0 && p != q) {
+					t.Fatalf("frame %d (%d,%d): compositor %v, magick %v", i, x, y, p, q)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil || n != 4 {
+		t.Fatalf("composited %d frames: %v", n, err)
 	}
 }
