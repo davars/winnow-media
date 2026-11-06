@@ -201,11 +201,11 @@ func TestGIFFrameAtTheCapDecodesWithinTheBounds(t *testing.T) {
 	}
 }
 
-func TestAnimationAtThePixelCapDecodesWithinTheBounds(t *testing.T) {
+func TestAnimationAtTheFrameCapDecodesWithinTheBounds(t *testing.T) {
 	p := requireProcessor(t)
-	const frames, side = 1000, 400
-	if frames*side*side != maxAnimationPixels || frames > maxAnimationFrames {
-		t.Fatalf("fixture is %d frames of %d pixels, the caps are %d and %d", frames, side*side, maxAnimationFrames, int64(maxAnimationPixels))
+	const frames, side = maxAnimationFrames, 256
+	if frames*side*side > maxDecodedPixels {
+		t.Fatalf("fixture is %d frames of %d pixels, the cap is %d", frames, side*side, int64(maxDecodedPixels))
 	}
 	for name, run := range map[string]func(path string) ([]Image, Usage, error){
 		"AnimationFrames": func(path string) ([]Image, Usage, error) {
@@ -285,4 +285,66 @@ func TestHEICDeclaringHugeDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
 func TestManyFrameGIFIsRefusedAfterTheHeaderRead(t *testing.T) {
 	p := requireProcessor(t)
 	requireAnimationRefusals(t, p, refusalBounds{wall: time.Second, maxRSS: 512 << 20}, manyFrameGIF(1, 1, 10_000))
+}
+
+func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
+	p := requireProcessor(t)
+	cases := []struct {
+		name          string
+		w, h, n, want int
+		refused       bool
+	}{
+		{"16 frames at the cap", 2000, 2000, 16, 16, false},
+		{"16 frames one row over", 2000, 2001, 16, 16, true},
+		{"15 frames of the same canvas", 2000, 2001, 15, 15, false},
+		{"fewer source frames than requested", 2000, 2001, 3, 16, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := oneColourGIF(t, c.w, c.h, c.n)
+			if c.refused {
+				requireRefusal(t, p, refusalBounds{wall: 10 * time.Second, maxRSS: 512 << 20},
+					func(path, dir string) (Usage, error) {
+						_, u, err := p.AnimationFrames(context.Background(), path, Encoding{}, c.want, dir)
+						return u, err
+					}, data)
+				return
+			}
+			images, _, err := p.AnimationFrames(context.Background(), writeFile(t, "a.gif", data), Encoding{}, c.want, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(images) == 0 {
+				t.Error("no images")
+			}
+		})
+	}
+}
+
+func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
+	p := requireProcessor(t)
+	data := oneColourGIF(t, 2000, 2001, 16)
+	indices := func(n int) []int {
+		out := make([]int, n)
+		for i := range out {
+			out[i] = i
+		}
+		return out
+	}
+	t.Run("16 frames one row over", func(t *testing.T) {
+		requireRefusal(t, p, refusalBounds{wall: 10 * time.Second, maxRSS: 512 << 20},
+			func(path, dir string) (Usage, error) {
+				_, u, err := p.AnimationFramesAt(context.Background(), path, Encoding{}, indices(16), dir)
+				return u, err
+			}, data)
+	})
+	t.Run("15 frames of the same canvas", func(t *testing.T) {
+		images, _, err := p.AnimationFramesAt(context.Background(), writeFile(t, "a.gif", data), Encoding{}, indices(15), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(images) == 0 {
+			t.Error("no images")
+		}
+	})
 }

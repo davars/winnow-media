@@ -28,17 +28,23 @@ const (
 	// 50 MP sensors (at most 8192x6144, 50.3 MP). Every format admitted at
 	// this size completes within the 1536Mi deployment limit.
 	maxFramePixels = 52_000_000
-	// maxAnimationFrames is the most frames an animation may hold. 2000
-	// frames complete in under 20 s whatever the canvas, and the count is
-	// below the policy's list length.
+	// maxAnimationFrames is the most frames an animation may hold. It is a
+	// structural bound, not a time bound: the header read holds about 62 KiB
+	// per frame (10000 frames of a GIF peaked at 624 MiB in ImageMagick), and
+	// the frame count stays below the policy's list length.
 	maxAnimationFrames = 2000
-	// maxAnimationPixels bounds frames times canvas area. For a GIF it
-	// bounds the compositor, which holds every decoded frame at one byte per
-	// pixel, and the work of decoding. For a WebP it bounds ImageMagick,
-	// which holds every composited frame at 16 bytes per pixel beside the
-	// decoded ones: a GIF of full-canvas frames read by ImageMagick
-	// completed at 185 MP and failed at 194 MP.
-	maxAnimationPixels = 160_000_000
+	// maxReturnedPixels bounds the frames a call returns times the canvas
+	// area, and maxDecodedPixels bounds all frames times the canvas area.
+	// With maxAnimationFrames they keep an animation within a 30 s budget per
+	// call on a Raspberry Pi 5: the worst admitted GIF, 225 frames of
+	// 2000x2000 with 16 returned (64 MP returned, 900 MP decoded), took 27.8 s
+	// there, and 16 frames of 2000x2000 alone took 20.2 s. A returned
+	// megapixel costs about 0.28 s and a decoded one about 0.01 s. Every frame
+	// up to the last selected is decoded because frames composite onto earlier
+	// ones, and a one-colour GIF under maxInputBytes can declare tens of
+	// gigapixels, so decoding needs its own bound.
+	maxReturnedPixels = 64_000_000
+	maxDecodedPixels  = 900_000_000
 	// maxStreams is the most streams, of any kind, a video container may
 	// hold. It is a structural bound, not a measured one.
 	maxStreams = 32
@@ -90,11 +96,12 @@ var composeTimeout = consumeTimeout
 // The ImageMagick policy ceilings. Width and height sit above maxDimension
 // so that the header read reaches the checks in this package, which report
 // ErrTooLarge, instead of failing inside the tool. Memory, map and disk
-// together hold the pixel cache of an animation at maxAnimationPixels; time
-// is at least four times the longest ImageMagick operation measured to
-// complete (36 s); a Raspberry Pi 5 measured at worst about 4 times a 12-CPU
-// x86_64 host (CPU 4.1 times for 4K HEVC decode, wall time 4.0 times for two
-// 8000x8000 GIF frames).
+// together hold the pixel cache of the frames a call returns, at
+// maxReturnedPixels, because the compositor decodes the rest outside the
+// tool; time is at least four times the longest ImageMagick operation
+// measured to complete (36 s); a Raspberry Pi 5 measured at worst about 4
+// times a 12-CPU x86_64 host (CPU 4.1 times for 4K HEVC decode, wall time 4.0
+// times for two 8000x8000 GIF frames).
 const (
 	policyMemory     = "1GiB"
 	policyMap        = "2GiB"
@@ -137,10 +144,21 @@ func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
 		cw, ch = max(cw, w), max(ch, h)
 	}
 	if animated {
-		if total := int64(len(scenes)) * int64(cw) * int64(ch); total > maxAnimationPixels {
-			return tooLarge("animation has %d frames of %dx%d, %d pixels in all, the limit is %d",
-				len(scenes), cw, ch, total, int64(maxAnimationPixels))
+		if total := int64(len(scenes)) * int64(cw) * int64(ch); total > maxDecodedPixels {
+			return tooLarge("animation has %d frames of %dx%d, %d pixels to decode, the limit is %d",
+				len(scenes), cw, ch, total, int64(maxDecodedPixels))
 		}
+	}
+	return nil
+}
+
+// checkReturnedPixels refuses a call that would return count frames of a
+// cw x ch canvas totalling more than maxReturnedPixels.
+func checkReturnedPixels(count, cw, ch int) error {
+	area := int64(cw) * int64(ch)
+	if total := int64(count) * area; total > maxReturnedPixels {
+		return tooLarge("%d frames of %dx%d are %d pixels to return, the limit is %d; at most %d frames fit",
+			count, cw, ch, total, int64(maxReturnedPixels), max(0, int64(maxReturnedPixels)/area))
 	}
 	return nil
 }

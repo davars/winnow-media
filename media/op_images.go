@@ -342,6 +342,9 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	if err != nil {
 		return nil, err
 	}
+	if err := checkReturnedPixels(len(selected), cw, ch); err != nil {
+		return nil, err
+	}
 	if dec.name == "gif" {
 		own := make([]bool, len(infos))
 		for i, f := range infos {
