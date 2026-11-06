@@ -104,42 +104,44 @@ func TestHostileAnimatedWebPsFailCleanly(t *testing.T) {
 	p := requireProcessor(t)
 	env := requireMagick(t)
 	for name, c := range hostileWebPs(t) {
-		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			path := writeFile(t, "x.webp", c.data)
-			scenes, headerErr := identifyScenes(ctx, env, decoder{"magick", "webp"}, path, "", true)
-			started := false
-			old := p.compose
-			t.Cleanup(func() { p.compose = old })
-			p.compose = func(ctx context.Context, req composeRequest, onFrame func(string, int) error) (*Usage, error) {
-				started = true
-				return old(ctx, req, onFrame)
-			}
-			out := t.TempDir()
-			images, _, err := p.AnimationFrames(ctx, path, Encoding{}, 0, out)
-			if ctx.Err() != nil {
-				t.Fatalf("timed out: %v", err)
-			}
-			switch {
-			case headerErr != nil:
-				if err == nil {
-					t.Error("no error for a file whose header cannot be read")
+		for _, entry := range animationImageEntries(p) {
+			t.Run(name+"/"+entry.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				path := writeFile(t, "x.webp", c.data)
+				scenes, headerErr := identifyScenes(ctx, env, decoder{"magick", "webp"}, path, "", true)
+				started := false
+				old := p.compose
+				t.Cleanup(func() { p.compose = old })
+				p.compose = func(ctx context.Context, req composeRequest, onFrame func(string, int) error) (*Usage, error) {
+					started = true
+					return old(ctx, req, onFrame)
 				}
-			case len(scenes) == 1:
-				if started {
-					t.Error("the tool was started for a file read as one image")
+				out := t.TempDir()
+				images, _, err := entry.run(ctx, path, out)
+				if ctx.Err() != nil {
+					t.Fatalf("timed out: %v", err)
 				}
-				if len(images) > 1 {
-					t.Errorf("%d frames from a file read as one image", len(images))
+				switch {
+				case headerErr != nil:
+					if err == nil {
+						t.Error("no error for a file whose header cannot be read")
+					}
+				case len(scenes) == 1:
+					if started {
+						t.Error("the tool was started for a file read as one image")
+					}
+					if len(images) > 1 {
+						t.Errorf("%d frames from a file read as one image", len(images))
+					}
 				}
-			}
-			if err != nil {
-				if got := dirNames(t, out); len(got) != 0 {
-					t.Errorf("failed, and the output dir holds %v", got)
+				if err != nil {
+					if got := dirNames(t, out); len(got) != 0 {
+						t.Errorf("failed, and the output dir holds %v", got)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -211,7 +213,7 @@ func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
 				started = true
 				return nil, nil
 			}
-			requireRefusal(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, animationOp(p), d)
+			requireAnimationRefusals(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, d)
 			if started {
 				t.Error("the tool was started")
 			}

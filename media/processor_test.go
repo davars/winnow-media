@@ -103,8 +103,10 @@ func TestMVGGivenToOperationsIsUnsupportedWithoutRunningATool(t *testing.T) {
 	if _, _, err := p.Still(context.Background(), mvg, Encoding{}, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
 		t.Errorf("Still: err = %v, want ErrUnsupportedType", err)
 	}
-	if _, _, err := p.AnimationFrames(context.Background(), mvg, Encoding{}, 0, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
-		t.Errorf("AnimationFrames: err = %v, want ErrUnsupportedType", err)
+	for name, op := range animationOps(p) {
+		if _, err := op(mvg, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
+			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
+		}
 	}
 	if n := rec.count(); n != 0 {
 		t.Errorf("%d tool runs", n)
@@ -118,9 +120,10 @@ func TestPNGNamedGIFIsUnsupportedWithoutRunningATool(t *testing.T) {
 	forbidCompositor(t, p)
 	png := filepath.Join(t.TempDir(), "x.gif")
 	magick(t, env, "-size", "8x8", "xc:red", "png:"+png)
-	_, _, err := p.AnimationFrames(context.Background(), png, Encoding{}, 0, t.TempDir())
-	if !errors.Is(err, ErrUnsupportedType) {
-		t.Errorf("err = %v, want ErrUnsupportedType", err)
+	for name, op := range animationOps(p) {
+		if _, err := op(png, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
+			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
+		}
 	}
 	if n := rec.count(); n != 0 {
 		t.Errorf("%d tool runs", n)
@@ -196,9 +199,10 @@ func TestInputSizeCap(t *testing.T) {
 	if err := os.Truncate(over, maxInputBytes+1); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := p.AnimationFrames(context.Background(), over, Encoding{}, 0, t.TempDir())
-	if !errors.Is(err, ErrTooLarge) {
-		t.Errorf("one byte over the cap: err = %v, want ErrTooLarge", err)
+	for name, op := range animationOps(p) {
+		if _, err := op(over, t.TempDir()); !errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s: one byte over the cap: err = %v, want ErrTooLarge", name, err)
+		}
 	}
 	if n := rec.count(); n != 0 {
 		t.Errorf("%d tool runs for an oversize file", n)
@@ -208,9 +212,10 @@ func TestInputSizeCap(t *testing.T) {
 	if err := os.Truncate(exact, maxInputBytes); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = p.AnimationFrames(context.Background(), exact, Encoding{}, 0, t.TempDir())
-	if errors.Is(err, ErrTooLarge) {
-		t.Errorf("exactly the cap was refused as too large: %v", err)
+	for name, op := range animationOps(p) {
+		if _, err := op(exact, t.TempDir()); errors.Is(err, ErrTooLarge) {
+			t.Errorf("%s: exactly the cap was refused as too large: %v", name, err)
+		}
 	}
 }
 
@@ -221,21 +226,23 @@ func TestHeaderCapRefusesBeforeDecoding(t *testing.T) {
 		"too tall":        gifBytes(10, maxDimension+1),
 		"too many pixels": gifBytes(maxDimension, maxDimension),
 	} {
-		t.Run(name, func(t *testing.T) {
-			rec := record(p)
-			defer func() { p.run = rec.inner }()
-			out := t.TempDir()
-			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "big.gif", g), Encoding{}, 0, out)
-			if !errors.Is(err, ErrTooLarge) {
-				t.Fatalf("err = %v, want ErrTooLarge", err)
-			}
-			if rec.count() != 1 || !slices.Contains(rec.calls[0], "-ping") {
-				t.Errorf("runs before refusal: %q, want the one header read", rec.calls)
-			}
-			if got := dirNames(t, out); len(got) != 0 {
-				t.Errorf("output dir holds %v", got)
-			}
-		})
+		for opName, op := range animationOps(p) {
+			t.Run(name+"/"+opName, func(t *testing.T) {
+				rec := record(p)
+				defer func() { p.run = rec.inner }()
+				out := t.TempDir()
+				_, err := op(writeFile(t, "big.gif", g), out)
+				if !errors.Is(err, ErrTooLarge) {
+					t.Fatalf("err = %v, want ErrTooLarge", err)
+				}
+				if rec.count() != 1 || !slices.Contains(rec.calls[0], "-ping") {
+					t.Errorf("runs before refusal: %q, want the one header read", rec.calls)
+				}
+				if got := dirNames(t, out); len(got) != 0 {
+					t.Errorf("output dir holds %v", got)
+				}
+			})
+		}
 	}
 }
 
@@ -391,18 +398,20 @@ func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 		"too many total pixels": manyFrameGIF(1000, 1000, maxAnimationPixels/1_000_000+1),
 	}
 	for name, g := range cases {
-		t.Run(name, func(t *testing.T) {
-			rec := record(p)
-			defer func() { p.run = rec.inner }()
-			forbidCompositor(t, p)
-			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "many.gif", g), Encoding{}, 0, t.TempDir())
-			if !errors.Is(err, ErrTooLarge) {
-				t.Fatalf("err = %v, want ErrTooLarge", err)
-			}
-			if rec.count() != 1 || !slices.Contains(rec.calls[0], "-ping") {
-				t.Errorf("runs before refusal: %q, want the one header read", rec.calls)
-			}
-		})
+		for opName, op := range animationOps(p) {
+			t.Run(name+"/"+opName, func(t *testing.T) {
+				rec := record(p)
+				defer func() { p.run = rec.inner }()
+				forbidCompositor(t, p)
+				_, err := op(writeFile(t, "many.gif", g), t.TempDir())
+				if !errors.Is(err, ErrTooLarge) {
+					t.Fatalf("err = %v, want ErrTooLarge", err)
+				}
+				if rec.count() != 1 || !slices.Contains(rec.calls[0], "-ping") {
+					t.Errorf("runs before refusal: %q, want the one header read", rec.calls)
+				}
+			})
+		}
 	}
 }
 

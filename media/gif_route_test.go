@@ -121,16 +121,18 @@ func TestBrokenGIFsFailCleanly(t *testing.T) {
 		"garbage after last frame": append(append([]byte{}, good[:len(good)-1]...), 0x55, 0x3B),
 		"frame outside the canvas": wide,
 	} {
-		t.Run(name, func(t *testing.T) {
-			out := t.TempDir()
-			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "x.gif", data), Encoding{}, 0, out)
-			if err == nil {
-				t.Fatal("no error")
-			}
-			if got := dirNames(t, out); len(got) != 0 {
-				t.Errorf("output dir holds %v", got)
-			}
-		})
+		for opName, op := range animationFrameOps(p) {
+			t.Run(name+"/"+opName, func(t *testing.T) {
+				out := t.TempDir()
+				_, err := op(writeFile(t, "x.gif", data), out)
+				if err == nil {
+					t.Fatal("no error")
+				}
+				if got := dirNames(t, out); len(got) != 0 {
+					t.Errorf("output dir holds %v", got)
+				}
+			})
+		}
 	}
 }
 

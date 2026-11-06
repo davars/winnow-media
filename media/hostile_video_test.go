@@ -158,13 +158,16 @@ func TestHLSPlaylistClaimedAsMP4(t *testing.T) {
 	playlist := writeFile(t, "x.mp4", hlsPlaylist("file://"+segment))
 
 	t.Run("refused before any tool runs", func(t *testing.T) {
-		rec := record(p)
-		_, _, err := p.VideoFrames(context.Background(), playlist, Encoding{}, 0, t.TempDir())
-		if !errors.Is(err, ErrUnsupportedType) {
-			t.Fatalf("err = %v, want ErrUnsupportedType", err)
-		}
-		if n := rec.count(); n != 0 {
-			t.Errorf("%d tool runs", n)
+		for _, entry := range videoEntries() {
+			rec := record(p)
+			err := entry.call(p, playlist, Encoding{}, 0, t.TempDir())
+			if !errors.Is(err, ErrUnsupportedType) {
+				t.Fatalf("%s: err = %v, want ErrUnsupportedType", entry.name, err)
+			}
+			if n := rec.count(); n != 0 {
+				t.Errorf("%s: %d tool runs", entry.name, n)
+			}
+			p.run = rec.inner
 		}
 	})
 

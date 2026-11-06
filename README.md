@@ -154,6 +154,47 @@ tools itself because the input is untrusted:
     external data file is not followed. Each ffmpeg run also sets
     `-threads 4` (decoder), `-filter_threads 4` and `-max_alloc` of 1 GiB.
 
+- `Processor.ProbeVideo(ctx, path) (VideoInfo, Usage, error)` reads the
+  properties of the video stream `VideoFrames` samples without decoding a
+  frame, in one `ffprobe` run: duration in ms, frame rate, upright width and
+  height, display rotation, whether it is HDR (HLG or PQ), codec name,
+  whether the container has an audio stream and the frame count the container
+  declares (0 when it declares none). It runs the gate and caps of
+  `VideoFrames`, so a file `VideoFrames` refuses is refused with the same
+  error.
+- `Processor.ProbeAnimation(ctx, path) (AnimationInfo, Usage, error)` reads
+  the frame count, upright canvas size and the display delay of each frame
+  (ms; a stored delay below 20 ms is 100, as browsers show it) from the
+  header read `AnimationFrames` makes, under the same gate and caps.
+- `Processor.VideoFramesAt(ctx, path, Encoding, timesMS []int64, dir)
+  ([]Image, Usage, error)` samples the given times, one seeked ffmpeg run
+  each, exactly as `VideoFrames` does; `VideoFrames` is this with evenly
+  spaced times. `timesMS` holds 1 to 64 times in any order; they are sorted
+  and repeats are sampled once. A time must be 0 or inside the duration;
+  anything else is an error before a frame is decoded. `Image.TimeMS` is the
+  requested time.
+- `Processor.VideoFrameRun(ctx, path, Encoding, startMS int64, count int, dir)
+  ([]Image, Usage, error)` returns `count` (1 to 64) consecutive frames from
+  the first one at or after `startMS`, from a single ffmpeg run (one `-ss`,
+  then `-frames:v count`), so its cost is one seek plus the decode of the
+  frames, not one seek per frame. ffmpeg names its scratch files by each
+  frame's presentation time in ms (`-frame_pts` with a 1/1000 encoder time
+  base), which is where `Image.TimeMS` comes from: the frame's own time, not
+  the request. A run that reaches the end returns fewer frames. `startMS` is
+  checked as the times of `VideoFramesAt` are.
+- `Processor.AnimationFramesAt(ctx, path, Encoding, indices []int, dir)
+  ([]Image, Usage, error)` writes the frames with the given indices through
+  the compositors `AnimationFrames` uses; `AnimationFrames` is this with
+  evenly spaced indices. `indices` holds 1 to 64 indices in any order, sorted
+  and de-duplicated; an index must be below `AnimationInfo.Frames`, else the
+  call is an error before a frame is decoded. `Image.Frame` is the index.
+- Every one of these runs the same gate as `VideoFrames` and `AnimationFrames`
+  (type from the bytes, size caps, header read and caps, sandbox, policy)
+  before it decodes anything; none reads a file without it. The limit of 64
+  samples per call is the largest the caps were measured with; a caller with
+  a time budget chooses a smaller count from `ProbeVideo`'s fields. As in
+  `VideoFrames`, a sample identical to the one before it is dropped.
+
 `path` and `dir` may be relative. Each call returns a `Usage`: the CPU time
 summed over every tool run of the call and the largest peak resident set size
 of any run, also when the call fails.

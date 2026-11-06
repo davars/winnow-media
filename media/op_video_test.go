@@ -126,16 +126,21 @@ func TestVideoFramesRefusals(t *testing.T) {
 		{"dir not empty", mp4, Encoding{}, 0, nonEmpty, false},
 		{"dir missing", mp4, Encoding{}, 0, filepath.Join(t.TempDir(), "absent"), false},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, _, err := p.VideoFrames(context.Background(), c.path, c.enc, c.maxFrames, c.dir)
-			if err == nil {
-				t.Fatal("VideoFrames succeeded")
+	for _, entry := range videoEntries() {
+		for _, c := range cases {
+			if entry.gateOnly && !c.unsupportedType {
+				continue
 			}
-			if got := errors.Is(err, ErrUnsupportedType); got != c.unsupportedType {
-				t.Errorf("errors.Is(err, ErrUnsupportedType) = %v, want %v (err %v)", got, c.unsupportedType, err)
-			}
-		})
+			t.Run(entry.name+"/"+c.name, func(t *testing.T) {
+				err := entry.call(p, c.path, c.enc, c.maxFrames, c.dir)
+				if err == nil {
+					t.Fatal("succeeded")
+				}
+				if got := errors.Is(err, ErrUnsupportedType); got != c.unsupportedType {
+					t.Errorf("errors.Is(err, ErrUnsupportedType) = %v, want %v (err %v)", got, c.unsupportedType, err)
+				}
+			})
+		}
 	}
 	if calls != 0 {
 		t.Errorf("%d tool runs before refusal", calls)
@@ -571,21 +576,23 @@ func TestVideoFramesRefusesOversizedProbeBeforeSampling(t *testing.T) {
 		"width":           `{"streams":[{"index":0,"codec_type":"video","width":16385,"height":16,"duration":"1"}],"format":{}}`,
 	}
 	for name, probe := range cases {
-		t.Run(name, func(t *testing.T) {
-			p := requireProcessor(t)
-			var tools []string
-			p.run = func(_ context.Context, tool string, _ ...string) (Result, error) {
-				tools = append(tools, tool)
-				return Result{Stdout: []byte(probe)}, nil
-			}
-			_, _, err := p.VideoFrames(context.Background(), mp4, Encoding{}, 0, t.TempDir())
-			if !errors.Is(err, ErrTooLarge) {
-				t.Errorf("err = %v, want ErrTooLarge", err)
-			}
-			if !slices.Equal(tools, []string{"ffprobe"}) {
-				t.Errorf("tools run = %v, want only the probe", tools)
-			}
-		})
+		for _, entry := range videoEntries() {
+			t.Run(name+"/"+entry.name, func(t *testing.T) {
+				p := requireProcessor(t)
+				var tools []string
+				p.run = func(_ context.Context, tool string, _ ...string) (Result, error) {
+					tools = append(tools, tool)
+					return Result{Stdout: []byte(probe)}, nil
+				}
+				err := entry.call(p, mp4, Encoding{}, 0, t.TempDir())
+				if !errors.Is(err, ErrTooLarge) {
+					t.Errorf("err = %v, want ErrTooLarge", err)
+				}
+				if !slices.Equal(tools, []string{"ffprobe"}) {
+					t.Errorf("tools run = %v, want only the probe", tools)
+				}
+			})
+		}
 	}
 }
 

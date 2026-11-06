@@ -152,11 +152,25 @@ type admitted struct {
 // that can be checked without running a tool. The input's type comes from its
 // leading bytes; neither its name nor any claim of the caller is consulted.
 func (p *Processor) admit(s spec, path, dir string) (admitted, error) {
-	path, err := filepath.Abs(path)
+	in, err := p.admitInput(s, path)
 	if err != nil {
 		return admitted{}, err
 	}
 	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return admitted{}, err
+	}
+	if err := requireEmptyDir(dir); err != nil {
+		return admitted{}, err
+	}
+	in.dir = dir
+	return in, nil
+}
+
+// admitInput is admit for an operation that writes no files: it checks the
+// input alone, and the result has no dir.
+func (p *Processor) admitInput(s spec, path string) (admitted, error) {
+	path, err := filepath.Abs(path)
 	if err != nil {
 		return admitted{}, err
 	}
@@ -178,10 +192,7 @@ func (p *Processor) admit(s spec, path, dir string) (admitted, error) {
 	if err != nil {
 		return admitted{}, err
 	}
-	if err := requireEmptyDir(dir); err != nil {
-		return admitted{}, err
-	}
-	return admitted{path: path, dir: dir, decoder: dec}, nil
+	return admitted{path: path, decoder: dec}, nil
 }
 
 // Still decodes the first image of a HEIC or HEIF file and writes it to dir
@@ -242,7 +253,9 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 	var m meter
 	env := p.env(&m)
 	images, err := inDir(in.dir, func() ([]Image, error) {
-		return env.animationFrames(ctx, in.decoder, in.path, ec, frames, in.dir)
+		return env.animationFrames(ctx, in.decoder, in.path, ec, func(sourceFrames int) ([]int, error) {
+			return selectFrames(frameCount(frames, sourceFrames, true), sourceFrames), nil
+		}, in.dir)
 	})
 	if err != nil {
 		return nil, m.usage, fmt.Errorf("animation frames: %w", err)
