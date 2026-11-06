@@ -26,7 +26,7 @@ const (
 	// maxFramePixels is the largest pixel count of one frame. A one-colour GIF
 	// frame of 81 MP completes under the policy and one of 90 MP does not, and
 	// two 64 MP frames complete.
-	maxFramePixels = 64_000_000
+	maxFramePixels = 52_000_000
 	// maxAnimationFrames is the most frames an animation may hold. 2000
 	// frames complete in under 20 s whatever the canvas, and the count is
 	// below the policy's list length.
