@@ -23,10 +23,11 @@ const (
 	// WebP cannot exceed 16383, and a 16000x16000 video decodes within the
 	// policy.
 	maxDimension = 16384
-	// maxFramePixels is the largest pixel count of one frame. A one-colour GIF
-	// frame of 81 MP completes under the policy and one of 90 MP does not, and
-	// two 64 MP frames complete.
-	maxFramePixels = 64_000_000
+	// maxFramePixels is the largest pixel count of one frame. The largest
+	// phone formats sit just below it: 48 MP iPhone (8064x6048, 48.8 MP) and
+	// 50 MP sensors (at most 8192x6144, 50.3 MP). Every format admitted at
+	// this size completes within the 1536Mi deployment limit.
+	maxFramePixels = 52_000_000
 	// maxAnimationFrames is the most frames an animation may hold. 2000
 	// frames complete in under 20 s whatever the canvas, and the count is
 	// below the policy's list length.

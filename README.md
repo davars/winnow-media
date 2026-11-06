@@ -166,7 +166,7 @@ type the operation accepts gives an error wrapping `ErrUnsupportedType`, which
 names the type found. The decoder is then pinned to that type, so no tool
 picks a format from content. Image headers are read without decoding pixels
 (`-ping`) and an input is refused when a frame is wider or taller than 16384
-pixels or has more than 64 million, when an animation has more than 2000
+pixels or has more than 52 million, when an animation has more than 2000
 frames or more than 160 million pixels in all, when a video stream is wider or
 taller than 16384 or longer than six hours (the stream's duration, else the
 container's), or when a video container holds more than 32 streams. These
@@ -268,8 +268,23 @@ this was built for have none, so file confinement rests on the container.
 A deployment for hostile input must supply it: a Deployment of its own with
 no shared network namespace, a non-root user, a read-only root filesystem,
 all capabilities dropped, `allowPrivilegeEscalation: false`, no secrets in
-the container, a size-limited scratch volume and a memory limit, and a
-network policy denying egress.
+the container, a memory limit, scratch on a size-limited volume, and a
+network policy denying egress. The measured model is one request per pod:
+
+- a memory limit of 1536Mi per request in flight;
+- scratch on a disk-backed `emptyDir` (never `medium: Memory`) with a
+  `sizeLimit` of about 8Gi, holding ImageMagick's temporary directory and the
+  processor's scratch. ImageMagick's pixel cache is memory-mapped there, so
+  its pages must be reclaimable under the memory limit;
+- an `ephemeral-storage` request covering the volume;
+- real disk on every node that can run the pod, since reclaiming writes
+  those pages back.
+
+Measured on a Raspberry Pi 5 (arm64), anonymous memory and total cgroup peak
+for the largest inputs admitted: 8K HLG video 1270 and 1337 MiB, a 2-frame
+52 MP GIF 1112 and 1932 MiB, a 52 MP 10-bit HEIC 944 and 960 MiB, and a
+52 MP WebP 810 and 2660 MiB. The file-backed part is the pixel cache, which
+the kernel reclaims under the limit.
 
 The limits come from per-process peaks sampled from `/proc` while `measure`
 ran its inputs on a 12-CPU x86_64 host: ImageMagick used up to 3.2 GiB of
