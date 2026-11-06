@@ -272,9 +272,16 @@ func TestCheckSceneHeaders(t *testing.T) {
 		{"canvas width over cap", []sceneHeader{{width: 10, height: 10, canvasW: maxDimension + 1, canvasH: 10}}, false, true},
 		{"frame pixels over cap", frames(1, 5311, 9791), false, true},
 		{"frame pixels at cap", frames(1, 8000, 6500), false, false},
-		{"total pixels at cap", frames(160, 1000, 1000), true, false},
-		{"total pixels over cap", frames(161, 1000, 1000), true, true},
-		{"total pixels uses largest canvas", append(frames(1000, 10, 10), sceneHeader{width: 1000, height: 1000, canvasW: 1000, canvasH: 1000}), true, true},
+		{"decoded pixels at cap", frames(900, 1000, 1000), true, false},
+		{"decoded pixels one row over", frames(900, 1000, 1001), true, true},
+		{"decoded pixels over cap", frames(901, 1000, 1000), true, true},
+		{"decoded pixels at cap, large canvas", frames(225, 2000, 2000), true, false},
+		{"decoded pixels one row over, large canvas", frames(225, 2000, 2001), true, true},
+		{"frame cap at decoded cap", frames(maxAnimationFrames, 670, 670), true, false},
+		{"frame cap over decoded cap", frames(maxAnimationFrames, 671, 671), true, true},
+		{"two frames at the frame pixel cap", frames(2, 8000, 6500), true, false},
+		{"two frames a row over the frame pixel cap", frames(2, 8000, 6501), true, true},
+		{"decoded pixels use largest canvas", append(frames(1000, 10, 10), sceneHeader{width: 1000, height: 1000, canvasW: 1000, canvasH: 1000}), true, true},
 	}
 	for _, c := range cases {
 		err := checkSceneHeaders(c.scenes, c.animated)
@@ -290,6 +297,31 @@ func TestCheckSceneHeaders(t *testing.T) {
 	}
 	if err := checkVideoSize(1, maxDimension+1); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("tall video: err = %v", err)
+	}
+}
+
+func TestCheckReturnedPixels(t *testing.T) {
+	cases := []struct {
+		name         string
+		count, w, h  int
+		refused      bool
+		wantFitCount string
+	}{
+		{"at cap", 16, 2000, 2000, false, ""},
+		{"one row over", 16, 2000, 2001, true, "at most 15 frames fit"},
+		{"fewer frames", 15, 2000, 2001, false, ""},
+		{"one frame of the largest frame", 1, 8000, 6500, false, ""},
+		{"64 frames of a small canvas", 64, 1000, 1000, false, ""},
+		{"64 frames one row over", 64, 1000, 1001, true, "at most 63 frames fit"},
+	}
+	for _, c := range cases {
+		err := checkReturnedPixels(c.count, c.w, c.h)
+		if got := errors.Is(err, ErrTooLarge); got != c.refused || (err != nil && !got) {
+			t.Errorf("%s: err = %v, want refused = %v", c.name, err, c.refused)
+		}
+		if c.refused && !strings.Contains(err.Error(), c.wantFitCount) {
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.wantFitCount)
+		}
 	}
 }
 
@@ -395,7 +427,8 @@ func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 	p := requireProcessor(t)
 	cases := map[string][]byte{
 		"too many frames":       manyFrameGIF(1, 1, maxAnimationFrames+1),
-		"too many total pixels": manyFrameGIF(1000, 1000, maxAnimationPixels/1_000_000+1),
+		"too many total pixels": manyFrameGIF(1000, 1000, 901),
+		"one row over the cap":  manyFrameGIF(2000, 2001, 225),
 	}
 	for name, g := range cases {
 		for opName, op := range animationOps(p) {
