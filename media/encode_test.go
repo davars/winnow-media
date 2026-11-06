@@ -1,9 +1,11 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -67,9 +69,9 @@ func TestColorStagePlacement(t *testing.T) {
 	stillUntagged := stillArgs("/in", "/out.webp", 640, "", profile, "", false, testQuality)
 	assertNoProfile(t, "unprofiled still", stillUntagged)
 
-	animation := animationPipeline("/in", 640, "1-3", "", profile, true)
+	animation := animationPipeline("/in", 640, "", profile, true)
 	assertProfileBetween(t, "animation probe/encode", animation, profile, "-auto-orient", "-thumbnail")
-	animationUntagged := animationPipeline("/in", 640, "1-3", "", profile, false)
+	animationUntagged := animationPipeline("/in", 640, "", profile, false)
 	assertNoProfile(t, "unprofiled animation", animationUntagged)
 }
 
@@ -322,22 +324,6 @@ func writeWideGamutStill(t *testing.T, env Env, srgb string) string {
 	return renameToContent(t, withExtension)
 }
 
-func writeWideGamutAnimation(t *testing.T, env Env, srgb string) string {
-	t.Helper()
-	dir := t.TempDir()
-	adobe := writeAdobeProfile(t, dir)
-	frames := []string{filepath.Join(dir, "frame-0.png"), filepath.Join(dir, "frame-1.png")}
-	gradients := []string{"gradient:#0020ff-#ffb000", "gradient:#00e080-#d020ff"}
-	for i := range frames {
-		magick(t, env, "-size", "256x96", gradients[i], "-profile", srgb, "-profile", adobe, frames[i])
-	}
-	// MIFF preserves the per-scene profiles that an animated GIF or WebP
-	// would strip.
-	withExtension := filepath.Join(dir, "wide.miff")
-	magick(t, env, "-delay", "10", frames[0], "-delay", "20", frames[1], "-profile", adobe, "-loop", "0", withExtension)
-	return renameToContent(t, withExtension)
-}
-
 // The fixture is stored in Adobe RGB, not merely tagged as sRGB: omitting the
 // destination -profile gives a visibly different WebP.
 func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
@@ -374,46 +360,101 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 	}
 }
 
+// The frames of the animated WebP carry an Adobe RGB profile ImageMagick does
+// not read from an animation, so the conversion comes from the compositor's
+// report of the profile with each frame.
 func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
+	requireWebPBuilders(t)
 	env := requireMagick(t)
 	destination := writeSRGBProfile(t)
-	input := writeWideGamutAnimation(t, env, destination)
+	adobe := writeAdobeProfile(t, t.TempDir())
+	adobeBytes, err := os.ReadFile(adobe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := withWebPChunk(t, buildWebP(t, webpCase{codec: "lossless", frames: 2}), "icc", adobeBytes)
 
 	frames, err := env.ProbeFrames(context.Background(), input, "image/webp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(frames) != 2 || !frames[0].hasICC || !frames[1].hasICC {
-		t.Fatalf("animation profile flags = %+v, want two profiled frames", frames)
-	}
-	actual, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), input, "image/webp",
-		true, Rung{CeilingPx: 128, MaxFrames: 2}, frames, destination, "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-	if len(mapping) != 2 {
-		t.Fatalf("animation mapping has %d frames, want 2", len(mapping))
-	}
 
+	// The stored pixels, converted from Adobe RGB and not.
 	dir := t.TempDir()
+	var convertedArgs, plainArgs []string
+	for k := range 2 {
+		path := filepath.Join(dir, fmt.Sprintf("f%d.png", k))
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, webpFrameImage(k, webpCanvasW, webpCanvasH, false)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		convertedArgs = append(convertedArgs, "(", "-delay", "10", path, "-profile", adobe, "-profile", destination, ")")
+		plainArgs = append(plainArgs, "(", "-delay", "10", path, ")")
+	}
 	reference := filepath.Join(dir, "reference.webp")
 	unconverted := filepath.Join(dir, "unconverted.webp")
-	magick(t, env, append(animationPipeline(input, 128, "", "", destination, true),
-		"-quality", strconv.Itoa(testQuality), reference)...)
-	magick(t, env, append(animationPipeline(input, 128, "", "", destination, false),
-		"-quality", strconv.Itoa(testQuality), unconverted)...)
-	for i := range mapping {
-		if diff := animationFrameDifference(t, env, actual, reference, i); diff > 0.004 {
-			t.Errorf("corrected animation frame %d differs from explicit sRGB reference by %.6f, want <= 0.004", i, diff)
+	magick(t, env, append(convertedArgs, "-quality", strconv.Itoa(testQuality), reference)...)
+	magick(t, env, append(plainArgs, "-quality", strconv.Itoa(testQuality), unconverted)...)
+
+	// An empty profilePath, as for a caller that saw no profile in the
+	// headers, falls back to the package's own sRGB profile.
+	for _, profilePath := range []string{destination, ""} {
+		actual, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), input, "image/webp",
+			true, Rung{CeilingPx: 128, MaxFrames: 2}, frames, profilePath, "", testQuality)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if diff := animationFrameDifference(t, env, actual, unconverted, i); diff < 0.012 {
-			t.Errorf("corrected animation frame %d differs from unconverted reinterpretation by %.6f, want >= 0.012", i, diff)
+		defer cleanup()
+		if len(mapping) != 2 {
+			t.Fatalf("animation mapping has %d frames, want 2", len(mapping))
+		}
+		for i := range mapping {
+			diff := animationFrameDifference(t, env, actual, reference, i)
+			plain := animationFrameDifference(t, env, actual, unconverted, i)
+			t.Logf("profilePath %q frame %d: %.6f from the converted reference, %.6f from the unconverted one", profilePath, i, diff, plain)
+			if diff > 0.004 {
+				t.Errorf("profilePath %q: corrected animation frame %d differs from explicit sRGB reference by %.6f, want <= 0.004", profilePath, i, diff)
+			}
+			if plain < 0.01 {
+				t.Errorf("profilePath %q: corrected animation frame %d differs from unconverted reinterpretation by %.6f, want >= 0.01", profilePath, i, plain)
+			}
 		}
 	}
 }
 
-// An untagged image must receive neither an ICC assignment nor a conversion.
+// The orientation the header read reports is applied to the composited
+// frames, which carry none, before the resize.
+func TestEncodeRungAppliesTheHeaderOrientationToAnimatedWebP(t *testing.T) {
+	requireWebPBuilders(t)
+	real := requireMagick(t)
+	env := real
+	env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
+		res, err := real.Run(ctx, name, args...)
+		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
+			res.Stdout = bytes.ReplaceAll(res.Stdout, []byte("|Undefined|END"), []byte("|RightTop|END"))
+		}
+		return res, err
+	}
+	env = stagedEnv(env, t.TempDir())
+	path := buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 4})
+	frames, err := env.ProbeFrames(context.Background(), path, "image/webp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cleanup, w, h, _, err := env.EncodeRung(context.Background(), path, "image/webp",
+		true, Rung{CeilingPx: 128, MaxFrames: 4}, frames, "", "", testQuality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if w != webpCanvasH || h != webpCanvasW {
+		t.Errorf("artifact is %dx%d, want %dx%d", w, h, webpCanvasH, webpCanvasW)
+	}
+}
+
 func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
 	env := requireMagick(t)
 	withExtension := filepath.Join(t.TempDir(), "untagged.png")

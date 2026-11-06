@@ -36,10 +36,19 @@ are resolved, limited and cancelled, and where scratch files live.
   `Stage` is a `Stager` that creates an empty scratch file whose name ends in
   an extension (`".webp"`) and returns its path and a cleanup function.
 - Bounded WebP encodes: `Env.ProbeFrames` reads each scene's delay and
-  ICC flag from the headers; `Ladder` lists the fallback rungs (frames are
-  spent before resolution); `Env.EncodeRung` encodes one rung as a WebP, still
-  or animation, and returns the frame mapping the artifact holds, with the
-  colour, orientation, no-upscale and resource-limit arguments applied.
+  ICC flag from the headers, without decoding, so a still of any size is
+  accepted (a single-frame WebP is decoded once for its profile); a GIF or
+  WebP of more than one frame is refused with `ErrTooLarge` over the
+  frame-size, frame-count and decoded-pixel caps above. `Ladder` lists the
+  fallback rungs (frames are spent before resolution). `Env.EncodeRung`
+  encodes one rung as a WebP, still or animation, and returns the frame
+  mapping the artifact holds, with the colour, orientation, no-upscale and
+  resource-limit arguments applied. It composites an animation's selected
+  frames itself (a GIF in process, a WebP with `webp-frames`, which `Env.Run`
+  must be able to run) and gives ImageMagick only those frames, at about four
+  bytes of scratch space per pixel of canvas for each, so what ImageMagick
+  holds does not grow with the length of the animation; it applies the
+  animation caps to the frames it is given.
   `Env.IdentifyArtifact` is the post-encode scene and size check.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless

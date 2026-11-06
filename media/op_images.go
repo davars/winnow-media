@@ -105,7 +105,7 @@ func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector st
 	if ping {
 		args = append(args, "-ping")
 	}
-	args = append(args, "-format", "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n", dec.name+":"+path+selector)
+	args = append(args, "-format", sceneHeaderFormat, dec.name+":"+path+selector)
 	res, err := env.Run(ctx, "magick", args...)
 	if err != nil {
 		// The policy's list length stops the read of a file with more scenes
@@ -115,7 +115,15 @@ func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector st
 		}
 		return nil, fmt.Errorf("reading headers: %w", err)
 	}
-	trimmed := strings.TrimRight(string(res.Stdout), "\n")
+	return parseSceneHeaders(res.Stdout)
+}
+
+// sceneHeaderFormat is the identify -format that parseSceneHeaders reads.
+const sceneHeaderFormat = "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n"
+
+// parseSceneHeaders reads the output of identify -format sceneHeaderFormat.
+func parseSceneHeaders(out []byte) ([]sceneHeader, error) {
+	trimmed := strings.TrimRight(string(out), "\n")
 	if trimmed == "" {
 		return nil, fmt.Errorf("identify returned no scenes")
 	}
