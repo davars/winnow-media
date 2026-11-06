@@ -44,7 +44,7 @@ are resolved, limited and cancelled, and where scratch files live.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
   path.
-- `Env.GenerateVideoThumbnails` (and `VideoThumbnailArgs`) samples up to fifteen
+- `Env.GenerateVideoThumbnails` seeks to up to fifteen
   evenly spaced frames of a video stream into two animated WebP thumbnails.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts.
