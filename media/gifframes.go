@@ -3,6 +3,7 @@ package media
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -467,43 +468,82 @@ func runCompositor(args []string, out io.Writer) (err error) {
 		}
 		selected = append(selected, n)
 	}
-	data, err := os.ReadFile(path)
+	job := gifJob{path: path, dir: dir, frames: frames, width: width, height: height, mask: mask, selected: selected}
+	return job.run(context.Background(), func(ordinal int) error {
+		if ordinal < inFlight {
+			return nil
+		}
+		deadline := time.Now().Add(timeout)
+		for {
+			_, err := os.Stat(filepath.Join(dir, gifSampleName(ordinal-inFlight)))
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("frame %d not consumed in %v", ordinal-inFlight, timeout)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}, func(ordinal, profile int) error {
+		_, err := fmt.Fprintln(out, ordinal, profile)
+		return err
+	})
+}
+
+// gifJob is a request to composite the selected frames of the GIF at path
+// into PAM files in dir. frames, width, height and mask (see ownMask) are what
+// the header read found; the GIF must agree.
+type gifJob struct {
+	path, dir             string
+	frames, width, height int
+	mask                  string
+	selected              []int
+}
+
+// run decodes and composites the GIF and writes each selected frame to dir
+// as gifSampleName(ordinal), through a temporary name, with the profile it
+// carries written to composedProfileName before the first frame that uses it.
+// wait is called before each frame is written; written is called after, with
+// the ordinal and the id of the profile of the frame. Decoding stops with
+// ctx's error between frames.
+func (j gifJob) run(ctx context.Context, wait func(ordinal int) error, written func(ordinal, profile int) error) error {
+	data, err := os.ReadFile(j.path)
 	if err != nil {
 		return err
 	}
-	dec, err := newGIFDecoder(data, frames)
+	dec, err := newGIFDecoder(data, j.frames)
 	if err != nil {
 		return err
 	}
 	layout := dec.layout
-	if layout.frames != frames || layout.width != width || layout.height != height || ownMask(layout.ownFlags()) != mask {
+	if layout.frames != j.frames || layout.width != j.width || layout.height != j.height || ownMask(layout.ownFlags()) != j.mask {
 		return fmt.Errorf("GIF holds %d frames of %dx%d, the header read found %d of %dx%d, or they differ in their profiles",
-			layout.frames, layout.width, layout.height, frames, width, height)
+			layout.frames, layout.width, layout.height, j.frames, j.width, j.height)
 	}
-	written := map[int]bool{}
-
-	ordinal := 0
-	err = compositeGIF(dec.frame, width, height, layout.own, selected, func(_ int, canvas *image.NRGBA, profile int) error {
-		if ordinal >= inFlight {
-			deadline := time.Now().Add(timeout)
-			for {
-				_, err := os.Stat(filepath.Join(dir, gifSampleName(ordinal-inFlight)))
-				if errors.Is(err, os.ErrNotExist) {
-					break
-				}
-				if time.Now().After(deadline) {
-					return fmt.Errorf("frame %d not consumed in %v", ordinal-inFlight, timeout)
-				}
-				time.Sleep(2 * time.Millisecond)
-			}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	frame := func(i int) (*image.Paletted, byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
 		}
-		if profile > 0 && !written[profile] {
-			if err := os.WriteFile(filepath.Join(dir, composedProfileName(profile)), layout.profiles[profile-1], 0o600); err != nil {
+		return dec.frame(i)
+	}
+	profilesWritten := map[int]bool{}
+	ordinal := 0
+	err = compositeGIF(frame, j.width, j.height, layout.own, j.selected, func(_ int, canvas *image.NRGBA, profile int) error {
+		if wait != nil {
+			if err := wait(ordinal); err != nil {
 				return err
 			}
-			written[profile] = true
 		}
-		name := filepath.Join(dir, gifSampleName(ordinal))
+		if profile > 0 && !profilesWritten[profile] {
+			if err := os.WriteFile(filepath.Join(j.dir, composedProfileName(profile)), layout.profiles[profile-1], 0o600); err != nil {
+				return err
+			}
+			profilesWritten[profile] = true
+		}
+		name := filepath.Join(j.dir, gifSampleName(ordinal))
 		f, err := os.Create(name + ".tmp")
 		if err != nil {
 			return err
@@ -523,7 +563,7 @@ func runCompositor(args []string, out io.Writer) (err error) {
 			_ = os.Remove(name + ".tmp")
 			return err
 		}
-		_, err = fmt.Fprintln(out, ordinal, profile)
+		err = written(ordinal, profile)
 		ordinal++
 		return err
 	})
@@ -532,8 +572,8 @@ func runCompositor(args []string, out io.Writer) (err error) {
 	}
 	// Frames after the last selected one are decoded to validate the file,
 	// as a whole-file decode would.
-	for i := slices.Max(selected) + 1; i < frames; i++ {
-		if _, _, err := dec.frame(i); err != nil {
+	for i := slices.Max(j.selected) + 1; i < j.frames; i++ {
+		if _, _, err := frame(i); err != nil {
 			return err
 		}
 	}
