@@ -19,6 +19,10 @@ const (
 	typeWebP = "image/webp"
 	typeHEIC = "image/heic"
 	typeHEIF = "image/heif"
+	typeJPEG = "image/jpeg"
+	typePNG  = "image/png"
+	typeTIFF = "image/tiff"
+	typeAVIF = "image/avif"
 	typeMP4  = "video/mp4"
 	typeMOV  = "video/quicktime"
 	typeWebM = "video/webm"
@@ -51,6 +55,12 @@ func sniff(b []byte) (string, error) {
 	switch {
 	case bytes.HasPrefix(b, []byte("GIF87a")), bytes.HasPrefix(b, []byte("GIF89a")):
 		return typeGIF, nil
+	case bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF}):
+		return typeJPEG, nil
+	case bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")):
+		return typePNG, nil
+	case bytes.HasPrefix(b, []byte("II*\x00")), bytes.HasPrefix(b, []byte("MM\x00*")):
+		return typeTIFF, nil
 	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "WEBP":
 		return typeWebP, nil
 	case bytes.HasPrefix(b, []byte{0x1A, 0x45, 0xDF, 0xA3}):
@@ -102,6 +112,8 @@ func sniffFtyp(b []byte) (string, error) {
 		if heic && !avif {
 			return typeHEIF, nil
 		}
+	case avifBrands[major]:
+		return typeAVIF, nil
 	case major == "qt  ":
 		return typeMOV, nil
 	case mp4Brands[major]:
