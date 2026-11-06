@@ -39,6 +39,10 @@ var stillSpec = spec{
 	inputs: []acceptedInput{
 		{typeHEIC, decoder{"magick", "heic"}},
 		{typeHEIF, decoder{"magick", "heic"}},
+		{typeJPEG, decoder{"magick", "jpeg"}},
+		{typePNG, decoder{"magick", "png"}},
+		{typeTIFF, decoder{"magick", "tiff"}},
+		{typeAVIF, decoder{"magick", "avif"}},
 	},
 	tools:  []string{"magick"},
 	reads:  append([]string{"icc"}, outputCoders...),
