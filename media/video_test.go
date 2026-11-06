@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -103,10 +104,11 @@ func TestGenerateVideoThumbnailsSeeksEverySample(t *testing.T) {
 			t.Skipf("%s not available", name)
 		}
 	}
+	const frames = maxSelectFrames + 1
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.mp4")
-	if _, err := env.Run(context.Background(), "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=3:size=320x240:rate=25",
-		"-pix_fmt", "yuv420p", src); err != nil {
+	if _, err := env.Run(context.Background(), "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
+		"-frames:v", strconv.Itoa(frames), "-pix_fmt", "yuv420p", src); err != nil {
 		t.Fatalf("generating video fixture: %v", err)
 	}
 	var mu sync.Mutex
@@ -121,7 +123,7 @@ func TestGenerateVideoThumbnailsSeeksEverySample(t *testing.T) {
 		return inner(ctx, name, args...)
 	}
 	small, large := filepath.Join(dir, "small.webp"), filepath.Join(dir, "large.webp")
-	if err := env.GenerateVideoThumbnails(context.Background(), src, small, large, 0, 75, 64, 200, 80); err != nil {
+	if err := env.GenerateVideoThumbnails(context.Background(), src, small, large, 0, frames, 64, 200, 80); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,5 +172,71 @@ func TestGenerateVideoThumbnailsSeeksEverySample(t *testing.T) {
 	left, _ := filepath.Glob(filepath.Join(os.TempDir(), "winnow-video-thumbs-*"))
 	if len(left) != 0 {
 		t.Errorf("scratch directories left behind: %v", left)
+	}
+}
+
+func TestVideoSelectArgsDecodeTheWholeStream(t *testing.T) {
+	args := videoSelectArgs("/in.mov", "/small.webp", "/large.webp", 2, videoSample(150), 256, 1024, 80)
+	want := []string{
+		"-y",
+		"-i", "/in.mov",
+		"-an",
+		"-filter_complex", "[0:2]select='eq(n\\,0)+eq(n\\,10)+eq(n\\,20)+eq(n\\,30)+eq(n\\,40)+eq(n\\,50)+eq(n\\,60)+eq(n\\,70)+eq(n\\,80)+eq(n\\,90)+eq(n\\,100)+eq(n\\,110)+eq(n\\,120)+eq(n\\,130)+eq(n\\,140)',setpts=N/(2*TB),split=2[selected_small][selected_large];[selected_small]scale='min(256,iw)':'min(256,ih)':force_original_aspect_ratio=decrease[small];[selected_large]scale='min(1024,iw)':'min(1024,ih)':force_original_aspect_ratio=decrease[large]",
+		"-map", "[small]",
+		"-frames:v", "15",
+		"-loop", "0",
+		"-c:v", "libwebp",
+		"-quality", "80",
+		"-r", "2",
+		"/small.webp",
+		"-map", "[large]",
+		"-frames:v", "15",
+		"-loop", "0",
+		"-c:v", "libwebp",
+		"-quality", "80",
+		"-r", "2",
+		"/large.webp",
+	}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestGenerateVideoThumbnailsChoosesPathByFrameCount(t *testing.T) {
+	cases := []struct {
+		frames int
+		seek   bool
+	}{
+		{-1, false},
+		{0, false},
+		{1, false},
+		{maxSelectFrames, false},
+		{maxSelectFrames + 1, true},
+		{10 * maxSelectFrames, true},
+	}
+	for _, c := range cases {
+		var probes int
+		var runs [][]string
+		env := Env{Run: func(_ context.Context, name string, args ...string) (Result, error) {
+			switch name {
+			case "ffprobe":
+				probes++
+				return Result{Stdout: []byte(`{"streams":[{"width":64,"height":48,"avg_frame_rate":"25/1","start_time":"0"}],"format":{"start_time":"0"}}`)}, nil
+			case "ffmpeg":
+				runs = append(runs, args)
+			}
+			return Result{}, nil
+		}}
+		// The stub writes no samples, so a seeking run ends in an error.
+		_ = env.GenerateVideoThumbnails(context.Background(), "/in.mov", "/s.webp", "/l.webp", 0, c.frames, 64, 200, 80)
+		if c.seek {
+			if probes != 1 || len(runs) == 0 || !slices.Contains(runs[0], "-ss") {
+				t.Errorf("frames=%d: probes=%d runs=%v, want a probe and seeking runs", c.frames, probes, runs)
+			}
+			continue
+		}
+		if probes != 0 || len(runs) != 1 || !strings.Contains(strings.Join(runs[0], " "), "select=") {
+			t.Errorf("frames=%d: probes=%d runs=%v, want one select run and no probe", c.frames, probes, runs)
+		}
 	}
 }
