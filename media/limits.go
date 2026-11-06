@@ -3,6 +3,8 @@ package media
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 )
 
 // ErrTooLarge is returned, wrapped with the cap and the values that
@@ -45,10 +47,17 @@ const (
 	maxDurationMS = 6 * 3600 * 1000
 )
 
+// ffmpegThreads bounds the decoder's threads and the filter graph's;
+// MEASURE_FFMPEG_THREADS overrides it on the measurement branch.
+var ffmpegThreads = func() int {
+	if n, err := strconv.Atoi(os.Getenv("MEASURE_FFMPEG_THREADS")); err == nil && n > 0 {
+		return n
+	}
+	return 4
+}()
+
 // The ffmpeg decode limits.
 const (
-	// ffmpegThreads bounds the decoder's threads and the filter graph's.
-	ffmpegThreads = 4
 	// ffmpegMaxAlloc is the largest single allocation ffmpeg may make, in
 	// bytes. A 4K HDR frame needs 32 MiB, one float plane of the tone-mapping
 	// filters; 1 GiB is four times what an 8K frame needs.

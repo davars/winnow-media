@@ -38,6 +38,9 @@ type result struct {
 	ScratchMiB  float64            `json:"peak_scratch_mib"`
 	OOMKill     string             `json:"memory_events"`
 	Outputs     int                `json:"outputs"`
+	Samples     int                `json:"samples"`
+	PerSampleS  float64            `json:"per_sample_s"`
+	Threads     string             `json:"ffmpeg_threads_env"`
 	Error       string             `json:"error,omitempty"`
 	ChildSignal string             `json:"child_signal,omitempty"`
 }
@@ -47,10 +50,13 @@ type childResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+var samples *int
+
 func main() {
 	media.Init()
 	child := flag.Bool("child", false, "internal")
 	op := flag.String("op", "", "still, anim or video")
+	samples = flag.Int("samples", 64, "video samples")
 	flag.Parse()
 	if flag.NArg() != 1 || *op == "" {
 		fmt.Fprintln(os.Stderr, "usage: measure4d -op still|anim|video <file>")
@@ -80,7 +86,7 @@ func runChild(op, path string) {
 	switch op {
 	case "video":
 		var imgs []media.Image
-		imgs, _, err = p.VideoFrames(ctx, path, media.Encoding{}, 64, out)
+		imgs, _, err = p.VideoFrames(ctx, path, media.Encoding{}, *samples, out)
 		n = len(imgs)
 	case "anim":
 		var imgs []media.Image
@@ -184,7 +190,7 @@ func parent(op, path string) {
 		panic(err)
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
-	cmd := exec.Command(self, "-child", "-op", op, path)
+	cmd := exec.Command(self, "-child", "-op", op, "-samples", strconv.Itoa(*samples), path)
 	cmd.Env = append(os.Environ(), "TMPDIR="+scratch)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -246,6 +252,9 @@ func parent(op, path string) {
 	start := time.Now()
 	runErr := cmd.Wait()
 	r.WallS = time.Since(start).Seconds()
+	r.Samples = *samples
+	r.Threads = os.Getenv("MEASURE_FFMPEG_THREADS")
+	r.PerSampleS = r.WallS / float64(*samples)
 	close(done)
 	<-fin
 	if u := media.UsageOf(cmd.ProcessState); u != nil {
