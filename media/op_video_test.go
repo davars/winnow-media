@@ -696,3 +696,58 @@ func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
 		t.Errorf("output dir holds %v, want %v", got, want)
 	}
 }
+
+func TestVideoFramesUseFewerThreadsAboveFourK(t *testing.T) {
+	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
+	cases := []struct {
+		name     string
+		w, h     int
+		transfer string
+		rotation int
+		want     string
+	}{
+		{"UHD", 3840, 2160, "bt709", 0, "4"},
+		{"DCI 4K", 4096, 2160, "bt709", 0, "4"},
+		{"one column past DCI 4K", 4097, 2160, "bt709", 0, "2"},
+		{"8K SDR", 7680, 4320, "bt709", 0, "2"},
+		{"8K HLG", 7680, 4320, "arib-std-b67", 0, "2"},
+		{"rotated 4097x2160", 4097, 2160, "bt709", 90, "2"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessor(t)
+			probe := fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,`+
+				`"duration":"10","color_transfer":%q,"side_data_list":[{"rotation":%d}]}],"format":{}}`,
+				c.w, c.h, c.transfer, c.rotation)
+			rec := record(p)
+			rec.inner = func(_ context.Context, tool string, _ ...string) (Result, error) {
+				if tool == "ffprobe" {
+					return Result{Stdout: []byte(probe)}, nil
+				}
+				return Result{}, nil
+			}
+			// The fake writes no samples, so the call ends in an error after
+			// the ffmpeg runs have been recorded.
+			_, _, _ = p.VideoFrames(context.Background(), mp4, Encoding{}, 3, t.TempDir())
+			ran := 0
+			for _, call := range rec.calls {
+				if call[0] != "ffmpeg" {
+					continue
+				}
+				ran++
+				joined := " " + strings.Join(call[1:], " ") + " "
+				for _, want := range []string{
+					" -filter_threads " + c.want + " ",
+					" -threads " + c.want + " ",
+				} {
+					if !strings.Contains(joined, want) {
+						t.Errorf("ffmpeg call lacks %q: %q", want, call)
+					}
+				}
+			}
+			if ran == 0 {
+				t.Fatal("no ffmpeg call recorded")
+			}
+		})
+	}
+}

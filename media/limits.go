@@ -50,11 +50,28 @@ const (
 const (
 	// ffmpegThreads bounds the decoder's threads and the filter graph's.
 	ffmpegThreads = 4
+	// ffmpegLargeSourcePixels is the largest source, in pixels, sampled with
+	// ffmpegThreads: 4096x2160.
+	ffmpegLargeSourcePixels = 4096 * 2160
+	// ffmpegLargeSourceThreads replaces ffmpegThreads above that size. The
+	// HEVC decoder holds about one frame per thread plus references, so its
+	// memory is threads times frame size: an 8K 10-bit HLG source peaked at
+	// 1811 MiB with 4 threads and 1280 MiB with 2, for 28% more time.
+	ffmpegLargeSourceThreads = 2
 	// ffmpegMaxAlloc is the largest single allocation ffmpeg may make, in
 	// bytes. A 4K HDR frame needs 32 MiB, one float plane of the tone-mapping
 	// filters; 1 GiB is four times what an 8K frame needs.
 	ffmpegMaxAlloc = 1 << 30
 )
+
+// ffmpegThreadsFor returns the thread count for sampling a width x height
+// source. The stored size is used because rotation leaves the product alone.
+func ffmpegThreadsFor(width, height int) int {
+	if width*height > ffmpegLargeSourcePixels {
+		return ffmpegLargeSourceThreads
+	}
+	return ffmpegThreads
+}
 
 // policyTimeSeconds is the ImageMagick policy's time ceiling, the longest any
 // one run may take. A compositor waits no longer than this for ImageMagick to

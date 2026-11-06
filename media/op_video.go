@@ -218,11 +218,11 @@ func sampleTimesMS(v videoInfo, maxFrames int) []int64 {
 
 // ffmpegArgs returns the arguments every ffmpeg run starts with: no banner,
 // no stdin, errors only, and the allocation and filter-thread bounds.
-func ffmpegArgs() []string {
+func ffmpegArgs(threads int) []string {
 	return []string{
 		"-hide_banner", "-nostdin", "-v", "error", "-y",
 		"-max_alloc", strconv.Itoa(ffmpegMaxAlloc),
-		"-filter_threads", strconv.Itoa(ffmpegThreads),
+		"-filter_threads", strconv.Itoa(threads),
 	}
 }
 
@@ -242,6 +242,7 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 	filter := videoFilter(isHDRTransfer(info.transfer), resize, tw, th)
 
 	times := sampleTimesMS(info, maxFrames)
+	threads := ffmpegThreadsFor(info.width, info.height)
 	var scratch []string
 	defer func() {
 		for _, p := range scratch {
@@ -256,9 +257,9 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 	for i, t := range times {
 		path := filepath.Join(dir, fmt.Sprintf("%s%03d.png", samplePrefix, i))
 		scratch = append(scratch, path)
-		args := append(ffmpegArgs(),
+		args := append(ffmpegArgs(threads),
 			"-ss", fmt.Sprintf("%d.%03d", t/1000, t%1000),
-			"-threads", strconv.Itoa(ffmpegThreads))
+			"-threads", strconv.Itoa(threads))
 		args = append(args, inputArgs(dec, inputPath)...)
 		args = append(args,
 			"-map", fmt.Sprintf("0:%d", info.stream),
