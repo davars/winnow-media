@@ -167,9 +167,13 @@ names the type found. The decoder is then pinned to that type, so no tool
 picks a format from content. Image headers are read without decoding pixels
 (`-ping`) and an input is refused when a frame is wider or taller than 16384
 pixels or has more than 64 million, when an animation has more than 2000
-frames or more than 160 million pixels in all, when a video stream is wider or
-taller than 16384 or longer than six hours (the stream's duration, else the
-container's), or when a video container holds more than 32 streams. These
+frames or more than 900 million pixels to decode (all frames times the
+canvas), when a video stream is wider or taller than 16384 or longer than six
+hours (the stream's duration, else the container's), or when a video
+container holds more than 32 streams. `AnimationFrames` also refuses a call
+whose returned frames (the lesser of `maxFrames` and the source's frames)
+times the canvas exceed 64 million pixels, and the message names the largest
+count that fits. These
 refusals wrap `ErrTooLarge`, naming the cap and the values.
 
 **Where the numbers come from.** The caps and ceilings were set from

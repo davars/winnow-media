@@ -320,7 +320,11 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	tw, th, resize := fitSize(uw, uh, enc.maxEdge, enc.maxArea)
 
 	sourceFrames := len(infos)
-	selected := selectFrames(frameCount(maxFrames, sourceFrames, true), sourceFrames)
+	count := frameCount(maxFrames, sourceFrames, true)
+	if err := checkReturnedPixels(count, cw, ch); err != nil {
+		return nil, err
+	}
+	selected := selectFrames(count, sourceFrames)
 	if dec.name == "gif" {
 		own := make([]bool, len(infos))
 		for i, f := range infos {
