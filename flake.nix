@@ -152,9 +152,17 @@
             version = "0";
             inherit src;
             vendorHash = null;
-            subPackages = [ "internal/cmd/measure" ];
+            subPackages = [ "internal/cmd/measure" "internal/cmd/measure4d" ];
             ldflags = ldflags { inherit system; tools = measureTools; };
             meta.mainProgram = "measure";
+          };
+
+          measureImage = pkgs.dockerTools.buildLayeredImage {
+            name = "winnow-media-measure";
+            tag = "latest";
+            contents = [ measure pkgs.busybox ];
+            extraCommands = "mkdir -m 1777 tmp";
+            config.Entrypoint = [ "${measure}/bin/measure" ];
           };
 
           probeTools = [ "imagemagick" ];
@@ -180,7 +188,7 @@
           '';
         in
         {
-          inherit pkgs tools allTools golangci-lint buildGoModule gate closureCheck measure;
+          inherit pkgs tools allTools golangci-lint buildGoModule gate closureCheck measure measureImage;
         };
     in
     {
@@ -189,6 +197,7 @@
           default = toolDir { inherit system; tools = toolNames; };
         } // nixpkgs.lib.optionalAttrs (builtins.elem system systems) {
           measure = (perSystem system).measure;
+          measure-image = (perSystem system).measureImage;
         });
 
       apps = nixpkgs.lib.genAttrs systems (system: {

@@ -1,0 +1,28 @@
+name: measure-image
+
+on:
+  push:
+    branches: [measure-4d]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31.11.3
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - run: nix build .#packages.aarch64-linux.measure-image --print-build-logs --out-link image.tar.gz
+      - name: push to ghcr
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nix run nixpkgs#skopeo -- copy \
+            --dest-creds "${{ github.actor }}:$TOKEN" \
+            docker-archive:image.tar.gz \
+            "docker://ghcr.io/davars/winnow-media-measure:sha-${GITHUB_SHA::7}"
