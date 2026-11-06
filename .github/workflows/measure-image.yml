@@ -2,7 +2,7 @@ name: measure-image
 
 on:
   push:
-    branches: [measure-4d]
+    branches: [measure-anim]
 
 permissions:
   contents: read

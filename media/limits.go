@@ -18,7 +18,7 @@ var ErrTooLarge = errors.New("input too large")
 const (
 	// maxInputBytes is the largest input file, inclusive. It is a requirement
 	// of the callers, not a measurement.
-	maxInputBytes = 25 << 20
+	maxInputBytes = 1 << 30
 	// maxDimension is the largest width or height of any frame or stream.
 	// WebP cannot exceed 16383, and a 16000x16000 video decodes within the
 	// policy.
@@ -30,14 +30,14 @@ const (
 	// maxAnimationFrames is the most frames an animation may hold. 2000
 	// frames complete in under 20 s whatever the canvas, and the count is
 	// below the policy's list length.
-	maxAnimationFrames = 2000
+	maxAnimationFrames = 100_000
 	// maxAnimationPixels bounds frames times canvas area. For a GIF it
 	// bounds the compositor, which holds every decoded frame at one byte per
 	// pixel, and the work of decoding. For a WebP it bounds ImageMagick,
 	// which holds every composited frame at 16 bytes per pixel beside the
 	// decoded ones: a GIF of full-canvas frames read by ImageMagick
 	// completed at 185 MP and failed at 194 MP.
-	maxAnimationPixels = 160_000_000
+	maxAnimationPixels = 100_000_000_000
 	// maxStreams is the most streams, of any kind, a video container may
 	// hold. It is a structural bound, not a measured one.
 	maxStreams = 32
@@ -100,7 +100,7 @@ const (
 	policyDisk       = "4GiB"
 	policyArea       = "512MP"
 	policyDimension  = "65536"
-	policyListLength = "2048"
+	policyListLength = "200000"
 	policyThreads    = "4"
 )
 

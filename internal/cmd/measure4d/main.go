@@ -80,11 +80,11 @@ func runChild(op, path string) {
 	switch op {
 	case "video":
 		var imgs []media.Image
-		imgs, _, err = p.VideoFrames(ctx, path, media.Encoding{}, 64, out)
+		imgs, _, err = p.VideoFrames(ctx, path, media.Encoding{}, 16, out)
 		n = len(imgs)
 	case "anim":
 		var imgs []media.Image
-		imgs, _, err = p.AnimationFrames(ctx, path, media.Encoding{}, 64, out)
+		imgs, _, err = p.AnimationFrames(ctx, path, media.Encoding{}, 16, out)
 		n = len(imgs)
 	default:
 		_, _, err = p.Still(ctx, path, media.Encoding{}, out)
