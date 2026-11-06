@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,13 +50,23 @@ type gifLayout struct {
 	// own[i] is the id of the profile whose extension directly precedes frame
 	// i, or 0.
 	own []int
+	// headerEnd is the offset after the logical screen descriptor and the
+	// global colour table. span[i] is the byte range from the end of frame
+	// i-1 (headerEnd for frame 0) to the end of frame i's image data, so it
+	// holds the extensions that precede the frame; tail is what follows the
+	// last frame up to, not including, the trailer.
+	headerEnd int
+	span      [][2]int
+	tail      [2]int
+	// gce[i] is set when a graphic control extension precedes frame i.
+	gce []bool
 }
 
 // scanGIF walks the blocks of a GIF without decoding any pixels and refuses
 // one that is truncated inside a block, has more than maxFrames frames, has a
-// frame that reaches outside the logical screen. A GIF that ends between blocks without a trailer is
-// accepted. It is what bounds the memory of the decode that follows: frames
-// times canvas.
+// frame that reaches outside the logical screen. A GIF that ends between blocks
+// without a trailer is accepted. It is what bounds the decode that follows:
+// the number of frames and the extent of the canvas.
 func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	if len(data) < 13 || (string(data[:6]) != "GIF87a" && string(data[:6]) != "GIF89a") {
 		return gifLayout{}, errors.New("not a GIF")
@@ -68,6 +79,11 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	if flags := data[10]; flags&0x80 != 0 {
 		pos += 3 << (1 + flags&7)
 	}
+	if pos > len(data) {
+		return gifLayout{}, errors.New("truncated GIF")
+	}
+	l.headerEnd = pos
+	spanStart := pos
 	// readSubBlocks returns the payload of the sub-blocks at pos, and moves
 	// pos past them. keep limits what is copied.
 	readSubBlocks := func(keep bool) ([]byte, error) {
@@ -91,9 +107,11 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	}
 	var extentW, extentH int
 	var pending []byte
+	gce := false
 	for {
 		if pos == len(data) {
 			l.missingTrailer = true
+			l.tail = [2]int{spanStart, pos}
 			break
 		}
 		if pos > len(data) {
@@ -102,6 +120,7 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 		done := false
 		switch data[pos] {
 		case 0x3B:
+			l.tail = [2]int{spanStart, pos}
 			done = true
 		case 0x21:
 			if pos+2 > len(data) {
@@ -109,6 +128,9 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 			}
 			label := data[pos+1]
 			pos += 2
+			if label == 0xF9 {
+				gce = true
+			}
 			if label == 0xFF && pos+12 <= len(data) && data[pos] == 11 && string(data[pos+1:pos+12]) == iccExtension {
 				pos += 12
 				p, err := readSubBlocks(true)
@@ -153,6 +175,10 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 			if _, err := readSubBlocks(false); err != nil {
 				return gifLayout{}, err
 			}
+			l.gce = append(l.gce, gce)
+			gce = false
+			l.span = append(l.span, [2]int{spanStart, pos})
+			spanStart = pos
 		default:
 			return gifLayout{}, fmt.Errorf("invalid GIF block %#x", data[pos])
 		}
@@ -169,24 +195,51 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	return l, nil
 }
 
-// decodeGIF scans and decodes data, supplying the trailer a file that ends
-// between blocks lacks.
-func decodeGIF(data []byte, maxFrames int) (*gif.GIF, gifLayout, error) {
+// gifDecoder decodes the frames of a scanned GIF one at a time.
+type gifDecoder struct {
+	data   []byte
+	layout gifLayout
+	buf    []byte
+	// disposal is the disposal method of the previous frame, which a frame
+	// without a graphic control extension inherits, as in ImageMagick and in
+	// gif.DecodeAll.
+	disposal byte
+}
+
+// newGIFDecoder scans data and returns a decoder of its frames.
+func newGIFDecoder(data []byte, maxFrames int) (*gifDecoder, error) {
 	layout, err := scanGIF(data, maxFrames)
 	if err != nil {
-		return nil, layout, err
+		return nil, err
 	}
-	if layout.missingTrailer {
-		data = append(data[:len(data):len(data)], 0x3B)
+	return &gifDecoder{data: data, layout: layout}, nil
+}
+
+// frame decodes frame i the way gif.DecodeAll does and returns it with its
+// disposal method. The standard library is given a GIF of the header, the
+// extensions before the frame, the frame and a trailer, so memory is that of
+// one frame whatever their number. The last frame carries the blocks after it,
+// so that the whole file is validated, and the trailer a file lacks is
+// supplied. Frames must be requested in order, from 0.
+func (d *gifDecoder) frame(i int) (*image.Paletted, byte, error) {
+	l := d.layout
+	d.buf = append(d.buf[:0], d.data[:l.headerEnd]...)
+	d.buf = append(d.buf, d.data[l.span[i][0]:l.span[i][1]]...)
+	if i == l.frames-1 {
+		d.buf = append(d.buf, d.data[l.tail[0]:l.tail[1]]...)
 	}
-	g, err := gif.DecodeAll(bytes.NewReader(data))
+	d.buf = append(d.buf, 0x3B)
+	g, err := gif.DecodeAll(bytes.NewReader(d.buf))
 	if err != nil {
-		return nil, layout, err
+		return nil, 0, fmt.Errorf("frame %d: %w", i, err)
 	}
-	if len(g.Image) != layout.frames {
-		return nil, layout, fmt.Errorf("decoded %d frames of the %d the block scan found", len(g.Image), layout.frames)
+	if len(g.Image) != 1 || len(g.Disposal) != 1 {
+		return nil, 0, fmt.Errorf("frame %d: decoded %d frames", i, len(g.Image))
 	}
-	return g, layout, nil
+	if l.gce[i] {
+		d.disposal = g.Disposal[0]
+	}
+	return g.Image[0], d.disposal, nil
 }
 
 // compositeGIF calls emit with the composited canvas after each frame whose
@@ -202,7 +255,7 @@ func decodeGIF(data []byte, maxFrames int) (*gif.GIF, gifLayout, error) {
 // told the id of the profile the canvas carries, 0 for none: ImageMagick gives
 // a coalesced frame the profile of the canvas it was built on, which a frame's
 // own profile replaces and a restore to the previous canvas undoes.
-func compositeGIF(g *gif.GIF, width, height int, own []int, selected []int, emit func(index int, canvas *image.NRGBA, profile int) error) error {
+func compositeGIF(frame func(i int) (*image.Paletted, byte, error), width, height int, own []int, selected []int, emit func(index int, canvas *image.NRGBA, profile int) error) error {
 	want := map[int]bool{}
 	last := -1
 	for _, i := range selected {
@@ -214,9 +267,10 @@ func compositeGIF(g *gif.GIF, width, height int, own []int, selected []int, emit
 	var prevRect image.Rectangle
 	var prevDisposal byte
 	var profile, savedProfile int
-	for i, frame := range g.Image {
-		if i > last {
-			break
+	for i := 0; i <= last; i++ {
+		img, disposal, err := frame(i)
+		if err != nil {
+			return err
 		}
 		switch prevDisposal {
 		case gif.DisposalBackground:
@@ -230,10 +284,6 @@ func compositeGIF(g *gif.GIF, width, height int, own []int, selected []int, emit
 				profile = savedProfile
 			}
 		}
-		disposal := byte(0)
-		if i < len(g.Disposal) {
-			disposal = g.Disposal[i]
-		}
 		if disposal == gif.DisposalPrevious {
 			if saved == nil {
 				saved = image.NewNRGBA(canvas.Bounds())
@@ -246,11 +296,11 @@ func compositeGIF(g *gif.GIF, width, height int, own []int, selected []int, emit
 				savedProfile = own[0]
 			}
 		}
-		drawOpaque(canvas, frame)
+		drawOpaque(canvas, img)
 		if i < len(own) && own[i] > 0 {
 			profile = own[i]
 		}
-		prevRect, prevDisposal = frame.Bounds(), disposal
+		prevRect, prevDisposal = img.Bounds(), disposal
 		if want[i] {
 			if err := emit(i, canvas, profile); err != nil {
 				return err
@@ -421,10 +471,11 @@ func runCompositor(args []string, out io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	g, layout, err := decodeGIF(data, frames)
+	dec, err := newGIFDecoder(data, frames)
 	if err != nil {
 		return err
 	}
+	layout := dec.layout
 	if layout.frames != frames || layout.width != width || layout.height != height || ownMask(layout.ownFlags()) != mask {
 		return fmt.Errorf("GIF holds %d frames of %dx%d, the header read found %d of %dx%d, or they differ in their profiles",
 			layout.frames, layout.width, layout.height, frames, width, height)
@@ -432,7 +483,7 @@ func runCompositor(args []string, out io.Writer) (err error) {
 	written := map[int]bool{}
 
 	ordinal := 0
-	return compositeGIF(g, width, height, layout.own, selected, func(_ int, canvas *image.NRGBA, profile int) error {
+	err = compositeGIF(dec.frame, width, height, layout.own, selected, func(_ int, canvas *image.NRGBA, profile int) error {
 		if ordinal >= inFlight {
 			deadline := time.Now().Add(timeout)
 			for {
@@ -476,6 +527,17 @@ func runCompositor(args []string, out io.Writer) (err error) {
 		ordinal++
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	// Frames after the last selected one are decoded to validate the file,
+	// as a whole-file decode would.
+	for i := slices.Max(selected) + 1; i < frames; i++ {
+		if _, _, err := dec.frame(i); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ownFlags says which frames have a profile of their own.
