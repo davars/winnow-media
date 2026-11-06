@@ -24,11 +24,33 @@ var videoSpec = spec{
 	writes: outputCoders,
 }
 
-// hdrToSDRFilter linearizes HDR video, converts its primaries to BT.709,
-// tone-maps it and returns it to BT.709 transfer and matrix. The 203 nit
-// reference white is the BT.2408 level for HDR graphic white.
-const hdrToSDRFilter = "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709," +
-	"tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+// hdrToneMap linearizes HDR video, converts its primaries to BT.709,
+// tone-maps it and returns it to BT.709 transfer and matrix, leaving the pixel
+// format to the caller. The 203 nit reference white is the BT.2408 level for
+// HDR graphic white.
+const hdrToneMap = "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709," +
+	"tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+
+// videoFilter returns the -vf chain for sampling a frame, or "" when the frame
+// needs neither tone mapping nor resizing.
+//
+// HDR is scaled before it is tone-mapped: the tone-map runs in 32-bit float
+// and its memory grows with the frame, so it is cheaper on the small target.
+// The scale writes 4:4:4 because the target size can be odd, and zscale
+// rejects a chroma-subsampled frame whose dimensions are not even; the 16-bit
+// format keeps precision for the linearization.
+func videoFilter(hdr, resize bool, tw, th int) string {
+	scale := fmt.Sprintf("scale=%d:%d:flags=lanczos", tw, th)
+	switch {
+	case hdr && resize:
+		return scale + ",format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
+	case hdr:
+		return hdrToneMap + ",format=yuv420p"
+	case resize:
+		return scale
+	}
+	return ""
+}
 
 // isHDRTransfer reports whether a colour transfer characteristic names HLG or PQ.
 func isHDRTransfer(trc string) bool {
@@ -217,16 +239,7 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 	}
 	w, h := info.upright()
 	tw, th, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
-	filter := ""
-	if isHDRTransfer(info.transfer) {
-		filter = hdrToSDRFilter
-	}
-	if resize {
-		if filter != "" {
-			filter += ","
-		}
-		filter += fmt.Sprintf("scale=%d:%d:flags=lanczos", tw, th)
-	}
+	filter := videoFilter(isHDRTransfer(info.transfer), resize, tw, th)
 
 	times := sampleTimesMS(info, maxFrames)
 	var scratch []string

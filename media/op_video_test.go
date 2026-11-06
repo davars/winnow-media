@@ -342,6 +342,49 @@ func TestVideoFramesHDRIsConvertedToSDR(t *testing.T) {
 	}
 }
 
+func TestVideoFramesHDRScalesBeforeToneMapping(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	rec := record(p)
+	videoInto(t, p, hlgClip(t, env, testsrc("320x240", 10, 2)), Encoding{MaxEdge: 160}, 1)
+	var filters []string
+	for _, call := range rec.calls {
+		if call[0] != "ffmpeg" {
+			continue
+		}
+		if i := slices.Index(call, "-vf"); i >= 0 {
+			filters = append(filters, call[i+1])
+		}
+	}
+	if len(filters) == 0 {
+		t.Fatal("no ffmpeg call carried a filter chain")
+	}
+	for _, f := range filters {
+		scale, tone := strings.Index(f, "scale="), strings.Index(f, "zscale=t=linear")
+		if scale < 0 || tone < 0 || scale > tone {
+			t.Errorf("tone mapping is not preceded by the scale: %q", f)
+		}
+		if !strings.HasSuffix(f, "format=yuv444p") {
+			t.Errorf("chain does not end in 4:4:4: %q", f)
+		}
+	}
+}
+
+func TestVideoFramesHDROddTargetSize(t *testing.T) {
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	clip := hlgClip(t, env, testsrc("320x240", 10, 2))
+	images, _ := videoInto(t, p, clip, Encoding{MaxEdge: 165}, 1)
+	if len(images) == 0 {
+		t.Fatal("no images")
+	}
+	for _, f := range images {
+		if f.Width != 165 || f.Height != 123 {
+			t.Errorf("%s is %dx%d, want 165x123", f.Name, f.Width, f.Height)
+		}
+	}
+}
+
 func TestVideoFramesSDRHasNoColourFilter(t *testing.T) {
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
