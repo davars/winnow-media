@@ -16,18 +16,33 @@ import (
 // it is tied to the animation's playback rate.
 const maxVideoSampleFrames = 15
 
+// maxSelectFrames is the longest stream, in frames, that is sampled by
+// decoding all of it. Decoding costs time in proportion to the length of the
+// stream, seeking costs a fixed time per sample that grows with resolution;
+// across 720p to 2160p H.264 and HEVC they cross between 1500 and 4800 frames.
+const maxSelectFrames = 1800
+
 // GenerateVideoThumbnails writes two animated WebP thumbnails of one video
 // stream, at maximum sizes sizeSmall and sizeLarge and the given WebP quality.
 // frames is the stream's frame count, from which an evenly spaced sample is
 // taken; zero or less samples the first frame only.
 //
-// Each sample is read by seeking to it, so the cost depends on the number of
-// samples and not on the length of the video. Frame i of the stream is taken
-// at its presentation time, start + i/rate, where rate is the stream's average
-// frame rate; for variable frame rate video that is the nearest frame to the
-// time, not frame i. Scratch files live in a private directory that is removed
+// A stream of at most maxSelectFrames frames is decoded in full and frame i of
+// the stream is the sample. A longer one is read by seeking to each sample, so
+// the cost does not grow with its length; frame i is then taken at its
+// presentation time, start + i/rate, where rate is the stream's average frame
+// rate. For variable frame rate video that is the nearest frame to the time,
+// not frame i. Scratch files live in a private directory that is removed
 // before the call returns.
 func (e Env) GenerateVideoThumbnails(ctx context.Context, inputPath, smallPath, largePath string, streamIndex, frames, sizeSmall, sizeLarge, quality int) error {
+	if frames <= maxSelectFrames {
+		_, err := e.Run(ctx, "ffmpeg", videoSelectArgs(inputPath, smallPath, largePath, streamIndex, videoSample(frames), sizeSmall, sizeLarge, quality)...)
+		return err
+	}
+	return e.generateSeekedVideoThumbnails(ctx, inputPath, smallPath, largePath, streamIndex, frames, sizeSmall, sizeLarge, quality)
+}
+
+func (e Env) generateSeekedVideoThumbnails(ctx context.Context, inputPath, smallPath, largePath string, streamIndex, frames, sizeSmall, sizeLarge, quality int) error {
 	info, err := probeVideoTiming(ctx, e, inputPath, streamIndex)
 	if err != nil {
 		return err
@@ -172,6 +187,38 @@ func videoEncodeArgs(list, smallPath, largePath string, count, sizeSmall, sizeLa
 			videoScaleFilter(sizeSmall),
 			videoScaleFilter(sizeLarge),
 		))
+	for _, out := range []struct{ label, path string }{{"[small]", smallPath}, {"[large]", largePath}} {
+		args = append(args,
+			"-map", out.label,
+			"-frames:v", frameCount,
+			"-loop", "0",
+			"-c:v", "libwebp",
+			"-quality", strconv.Itoa(quality),
+			"-r", "2",
+			out.path)
+	}
+	return args
+}
+
+// videoSelectArgs returns the ffmpeg arguments that decode the whole stream,
+// keep the frames at the sampled indices and write both animated WebPs.
+func videoSelectArgs(inputPath, smallPath, largePath string, streamIndex int, indices []int, sizeSmall, sizeLarge, quality int) []string {
+	terms := make([]string, 0, len(indices))
+	for _, index := range indices {
+		terms = append(terms, fmt.Sprintf("eq(n\\,%d)", index))
+	}
+	frameCount := strconv.Itoa(len(indices))
+	args := []string{
+		"-y",
+		"-i", inputPath,
+		"-an",
+		"-filter_complex", fmt.Sprintf(
+			"[0:%d]select='%s',setpts=N/(2*TB),split=2[selected_small][selected_large];[selected_small]%s[small];[selected_large]%s[large]",
+			streamIndex, strings.Join(terms, "+"),
+			videoScaleFilter(sizeSmall),
+			videoScaleFilter(sizeLarge),
+		),
+	}
 	for _, out := range []struct{ label, path string }{{"[small]", smallPath}, {"[large]", largePath}} {
 		args = append(args,
 			"-map", out.label,
