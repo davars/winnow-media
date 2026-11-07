@@ -29,14 +29,17 @@ const (
 	// maxInputBytes is the largest input file, inclusive. It is a requirement
 	// of the callers, not a measurement.
 	maxInputBytes = 25 << 20
-	// maxDimension is the largest width or height of any frame or stream.
+	// maxDimension is the largest width or height of any frame or stream. For
+	// a still it applies to the frame actually decoded, after any
+	// decode-stage reduction.
 	// WebP cannot exceed 16383, and a 16000x16000 video decodes within the
 	// policy.
 	maxDimension = 16384
-	// maxFramePixels is the largest pixel count of one frame. The largest
-	// phone formats sit just below it: 48 MP iPhone (8064x6048, 48.8 MP) and
-	// 50 MP sensors (at most 8192x6144, 50.3 MP). Every format admitted at
-	// this size completes within the 1536Mi deployment limit.
+	// maxFramePixels is the largest pixel count of one frame, of a still
+	// after any decode-stage reduction. The largest phone formats sit just
+	// below it: 48 MP iPhone (8064x6048, 48.8 MP) and 50 MP sensors (at most
+	// 8192x6144, 50.3 MP). Every format admitted at this size completes
+	// within the 1536Mi deployment limit.
 	maxFramePixels = 52_000_000
 	// maxAnimationFrames is the most frames an animation may hold. It is a
 	// structural bound, not a time bound: the header read holds about 62 KiB
@@ -175,7 +178,9 @@ func (s sceneHeader) canvas() (int, int) {
 }
 
 // checkSceneHeaders refuses headers that declare more than the caps allow,
-// before any pixel is decoded.
+// before any pixel is decoded. Frames of an animation are never reduced, so
+// their header sizes are the decoded sizes; a still is capped by
+// checkStillSize on the size its decode produces.
 func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
 	if animated && len(scenes) > maxAnimationFrames {
 		return tooLarge("animation has %d frames, the limit is %d", len(scenes), maxAnimationFrames)
@@ -203,6 +208,24 @@ func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
 			return tooLarge("animation has %d frames of %dx%d, %d pixels to decode, the limit is %d",
 				len(scenes), cw, ch, total, int64(maxDecodedPixels))
 		}
+	}
+	return nil
+}
+
+// checkStillSize refuses a still whose decoded frame, of size decoded, has a
+// side over maxDimension or more than maxFramePixels pixels. stored is the
+// size the file declares; it differs from decoded when the decode reduces it,
+// and the error says both.
+func checkStillSize(stored, decoded [2]int) error {
+	for _, side := range decoded {
+		if side > maxDimension {
+			return tooLarge("still decodes at %dx%d (stored %dx%d), the limit is %d on each side",
+				decoded[0], decoded[1], stored[0], stored[1], maxDimension)
+		}
+	}
+	if px := int64(decoded[0]) * int64(decoded[1]); px > maxFramePixels {
+		return tooLarge("still decodes at %dx%d, %d pixels (stored %dx%d), the limit is %d",
+			decoded[0], decoded[1], px, stored[0], stored[1], int64(maxFramePixels))
 	}
 	return nil
 }
