@@ -332,7 +332,7 @@ func TestReadHeadersReportsTheProfileOfAStillWebP(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "icc.webp")
 	magick(t, env, "-size", "100x80", "gradient:red-blue", "+profile", "*", "-profile", writeSRGBProfile(t), path)
 	var m meter
-	scenes, err := readHeaders(context.Background(), p.env(&m), decoder{"magick", "webp"}, path, "", true)
+	scenes, err := readHeaders(context.Background(), p.env(&m), decoder{"magick", "webp"}, path, true)
 	if err != nil {
 		t.Fatal(err)
 	}

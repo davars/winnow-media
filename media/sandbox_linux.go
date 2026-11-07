@@ -267,7 +267,7 @@ func helperError(ctx context.Context, name string, res helperResult, err error, 
 // request names. onFrame is called, in order, with the path of each frame as
 // the compositor finishes it; if it fails the compositor is stopped and its
 // error returned. The usage returned covers the compositor.
-func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error) {
+func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
 	tmp, err := p.runTempDir()
 	if err != nil {
 		return nil, err

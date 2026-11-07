@@ -29,18 +29,6 @@ func TestProfileDetectionAndAnimationPolicy(t *testing.T) {
 	}
 
 	frames := []FrameInfo{{hasICC: true}, {hasICC: false}, {hasICC: true}}
-	if profiled, err := selectedProfiled(frames, []int{0, 2}); err != nil || !profiled {
-		t.Fatalf("all-profiled selection = (%v, %v), want (true, nil)", profiled, err)
-	}
-	if profiled, err := selectedProfiled(frames, []int{1}); err != nil || profiled {
-		t.Fatalf("unprofiled selection = (%v, %v), want (false, nil)", profiled, err)
-	}
-	if _, err := selectedProfiled(frames, []int{0, 1}); err == nil {
-		t.Fatal("mixed profiled/unprofiled selection unexpectedly succeeded")
-	}
-	if _, err := selectedProfiled(frames, []int{3}); err == nil {
-		t.Fatal("out-of-range selection unexpectedly succeeded")
-	}
 	if !AnyProfiled(frames) || AnyProfiled(frames[1:2]) {
 		t.Fatal("AnyProfiled disagrees with the frames' profile flags")
 	}
@@ -432,7 +420,7 @@ func TestEncodeRungAppliesTheHeaderOrientationToAnimatedWebP(t *testing.T) {
 	env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
 		res, err := real.Run(ctx, name, args...)
 		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
-			res.Stdout = bytes.ReplaceAll(res.Stdout, []byte("|Undefined|END"), []byte("|RightTop|END"))
+			res.Stdout = headerWithOrientation(res.Stdout, "RightTop")
 		}
 		return res, err
 	}

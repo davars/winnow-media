@@ -152,7 +152,7 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 		})
 		t.Run("readHeaders/"+c.name, func(t *testing.T) {
 			env, calls := countingEnv(real)
-			scenes, err := readHeaders(context.Background(), env, decoder{"magick", "webp"}, path, "", true)
+			scenes, err := readHeaders(context.Background(), env, decoder{"magick", "webp"}, path, true)
 			if err != nil || len(scenes) != 1 || scenes[0].hasICC != want {
 				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", scenes, err, want)
 			}

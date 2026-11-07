@@ -92,10 +92,11 @@ func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationI
 		return AnimationInfo{}, Usage{}, fmt.Errorf("probe animation: %w", err)
 	}
 	var m meter
-	layout, err := p.env(&m).readAnimation(ctx, in.decoder, in.path)
+	hdr, err := p.env(&m).readSource(ctx, in.request(Hints{}, nil, false))
 	if err != nil {
 		return AnimationInfo{}, m.usage, fmt.Errorf("probe animation: %w", err)
 	}
+	layout := hdr.layout
 	delays := make([]int, len(layout.infos))
 	for i, f := range layout.infos {
 		delays[i] = displayDelayCS(f.delayCS) * 10
@@ -221,12 +222,12 @@ func (p *Processor) AnimationFramesAt(ctx context.Context, path string, enc Enco
 	var m meter
 	env := p.env(&m)
 	images, err := inDir(in.dir, func() ([]Image, error) {
-		return env.animationFrames(ctx, in.decoder, in.path, ec, func(sourceFrames int) ([]int, error) {
+		return env.encodeAnimationFrames(ctx, in, ec, func(sourceFrames int) ([]int, error) {
 			if last := selected[len(selected)-1]; last >= sourceFrames {
 				return nil, fmt.Errorf("index %d is outside the animation's %d frames", last, sourceFrames)
 			}
 			return selected, nil
-		}, in.dir)
+		})
 	})
 	if err != nil {
 		return nil, m.usage, fmt.Errorf("animation frames at: %w", err)

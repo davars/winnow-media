@@ -106,9 +106,9 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 	for i, s := range scenes {
 		infos[i] = FrameInfo{hasICC: s.hasICC}
 	}
-	profiled, err := selectedProfiled(infos, selected)
-	if err != nil {
-		t.Fatal(err)
+	profiled := false
+	for _, i := range selected {
+		profiled = profiled || infos[i].hasICC
 	}
 	assignPath := filepath.Join(dir, ".assigned.icc")
 	if assign != nil {
@@ -132,7 +132,7 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 			args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
 		}
 		if resize {
-			args = append(args, "-filter", "Lanczos", "-resize", fmt.Sprintf("%dx%d!", tw, th))
+			args = append(args, "-filter", string(filterFor(full[0].soft)), "-resize", fmt.Sprintf("%dx%d!", tw, th))
 		}
 		pattern := filepath.Join(dir, "frame-") + "%03d" + ec.ext
 		args = append(args, "-strip", "-scene", "0", "+adjoin", "-quality", strconv.Itoa(ec.quality), pattern)
@@ -269,7 +269,7 @@ func TestHeaderOrientationIsAppliedToAnimatedWebP(t *testing.T) {
 	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
 		res, err := inner(ctx, name, args...)
 		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
-			res.Stdout = bytes.ReplaceAll(res.Stdout, []byte("|Undefined|END"), []byte("|RightTop|END"))
+			res.Stdout = headerWithOrientation(res.Stdout, "RightTop")
 		}
 		return res, err
 	}

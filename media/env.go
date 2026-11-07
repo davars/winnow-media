@@ -66,18 +66,23 @@ type Runner func(ctx context.Context, tool string, args ...string) (Result, erro
 // write their output to the returned path.
 type Stager func(ext string) (path string, cleanup func(), err error)
 
+// Scratcher creates a new empty directory for intermediate files. cleanup
+// removes it and what is in it and is safe to call once; the caller owns it.
+type Scratcher func() (dir string, cleanup func(), err error)
+
 // Env is what the package needs from its caller to run tools. Run is
 // required by every method; Stage is required by the methods that produce an
-// output file (EncodeRung).
+// output file (EncodeRung, Source.Encode); Scratch is required by Open and
+// EncodeRung, which keep decoded frames in it until the source is closed.
 type Env struct {
-	Run   Runner
-	Stage Stager
+	Run     Runner
+	Stage   Stager
+	Scratch Scratcher
 
 	// compose runs the frame compositor; it is set only by a Processor.
 	compose composer
 }
 
 // composer composites the selected frames of a GIF or animated WebP in the
-// sandbox and calls onFrame with the path of each as it is written. profile is
-// the id of the ICC profile the frame carries, or 0.
-type composer func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) error
+// sandbox and calls onFrame with each as it is written.
+type composer func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) error

@@ -93,3 +93,21 @@ func webpICC(path string) (hasICC, known bool) {
 	}
 	return iccp == 1, true
 }
+
+// webpAnimated reports whether the WebP at path has the VP8X animation flag
+// set. It reads only the first chunk header and its flags byte. A file that
+// is not a WebP with a leading VP8X chunk is not animated, as no decoder
+// reads an animation from it.
+func webpAnimated(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	var head [21]byte
+	if _, err := io.ReadFull(f, head[:]); err != nil {
+		return false
+	}
+	return string(head[:4]) == "RIFF" && string(head[8:16]) == "WEBPVP8X" &&
+		binary.LittleEndian.Uint32(head[16:20]) >= 10 && head[20]&webpAnimFlag != 0
+}

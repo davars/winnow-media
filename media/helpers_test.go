@@ -37,6 +37,7 @@ func testEnv(t *testing.T) Env {
 			}
 			return res, nil
 		},
+		Scratch: testScratch,
 		Stage: func(ext string) (string, func(), error) {
 			f, err := os.CreateTemp(staging, "*"+ext)
 			if err != nil {
@@ -149,4 +150,52 @@ func ebmlHeader(docType string) []byte {
 	doc := append([]byte{0x42, 0x82, 0x80 | byte(len(docType))}, docType...)
 	body := append(version, doc...)
 	return append([]byte{0x1A, 0x45, 0xDF, 0xA3, 0x80 | byte(len(body))}, body...)
+}
+
+// withProfile places the package's sRGB profile in outDir for the duration of
+// fn when profiled is set, and passes fn its path.
+func withProfile(outDir string, profiled bool, fn func(profilePath string) error) error {
+	if !profiled {
+		return fn("")
+	}
+	path, err := placeSRGB(outDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(path) }()
+	return fn(path)
+}
+
+// still encodes the first image of path, read with dec, to dir as the
+// Processor's Still does.
+func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, dir string) (Image, error) {
+	src, err := e.open(ctx, openRequest{path: path, dec: dec, pinned: true, caps: true, hints: Hints{Still: true}, scratch: dir})
+	if err != nil {
+		return Image{}, err
+	}
+	defer src.Close()
+	return src.stillImage(ctx, enc, dir)
+}
+
+// testScratch is an Env.Scratch that makes directories under the system
+// temporary directory.
+func testScratch() (string, func(), error) {
+	dir, err := os.MkdirTemp("", "media-test-scratch-")
+	if err != nil {
+		return "", nil, err
+	}
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// headerWithOrientation returns the output of a header read with the
+// orientation of every scene replaced by name.
+func headerWithOrientation(out []byte, name string) []byte {
+	lines := strings.Split(string(out), "\n")
+	for i, line := range lines {
+		if f := strings.Split(line, "|"); len(f) == 11 {
+			f[7] = name
+			lines[i] = strings.Join(f, "|")
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
 }

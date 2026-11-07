@@ -21,7 +21,7 @@ func forbidCompositor(t *testing.T, p *Processor) {
 	t.Helper()
 	old := p.compose
 	t.Cleanup(func() { p.compose = old })
-	p.compose = func(context.Context, composeRequest, func(string, int) error) (*Usage, error) {
+	p.compose = func(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
 		t.Error("the compositor was started")
 		return nil, nil
 	}
@@ -377,7 +377,7 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 				refArgs := []string{"gif:" + path, "-coalesce", "-auto-orient", "-profile", srgb}
 				if resize {
 					enc.MaxEdge = 16
-					refArgs = append(refArgs, "-filter", "Lanczos", "-resize", "16x13!")
+					refArgs = append(refArgs, "-filter", "Mitchell", "-resize", "16x13!")
 				}
 				ref := t.TempDir()
 				magick(t, env, append(refArgs, "-strip", "-depth", "8", "+adjoin", filepath.Join(ref, "%03d.png"))...)
@@ -497,7 +497,7 @@ func TestRunCompositorGivesUpOnAnUnconsumedFrame(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "frame 0 not consumed in 150ms") {
 		t.Fatalf("err = %v", err)
 	}
-	if out.String() != "0 0\n" {
+	if out.String() != "0 0 1\n" {
 		t.Errorf("output %q, want only frame 0", out.String())
 	}
 	if d := time.Since(start); d > 10*time.Second {

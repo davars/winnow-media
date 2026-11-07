@@ -490,7 +490,7 @@ func withHeaderOrientation(p *Processor, name string) {
 	p.run = func(ctx context.Context, tool string, args ...string) (Result, error) {
 		res, err := inner(ctx, tool, args...)
 		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
-			res.Stdout = bytes.ReplaceAll(res.Stdout, []byte("|Undefined|END"), []byte("|"+name+"|END"))
+			res.Stdout = headerWithOrientation(res.Stdout, name)
 		}
 		return res, err
 	}

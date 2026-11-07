@@ -19,6 +19,6 @@ func (p *Processor) runTool(context.Context, string, ...string) (Result, error) 
 	return Result{}, sandboxAvailable()
 }
 
-func (p *Processor) composeFrames(context.Context, composeRequest, func(string, int) error) (*Usage, error) {
+func (p *Processor) composeFrames(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
 	return nil, sandboxAvailable()
 }

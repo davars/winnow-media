@@ -17,8 +17,11 @@
  * without alpha. Canvas that no frame covers is transparent, as libwebp and
  * browsers have it. The file is written as
  * .sample-NNN.pam.tmp and renamed, so a reader never sees a partial one. Then
- * a line "NNN P" is printed on standard output and flushed, P being the id 1 when the
- * file carries an ICC profile and 0 otherwise. The profile, if any, is written
+ * a line "NNN P A" is printed on standard output and flushed, P being the id 1
+ * when the file carries an ICC profile and 0 otherwise, and A being 1 when the
+ * file declares alpha (the VP8X alpha flag, or a frame with an alpha channel)
+ * and 0 otherwise. A is what the file says, not whether a pixel is
+ * transparent: it is the same for every frame. The profile, if any, is written
  * to OUTDIR/.profile-1.icc before the first frame.
  *
  * Before writing frame NNN the tool waits until .sample-(NNN-IN_FLIGHT).pam
@@ -160,6 +163,23 @@ static int is_opaque(WebPAnimDecoder *dec, int width, int height) {
   return opaque;
 }
 
+/* declares_alpha reports whether the file declares alpha: the VP8X alpha flag,
+ * or any frame with an alpha channel. */
+static int declares_alpha(WebPAnimDecoder *dec) {
+  const WebPDemuxer *demux = WebPAnimDecoderGetDemuxer(dec);
+  WebPIterator it;
+  int declared;
+  if (demux == NULL) fail("no demuxer");
+  declared = (WebPDemuxGetI(demux, WEBP_FF_FORMAT_FLAGS) & ALPHA_FLAG) != 0;
+  if (!declared && WebPDemuxGetFrame(demux, 1, &it)) {
+    do {
+      if (it.has_alpha) declared = 1;
+    } while (!declared && WebPDemuxNextFrame(&it));
+    WebPDemuxReleaseIterator(&it);
+  }
+  return declared;
+}
+
 static long long now_ms(void) {
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) fail("reading the clock: %s", strerror(errno));
@@ -191,7 +211,7 @@ int main(int argc, char **argv) {
   WebPAnimDecoder *dec;
   WebPAnimInfo info;
   WebPData wd;
-  int profiled, alpha;
+  int profiled, alpha, declared;
   uint8_t *row;
   long ordinal = 0;
 
@@ -236,6 +256,7 @@ int main(int argc, char **argv) {
   }
   profiled = write_profile(dec, dir);
   alpha = !is_opaque(dec, (int)width, (int)height);
+  declared = declares_alpha(dec);
   row = malloc((size_t)width * 3);
   if (row == NULL) fail("out of memory");
 
@@ -256,7 +277,7 @@ int main(int argc, char **argv) {
     snprintf(name, sizeof name, ".sample-%03ld.pam.tmp", ordinal);
     join(tmp, sizeof tmp, dir, name);
     write_pam(tmp, final, canvas, (int)width, (int)height, alpha, row);
-    if (printf("%ld %d\n", ordinal, profiled) < 0 || fflush(stdout) != 0) fail("writing standard output");
+    if (printf("%ld %d %d\n", ordinal, profiled, declared) < 0 || fflush(stdout) != 0) fail("writing standard output");
     ordinal++;
     next++;
   }

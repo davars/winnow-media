@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -397,6 +396,14 @@ func (r composeRequest) timeoutMS() string {
 	return strconv.FormatInt(d.Milliseconds(), 10)
 }
 
+// job is the in-process GIF compositing the request describes.
+func (r composeRequest) job() gifJob {
+	return gifJob{
+		path: r.path, dir: r.dir, frames: r.frames, width: r.width, height: r.height,
+		mask: ownMask(r.own), selected: r.selected,
+	}
+}
+
 func (r composeRequest) args() []string {
 	if r.external != "" {
 		return r.externalArgs()
@@ -438,7 +445,8 @@ func compositorMain() {
 
 // runCompositor decodes the GIF named by args (see composeRequest.args),
 // composites it and writes each selected frame to the output directory as a
-// PAM file, then prints the frame's ordinal and the id of its profile on out. A
+// PAM file, then prints the frame's ordinal, the id of its profile and 1 on
+// out, the last being the frame's declared colour format (see frameLines). A
 // frame is written under a temporary name and renamed, so the reader never sees
 // a partial file. A profile is written to its own file before the first frame
 // that uses it. Before writing ordinal n it waits until ordinal n-inFlight has
@@ -494,7 +502,8 @@ func runCompositor(args []string, out io.Writer) (err error) {
 			time.Sleep(2 * time.Millisecond)
 		}
 	}, func(ordinal, profile int) error {
-		_, err := fmt.Fprintln(out, ordinal, profile)
+		// Every GIF frame is palette-based.
+		_, err := fmt.Fprintln(out, ordinal, profile, 1)
 		return err
 	})
 }
@@ -576,17 +585,7 @@ func (j gifJob) run(ctx context.Context, wait func(ordinal int) error, written f
 		ordinal++
 		return err
 	})
-	if err != nil {
-		return err
-	}
-	// Frames after the last selected one are decoded to validate the file,
-	// as a whole-file decode would.
-	for i := slices.Max(j.selected) + 1; i < j.frames; i++ {
-		if _, _, err := frame(i); err != nil {
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 // ownFlags says which frames have a profile of their own.
@@ -598,12 +597,23 @@ func (l gifLayout) ownFlags() []bool {
 	return flags
 }
 
+// composedFrame is a frame a compositor wrote.
+type composedFrame struct {
+	path string
+	// profile is the id of the ICC profile the frame carries, 0 for none.
+	profile int
+	// soft is set when the frame's source declares a palette or alpha, which
+	// picks the resize filter (see filterFor).
+	soft bool
+}
+
 // frameLines parses the compositor's output, one line per frame holding its
-// ordinal and the id of the profile its canvas carries, and calls onFrame with
-// the path of each frame in dir.
+// ordinal, the id of the profile its canvas carries and 1 or 0 for whether
+// its source declares a palette or alpha, and calls onFrame with each frame
+// in dir.
 type frameLines struct {
 	dir     string
-	onFrame func(path string, profile int) error
+	onFrame func(composedFrame) error
 	buf     []byte
 	next    int
 	err     error
@@ -619,17 +629,18 @@ func (f *frameLines) Write(p []byte) (int, error) {
 		line := string(f.buf[:i])
 		f.buf = f.buf[i+1:]
 		fields := strings.Fields(line)
-		var n, id int
-		var err1, err2 error
-		if len(fields) == 2 {
+		var n, id, soft int
+		var err1, err2, err3 error
+		if len(fields) == 3 {
 			n, err1 = strconv.Atoi(fields[0])
 			id, err2 = strconv.Atoi(fields[1])
+			soft, err3 = strconv.Atoi(fields[2])
 		}
-		if len(fields) != 2 || err1 != nil || err2 != nil || n != f.next || id < 0 || id > maxAnimationFrames {
+		if len(fields) != 3 || err1 != nil || err2 != nil || err3 != nil || n != f.next || id < 0 || id > maxAnimationFrames || soft < 0 || soft > 1 {
 			f.err = fmt.Errorf("compositor reported %q, expected frame %d", line, f.next)
 			break
 		}
-		f.err = f.onFrame(filepath.Join(f.dir, gifSampleName(f.next)), id)
+		f.err = f.onFrame(composedFrame{path: filepath.Join(f.dir, gifSampleName(f.next)), profile: id, soft: soft == 1})
 		f.next++
 	}
 	if f.err != nil {

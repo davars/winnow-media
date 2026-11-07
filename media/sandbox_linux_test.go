@@ -483,7 +483,7 @@ func composeWithScript(t *testing.T, p *Processor, body string) error {
 	req := composeRequest{external: "compositor", dir: t.TempDir(), path: "x", selected: []int{0}, frames: 1, width: 1, height: 1, inFlight: 1}
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.composeFrames(ctx, req, func(string, int) error { return nil })
+		_, err := p.composeFrames(ctx, req, func(composedFrame) error { return nil })
 		done <- err
 	}()
 	select {
