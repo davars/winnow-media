@@ -154,8 +154,8 @@ func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding
 
 // VideoFrameRun decodes count consecutive frames of an MP4, QuickTime, WebM
 // or Matroska file, starting at the first frame at or after startMS, in one
-// decode and writes them to dir as frame-NNN.<ext>. It costs one seek however
-// many frames it returns. Output, the gate, the caps, errors, Usage and the
+// decode and writes them to dir as frame-NNN.<ext>. It costs one ffmpeg run
+// however many frames it returns. Output, the gate, the caps, errors, Usage and the
 // state of dir are as for VideoFrames.
 //
 // count is 1 to 64. startMS must be 0 or inside the duration ProbeVideo

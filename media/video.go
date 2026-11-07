@@ -2,250 +2,120 @@ package media
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 )
 
-// maxVideoSampleFrames caps the frames a video animation samples;
-// it is tied to the animation's playback rate.
+// maxVideoSampleFrames is the number of frames GenerateVideoThumbnails
+// samples; it is tied to the animation's playback rate.
 const maxVideoSampleFrames = 15
 
-// maxSelectFrames is the longest stream, in frames, that is sampled by
-// decoding all of it. Decoding costs time in proportion to the length of the
-// stream, seeking costs a fixed time per sample that grows with resolution;
-// across 720p to 2160p H.264 and HEVC they cross between 1500 and 4800 frames.
-const maxSelectFrames = 1800
+// videoFrameDelayCS is how long each sample is displayed in an animated
+// output, in centiseconds: two frames a second.
+const videoFrameDelayCS = 50
 
-// GenerateVideoThumbnails writes two animated WebP thumbnails of one video
-// stream, at maximum sizes sizeSmall and sizeLarge and the given WebP quality.
-// frames is the stream's frame count, from which an evenly spaced sample is
-// taken; zero or less samples the first frame only.
+// GenerateVideoThumbnails samples fifteen frames of a video at the centres of
+// equal intervals of its duration and writes them as two animated WebPs whose
+// longest sides are at most sizeSmall and sizeLarge, at the given quality,
+// each frame shown for half a second. Frames are sampled, tone-mapped, sized
+// and stripped as Processor.VideoFrames does, and a frame identical to the one
+// before it once resized is dropped.
 //
-// A stream of at most maxSelectFrames frames is decoded in full and frame i of
-// the stream is the sample. A longer one is read by seeking to each sample, so
-// the cost does not grow with its length; frame i is then taken at its
-// presentation time, start + i/rate, where rate is the stream's average frame
-// rate. For variable frame rate video that is the nearest frame to the time,
-// not frame i. Scratch files live in a private directory that is removed
-// before the call returns.
+// It requires smallPath and largePath to end in .webp and their directory to
+// be writable, where it stages samples in a subdirectory it removes. The video
+// stream is ffprobe's choice; streamIndex and frames are ignored. A stream
+// over the package's caps is refused with ErrTooLarge before any frame is
+// decoded.
 func (e Env) GenerateVideoThumbnails(ctx context.Context, inputPath, smallPath, largePath string, streamIndex, frames, sizeSmall, sizeLarge, quality int) error {
-	if frames <= maxSelectFrames {
-		_, err := e.Run(ctx, "ffmpeg", videoSelectArgs(inputPath, smallPath, largePath, streamIndex, videoSample(frames), sizeSmall, sizeLarge, quality)...)
-		return err
+	outputs := []videoOutput{
+		{thumbnailEncoding(sizeSmall, quality), smallPath},
+		{thumbnailEncoding(sizeLarge, quality), largePath},
 	}
-	return e.generateSeekedVideoThumbnails(ctx, inputPath, smallPath, largePath, streamIndex, frames, sizeSmall, sizeLarge, quality)
-}
-
-func (e Env) generateSeekedVideoThumbnails(ctx context.Context, inputPath, smallPath, largePath string, streamIndex, frames, sizeSmall, sizeLarge, quality int) error {
-	info, err := probeVideoTiming(ctx, e, inputPath, streamIndex)
+	dec := sniffedVideoDecoder(inputPath)
+	decode := outputs[0].enc
+	if outputs[1].enc.maxEdge > decode.maxEdge {
+		decode = outputs[1].enc
+	}
+	plan, err := e.planVideo(ctx, dec, inputPath, decode)
 	if err != nil {
 		return err
 	}
-	if err := checkVideoSize(info.width, info.height); err != nil {
-		return err
-	}
-	indices := videoSample(frames)
-	if info.rate <= 0 {
-		indices = []int{0}
-	}
-	dir, err := os.MkdirTemp("", "winnow-video-thumbs-")
+	dir, err := os.MkdirTemp(filepath.Dir(smallPath), ".video-thumbs-")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	threads := ffmpegThreadsFor(info.width, info.height)
-	count := 0
-	for _, index := range indices {
-		path := filepath.Join(dir, fmt.Sprintf(videoSampleName, count))
-		args := videoSampleArgs(inputPath, path, streamIndex, videoSeekSeconds(info, index), threads)
-		if _, err := e.Run(ctx, "ffmpeg", args...); err != nil {
-			return fmt.Errorf("sampling frame %d: %w", index, err)
-		}
-		// A seek past the last frame writes nothing; the sample is skipped.
-		if _, err := os.Stat(path); err == nil {
-			count++
-		}
-	}
-	if count == 0 {
-		return errors.New("no frame could be sampled")
-	}
-	var list strings.Builder
-	for i := range count {
-		fmt.Fprintf(&list, "file '%s'\n", fmt.Sprintf(videoSampleName, i))
-	}
-	listPath := filepath.Join(dir, videoSampleList)
-	if err := os.WriteFile(listPath, []byte(list.String()), 0o600); err != nil {
+	samples, err := e.sampleVideo(ctx, dec, inputPath, dir, plan, sampleTimesMS(plan.info, maxVideoSampleFrames))
+	if err != nil {
 		return err
 	}
-	args := videoEncodeArgs(listPath, smallPath, largePath, count, sizeSmall, sizeLarge, quality, threads)
-	_, err = e.Run(ctx, "ffmpeg", args...)
-	return err
+	return e.encodeVideoAnimations(ctx, dir, plan, samples, outputs)
 }
 
-// videoSampleName is the printf pattern of the numbered lossless samples. A
-// sample keeps the decoder's pixel format, so the encode run scales from the
-// same pixels a single pass over the stream would.
-const videoSampleName = "sample-%03d.nut"
-
-// videoSampleList names the concat list of the samples, in order.
-const videoSampleList = "samples.txt"
-
-// videoTiming is what the probe reads about the stream thumbnails are
-// sampled from.
-type videoTiming struct {
-	width, height int
-	rate          float64 // frames per second; 0 when unknown
-	// offset is the stream's start relative to the container's, the origin
-	// that ffmpeg's -ss counts from.
-	offset float64
+// thumbnailEncoding is the encoding of an animated WebP thumbnail whose longest
+// side is at most edge.
+func thumbnailEncoding(edge, quality int) encoding {
+	return encoding{format: WebP, ext: ".webp", quality: quality, maxEdge: edge, maxArea: edge * edge}
 }
 
-type timingProbe struct {
-	Streams []struct {
-		Width        int    `json:"width"`
-		Height       int    `json:"height"`
-		AvgFrameRate string `json:"avg_frame_rate"`
-		RFrameRate   string `json:"r_frame_rate"`
-		StartTime    string `json:"start_time"`
-	} `json:"streams"`
-	Format struct {
-		StartTime string `json:"start_time"`
-	} `json:"format"`
+// videoOutput is one animated file an encode of samples writes.
+type videoOutput struct {
+	enc  encoding
+	path string
 }
 
-func probeVideoTiming(ctx context.Context, env Env, path string, streamIndex int) (videoTiming, error) {
-	res, err := env.Run(ctx, "ffprobe",
-		"-v", "error", "-of", "json",
-		"-select_streams", strconv.Itoa(streamIndex),
-		"-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate,start_time:format=start_time",
-		"-protocol_whitelist", "file", "-i", path)
-	if err != nil {
-		return videoTiming{}, fmt.Errorf("probing video: %w", err)
+// encodeVideoAnimations writes each output as one animated file of samples,
+// after dropping each frame identical to the one before it once resized: a
+// first run reports the signature of every frame as it will be encoded, since
+// the muxer would otherwise collapse the repeats and leave an animation of
+// fewer frames than the caller was told. A single sample is encoded without
+// the first run. The scene count of what was written is checked.
+func (e Env) encodeVideoAnimations(ctx context.Context, dir string, plan videoPlan, samples []sampledFrame, outputs []videoOutput) error {
+	if len(samples) == 0 {
+		return errors.New("no frame could be sampled")
 	}
-	var p timingProbe
-	if err := json.Unmarshal(res.Stdout, &p); err != nil {
-		return videoTiming{}, fmt.Errorf("parsing probe output: %w", err)
+	for _, out := range outputs {
+		src := plan.source(out.enc)
+		framesOf := func(positions []int) []encodeFrame {
+			frames := make([]encodeFrame, len(positions))
+			for i, position := range positions {
+				frames[i] = encodeFrame{input: "pam:" + samples[position].path, delayCS: videoFrameDelayCS, fits: plan.fits(out.enc)}
+			}
+			return frames
+		}
+		kept := []int{0}
+		if len(samples) > 1 {
+			all := make([]int, len(samples))
+			for i := range all {
+				all[i] = i
+			}
+			probed, err := e.runEncode(ctx, encodeArgs(framesOf(all), src, out.enc, encodeOutput{kind: outputProbe}))
+			if err != nil {
+				return fmt.Errorf("probing sampled frames: %w", err)
+			}
+			if len(probed) != len(samples) {
+				return fmt.Errorf("frame probe returned %d frames, want %d", len(probed), len(samples))
+			}
+			kept = kept[:0]
+			for i, f := range probed {
+				if i == 0 || f.signature != probed[i-1].signature {
+					kept = append(kept, i)
+				}
+			}
+		}
+		if _, err := e.runEncode(ctx, encodeArgs(framesOf(kept), src, out.enc, encodeOutput{kind: outputAnimation, path: out.path})); err != nil {
+			return fmt.Errorf("encoding animation: %w", err)
+		}
+		scenes, _, _, err := e.IdentifyArtifact(ctx, out.path)
+		if err != nil {
+			return err
+		}
+		if scenes != len(kept) {
+			return fmt.Errorf("encoded artifact holds %d scenes, want %d", scenes, len(kept))
+		}
 	}
-	if len(p.Streams) != 1 {
-		return videoTiming{}, fmt.Errorf("input has no stream %d", streamIndex)
-	}
-	s := p.Streams[0]
-	t := videoTiming{width: s.Width, height: s.Height, rate: parseRate(s.AvgFrameRate)}
-	if t.rate <= 0 {
-		t.rate = parseRate(s.RFrameRate)
-	}
-	streamStart, err1 := strconv.ParseFloat(s.StartTime, 64)
-	containerStart, err2 := strconv.ParseFloat(p.Format.StartTime, 64)
-	if err1 == nil && err2 == nil && !math.IsInf(streamStart-containerStart, 0) {
-		t.offset = streamStart - containerStart
-	}
-	return t, nil
-}
-
-// videoSeekSeconds returns the -ss target for frame index: half a frame
-// before its presentation time, so that rounding cannot step past it to the
-// next frame. Accurate seeking then decodes forward to the first frame at or
-// after the target.
-func videoSeekSeconds(t videoTiming, index int) float64 {
-	if t.rate <= 0 {
-		return 0
-	}
-	return math.Max(0, t.offset+(float64(index)-0.5)/t.rate)
-}
-
-// videoSampleArgs returns the ffmpeg arguments that write the first frame at
-// or after seconds to a lossless NUT file at out.
-func videoSampleArgs(inputPath, out string, streamIndex int, seconds float64, threads int) []string {
-	args := append(ffmpegArgs(threads),
-		"-ss", strconv.FormatFloat(seconds, 'f', 6, 64),
-		"-threads", strconv.Itoa(threads),
-		"-protocol_whitelist", "file",
-		"-i", inputPath,
-		"-map", fmt.Sprintf("0:%d", streamIndex),
-		"-an", "-sn", "-dn", "-frames:v", "1",
-		"-c:v", "ffv1", "-f", "nut", out)
-	return args
-}
-
-// videoEncodeArgs returns the ffmpeg arguments that read the samples listed
-// in the concat file list and write both animated WebP thumbnails from the
-// first count of them. The samples' own timestamps are replaced by setpts.
-func videoEncodeArgs(list, smallPath, largePath string, count, sizeSmall, sizeLarge, quality, threads int) []string {
-	frameCount := strconv.Itoa(count)
-	args := append(ffmpegArgs(threads),
-		"-protocol_whitelist", "file",
-		"-f", "concat", "-safe", "0", "-i", list,
-		"-filter_complex", fmt.Sprintf(
-			"[0:v]setpts=N/(2*TB),split=2[selected_small][selected_large];[selected_small]%s[small];[selected_large]%s[large]",
-			videoScaleFilter(sizeSmall),
-			videoScaleFilter(sizeLarge),
-		))
-	for _, out := range []struct{ label, path string }{{"[small]", smallPath}, {"[large]", largePath}} {
-		args = append(args,
-			"-map", out.label,
-			"-frames:v", frameCount,
-			"-loop", "0",
-			"-c:v", "libwebp",
-			"-quality", strconv.Itoa(quality),
-			"-r", "2",
-			out.path)
-	}
-	return args
-}
-
-// videoSelectArgs returns the ffmpeg arguments that decode the whole stream,
-// keep the frames at the sampled indices and write both animated WebPs.
-func videoSelectArgs(inputPath, smallPath, largePath string, streamIndex int, indices []int, sizeSmall, sizeLarge, quality int) []string {
-	terms := make([]string, 0, len(indices))
-	for _, index := range indices {
-		terms = append(terms, fmt.Sprintf("eq(n\\,%d)", index))
-	}
-	frameCount := strconv.Itoa(len(indices))
-	args := []string{
-		"-y",
-		"-i", inputPath,
-		"-an",
-		"-filter_complex", fmt.Sprintf(
-			"[0:%d]select='%s',setpts=N/(2*TB),split=2[selected_small][selected_large];[selected_small]%s[small];[selected_large]%s[large]",
-			streamIndex, strings.Join(terms, "+"),
-			videoScaleFilter(sizeSmall),
-			videoScaleFilter(sizeLarge),
-		),
-	}
-	for _, out := range []struct{ label, path string }{{"[small]", smallPath}, {"[large]", largePath}} {
-		args = append(args,
-			"-map", out.label,
-			"-frames:v", frameCount,
-			"-loop", "0",
-			"-c:v", "libwebp",
-			"-quality", strconv.Itoa(quality),
-			"-r", "2",
-			out.path)
-	}
-	return args
-}
-
-func videoScaleFilter(maxSize int) string {
-	return fmt.Sprintf("scale='min(%d,iw)':'min(%d,ih)':force_original_aspect_ratio=decrease", maxSize, maxSize)
-}
-
-// videoSample returns the indices of the sampled frames of a stream of the
-// given length: evenly spaced, i*frames/count for count samples.
-func videoSample(frames int) []int {
-	if frames <= 0 {
-		return []int{0}
-	}
-	count := min(frames, maxVideoSampleFrames)
-	indices := make([]int, 0, count)
-	for i := range count {
-		indices = append(indices, i*frames/count)
-	}
-	return indices
+	return nil
 }

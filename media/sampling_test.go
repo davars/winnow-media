@@ -296,6 +296,7 @@ func TestVideoFramesAt(t *testing.T) {
 }
 
 func TestVideoFrameRun(t *testing.T) {
+	forceSeek(t)
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	ctx := context.Background()
@@ -336,7 +337,7 @@ func TestVideoFrameRun(t *testing.T) {
 				continue
 			}
 			joined := " " + strings.Join(call[1:], " ") + " "
-			for _, want := range []string{" -ss 1.500 ", " -frames:v 5 "} {
+			for _, want := range []string{" -copyts ", " -ss ", " -frames:v 5 ", "gte(t\\,1.499999)"} {
 				if !strings.Contains(joined, want) {
 					t.Errorf("ffmpeg call lacks %q: %q", want, call)
 				}

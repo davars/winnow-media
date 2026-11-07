@@ -96,9 +96,19 @@ are resolved, limited and cancelled, and where scratch files live.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
   path.
-- `Env.GenerateVideoThumbnails` samples up to fifteen
-  evenly spaced frames of a video stream into two animated WebP thumbnails,
-  decoding short streams in full and seeking to the samples of long ones.
+- `Env.GenerateVideoThumbnails` writes two animated WebP thumbnails of fifteen
+  frames sampled evenly over a video, through the same pipeline as
+  `Processor.VideoFrames` (below): samples are read by one decode or by seeks, as
+  the stream's size decides, HDR is
+  tone-mapped, output is upright, sized, stripped and 8-bit, a frame identical
+  to the one before it is dropped, and each frame is shown for half a second.
+  The stream is ffprobe's choice; its `streamIndex` and `frames` arguments are
+  ignored. The samples are staged in a subdirectory beside the outputs, and the
+  same bounds and caps as the Processor's apply. It does not take the type
+  from the caller: the leading bytes pick the demuxer, and any other content
+  is left to ffmpeg's detection, limited to video containers (`mov`,
+  `matroska`, `avi`, `mpegts`, `mpeg`, `mpegvideo`, `flv`, `asf`), so a concat
+  or HLS list that names other files is refused.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts. `LimitArgs` bounds memory, map,
   area, list length (2048 scenes) and time; a header read that reaches the list
@@ -184,17 +194,38 @@ tools itself because the input is untrusted:
     duration, fewer when the stream has fewer frames (the duration is the only
     guide when the frame count is unknown). Targets that coincide are
     merged, and a clip of unknown duration gives one sample at 0.
-  - Each sample is one ffmpeg run with an accurate input seek (`-ss` before
-    `-i`), which decodes at most one group of pictures, so the cost depends on
-    the number of samples and the GOP length, not on the duration. The runs are
-    sequential: one process with all the seeks as separate inputs is faster
-    but holds every decoder open at once (14 GB peak on 4K HEVC).
-  - HLG and PQ video is converted to SDR before it is scaled: linearize,
-    convert the primaries to BT.709, tone-map with `hable`, and return to the
+  - A stream of at most `selectMaxPixels` decoded pixels (frames times width
+    times height as stored) is read by one ffmpeg run whose `select` filter
+    keeps, for each sample time, the first frame at or after it. The frame
+    count is the container's or, where it gives none, as in Matroska and
+    MPEG-TS, the duration times the declared rate, so a variable-rate stream
+    is estimated high and may take the seeks; a stream with neither never
+    qualifies. A longer stream is read by one ffmpeg run per sample, which
+    starts decoding a margin before the time and applies the same select. The
+    margin is sixteen frames (the deepest reordering H.264 and HEVC allow, at
+    the slower of the declared and the average rate) and at least half a
+    second, so that the decode passes the leading pictures of an open GOP,
+    which a seek to the keyframe alone cannot decode. It costs, on average,
+    that many extra decoded frames per sample, and at worst one more GOP when a
+    keyframe falls just inside it: one 720p keyint-300 sample took 0.07 s
+    without the margin and 0.70 s with it. Both paths keep ffmpeg's timestamps
+    as the container holds them (`-copyts`) and compare them with the sample
+    time added to the stream's start, so they read the same frames, also when
+    the stream starts after the container, by a fraction of a millisecond too.
+    The seek runs are sequential: one process with all the seeks as separate
+    inputs is faster but holds every decoder open at once (14 GB peak on 4K
+    HEVC).
+  - HLG and PQ video is scaled to the target size and then converted to SDR:
+    linearize, convert the primaries to BT.709, tone-map with `hable`, and return to the
     BT.709 transfer and matrix. Other video gets no colour filter.
-  - ffmpeg scales once, to the size the shared bounds give, and writes each
-    sample as PNG to a hidden scratch file in `dir`. Magick encodes the
-    samples to the encoding's format and quality with metadata stripped, a few
+  - ffmpeg decodes, tone-maps HDR and reduces, and does nothing else. It
+    scales an SDR frame to the smallest size covering twice the output in each
+    dimension, when that is smaller than the frame, and an HDR frame to the
+    output size, when larger, ahead of its tone map; Magick makes the final
+    resize to the exact size computed from the upright source. ffmpeg writes
+    each sample as PAM, at the decoder's own depth (16 bits for a 10-bit
+    stream), to a hidden scratch file in `dir`. Magick encodes the samples to
+    the encoding's format and quality with metadata stripped, a few
     per run (at most 16 million input pixels, about 256 MiB), so ImageMagick
     never holds more than that however many samples there are; a sample
     identical to the one before it (by ImageMagick signature) is dropped. The
@@ -206,7 +237,8 @@ tools itself because the input is untrusted:
     file`, so a nested input cannot reach the network, and the pinned `-f`
     demuxer; for `mov` also `-enable_drefs 0`, so a track's reference to an
     external data file is not followed. Each ffmpeg run also sets
-    `-threads 4` (decoder), `-filter_threads 4` and `-max_alloc` of 1 GiB.
+    `-threads 4` (decoder), `-filter_threads 4` and `-max_alloc` of 1 GiB;
+    ffprobe sets `-threads 4` and the same `-max_alloc`.
 
 - `Processor.ProbeVideo(ctx, path) (VideoInfo, Usage, error)` reads the
   properties of the video stream `VideoFrames` samples without decoding a
