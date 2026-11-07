@@ -555,40 +555,33 @@ type FrameInfo struct {
 //
 // Scenes are read from their headers, without decoding and without regard to
 // their size, except that a file of more scenes than the list-length ceiling
-// of LimitArgs is refused with ErrTooLarge; EncodeRung applies the caps. A
-// single-frame WebP is decoded once for its profile, which the header read can
-// miss. A failed read is retried once with the coder CoderForMIME names for
+// of LimitArgs is refused with ErrTooLarge; EncodeRung applies the caps. The
+// profile of a single-frame WebP comes from its chunk list, without decoding;
+// that of a single-frame JXL, which ImageMagick does not report from the
+// headers, from one decode of the file. A failed read is retried once with the coder CoderForMIME names for
 // mimeType ("" disables the retry), because magick cannot sniff some formats
 // from an extensionless path.
 func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]FrameInfo, error) {
-	read := func(ping bool) ([]sceneHeader, error) {
-		scenes, err := identifyHeaders(ctx, e, inputPath, ping)
-		if err == nil || errors.Is(err, ErrTooLarge) {
-			return scenes, err
-		}
+	ref := inputPath
+	scenes, err := identifyHeaders(ctx, e, ref, true)
+	if err != nil && !errors.Is(err, ErrTooLarge) {
 		coder, ok := CoderForMIME(mimeType)
 		if !ok {
 			return nil, err
 		}
-		scenes, retryErr := identifyHeaders(ctx, e, coder+":"+inputPath, ping)
+		ref = coder + ":" + inputPath
+		var retryErr error
+		scenes, retryErr = identifyHeaders(ctx, e, ref, true)
 		if retryErr != nil {
 			return nil, fmt.Errorf("%w; retried with coder %q, which also failed: %w", err, coder, retryErr)
 		}
-		return scenes, nil
+		err = nil
 	}
-	scenes, err := read(true)
 	if err != nil {
 		return nil, err
 	}
-	if kind, _ := sniffFile(inputPath); len(scenes) == 1 && kind == typeWebP {
-		full, err := read(false)
-		if err != nil {
-			return nil, err
-		}
-		if len(full) != 1 {
-			return nil, fmt.Errorf("reading headers: %d scenes, then %d", len(scenes), len(full))
-		}
-		scenes[0].hasICC = full[0].hasICC
+	if err := completeProfile(ctx, e, ref, inputPath, scenes); err != nil {
+		return nil, err
 	}
 	frames := make([]FrameInfo, len(scenes))
 	for i, s := range scenes {

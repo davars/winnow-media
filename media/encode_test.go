@@ -360,6 +360,43 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 	}
 }
 
+// A JXL still stored in Adobe RGB must be reported as profiled and converted
+// like the PNG above. ImageMagick's JXL coder does not read the ICC profile
+// under -ping, which the header-only probe uses, so the still is encoded as if
+// it were untagged.
+func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
+	env := requireMagick(t)
+	destination := writeSRGBProfile(t)
+	dir := t.TempDir()
+	adobe := writeAdobeProfile(t, dir)
+	withExtension := filepath.Join(dir, "wide.jxl")
+	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-profile", destination, "-profile", adobe, withExtension)
+	if !profileListHasICC(string(magick(t, env, "identify", "-format", "%[profiles]", withExtension))) {
+		t.Skip("this ImageMagick does not write an ICC profile into JXL")
+	}
+	input := renameToContent(t, withExtension)
+
+	frames, err := env.ProbeFrames(context.Background(), input, "image/jxl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !AnyProfiled(frames) {
+		t.Fatalf("ProbeFrames reports no ICC profile on a profiled JXL still: %+v", frames)
+	}
+	actual, cleanup, _, _, _, err := env.EncodeRung(context.Background(), input, "image/jxl",
+		false, Rung{CeilingPx: 128, MaxFrames: 1}, frames, destination, "", testQuality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	reference := filepath.Join(dir, "reference.webp")
+	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
+		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), reference)...)
+	if diff := meanAbsoluteDifference(t, env, actual, reference); diff > 0.004 {
+		t.Fatalf("corrected WebP differs from explicit sRGB reference by %.6f, want <= 0.004", diff)
+	}
+}
+
 // The frames of the animated WebP carry an Adobe RGB profile ImageMagick does
 // not read from an animation, so the conversion comes from the compositor's
 // report of the profile with each frame.

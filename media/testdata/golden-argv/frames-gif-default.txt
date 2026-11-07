@@ -17,7 +17,7 @@
 "300"
 "-ping"
 "-format"
-"%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n"
+"%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|END\n"
 "gif:$IN/input"
 
 "magick"

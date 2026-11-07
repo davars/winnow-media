@@ -544,3 +544,34 @@ func TestAnimationFramesAt(t *testing.T) {
 		}
 	})
 }
+
+// ProbeAnimation promises to read the headers without decoding pixels. A
+// one-frame WebP is nonetheless decoded in full for its profile flag, which
+// the VP8X chunk states: 1.3 s and the whole pixel cache for a 52 MP still,
+// against 29 ms for the -ping read.
+func TestProbeAnimationDoesNotDecodeAStillWebP(t *testing.T) {
+	requireWebPBuilders(t)
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	srgb, err := os.ReadFile(writeSRGBProfile(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	still := filepath.Join(t.TempDir(), "still.webp")
+	magick(t, env, "-size", "8x8", "xc:red", still)
+	for name, path := range map[string]string{"plain": still, "profiled": withWebPChunk(t, still, "icc", srgb)} {
+		t.Run(name, func(t *testing.T) {
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
+			info, _, err := p.ProbeAnimation(context.Background(), path)
+			if err != nil || info.Frames != 1 {
+				t.Fatalf("info %+v, err %v", info, err)
+			}
+			for _, call := range rec.calls {
+				if !slices.Contains(call, "-ping") {
+					t.Errorf("a still WebP was decoded to read its headers: %q", call)
+				}
+			}
+		})
+	}
+}
