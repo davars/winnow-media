@@ -2,78 +2,83 @@ package media
 
 import (
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 )
 
-// maxWebPChunks bounds the chunk headers webpHasICC reads; a still WebP has
-// a handful.
+// maxWebPChunks bounds the chunk headers webpICC reads; a still WebP has a
+// handful.
 const maxWebPChunks = 1024
 
-// webpICCFlag is the ICC bit of the VP8X flags byte.
-const webpICCFlag = 0x20
+// VP8X flag bits.
+const (
+	webpICCFlag  = 0x20
+	webpAnimFlag = 0x02
+)
 
-// webpHasICC reports whether the WebP at path carries an ICC profile that
-// ImageMagick will read: a leading VP8X chunk with the ICC flag set and an
-// ICCP chunk. Either alone yields no profile there. It reads chunk headers
-// only, at most maxWebPChunks of them, never chunk data, so cost does not
-// depend on the image. A file whose chunk list ends or is cut short before an
-// ICCP chunk has no profile, since the header read that precedes this call
-// already accepted the file; more than maxWebPChunks chunks is an error.
-func webpHasICC(path string) (bool, error) {
+// webpICC reports from its chunk headers alone whether ImageMagick reads an
+// ICC profile from the WebP at path. known is false when the file's layout is
+// not one whose answer is certain, and the caller must decode the file to
+// find out.
+//
+// An answer is given for a simple file (a single VP8 or VP8L chunk) and for
+// an extended file whose first chunk is VP8X, whose chunks end exactly at the
+// size the RIFF header states, and that holds at most one ICCP chunk. ICC
+// profile means the VP8X ICC flag is set and an ICCP chunk exists; in an
+// animation the profile applies to its frames. Only chunk headers are read, at
+// most maxWebPChunks of them, never chunk data.
+func webpICC(path string) (hasICC, known bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return false, err
+		return false, false
 	}
 	defer func() { _ = f.Close() }()
 
 	var riff [12]byte
 	if _, err := io.ReadFull(f, riff[:]); err != nil {
-		return false, tolerateShort(err)
+		return false, false
 	}
 	if string(riff[:4]) != "RIFF" || string(riff[8:]) != "WEBP" {
-		return false, nil
+		return false, false
 	}
-	var head [8]byte
-	for n := 0; n < maxWebPChunks; n++ {
+	end := 8 + int64(binary.LittleEndian.Uint32(riff[4:]))
+	pos := int64(12)
+	extended, iccp := false, 0
+	for n := 0; pos != end; n++ {
+		if n == maxWebPChunks || pos+8 > end {
+			return false, false
+		}
+		var head [8]byte
 		if _, err := io.ReadFull(f, head[:]); err != nil {
-			return false, tolerateShort(err)
+			return false, false
 		}
 		size := int64(binary.LittleEndian.Uint32(head[4:]))
-		skip := size + size&1 // chunk data is padded to an even length
-		switch string(head[:4]) {
-		case "ICCP":
-			return n > 0, nil
-		case "VP8X":
-			if n != 0 {
-				return false, nil
-			}
+		next := pos + 8 + size + size&1 // chunk data is padded to an even length
+		if next > end {
+			return false, false
+		}
+		switch kind := string(head[:4]); {
+		case n == 0 && kind == "VP8X" && size >= 10:
 			var flags [1]byte
 			if _, err := io.ReadFull(f, flags[:]); err != nil {
-				return false, tolerateShort(err)
+				return false, false
 			}
 			if flags[0]&webpICCFlag == 0 {
-				return false, nil
+				return false, true
 			}
-			skip--
-		default:
-			if n == 0 {
-				return false, nil
+			extended = true
+		case n == 0 && (kind == "VP8 " || kind == "VP8L"):
+		case !extended || kind == "VP8X":
+			return false, false
+		case kind == "ICCP":
+			if iccp++; iccp > 1 {
+				return false, false
 			}
 		}
-		if _, err := f.Seek(skip, io.SeekCurrent); err != nil {
-			return false, err
+		if _, err := f.Seek(next, io.SeekStart); err != nil {
+			return false, false
 		}
+		pos = next
 	}
-	return false, fmt.Errorf("WebP holds more than %d chunks", maxWebPChunks)
-}
-
-// tolerateShort turns the end of the file into "no more chunks".
-func tolerateShort(err error) error {
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil
-	}
-	return err
+	return iccp == 1, true
 }
