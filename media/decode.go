@@ -95,7 +95,9 @@ type openRequest struct {
 	// otherwise the type comes from the bytes.
 	dec    decoder
 	pinned bool
-	// caps applies the caps on stills and on the frames returned.
+	// caps applies the cap on the frames returned. The caps on a still apply
+	// whatever caps is: at the header read when nothing can reduce its
+	// decode, and otherwise when it is encoded, against the targets.
 	caps bool
 	// pick chooses the frames of an animation from their count, as indices in
 	// ascending order without repeats; nil takes them from hints.
@@ -164,15 +166,19 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 	if h.route == routeStill && len(h.scenes) > 1 && !req.hints.Still {
 		return headerRead{}, fmt.Errorf("%w: %s file of %d images", ErrUnsupportedType, strings.ToLower(h.scenes[0].format), len(h.scenes))
 	}
-	animated := h.route != routeStill
-	switch {
-	case animated:
-		err = checkSceneHeaders(h.scenes, true)
-	case req.caps:
-		err = checkSceneHeaders(h.scenes[:1], false)
-	}
-	if err != nil {
-		return headerRead{}, err
+	if h.route != routeStill {
+		// Frames of an animation are never decoded at a reduced size, so the
+		// header sizes are the decoded sizes.
+		if err := checkSceneHeaders(h.scenes, true); err != nil {
+			return headerRead{}, err
+		}
+	} else if first := h.scenes[0]; !reducible(first.format) {
+		// Nothing reduces this decode, so the cap is known now. It must run
+		// before completeProfile, which can decode the whole image.
+		stored := [2]int{first.width, first.height}
+		if err := checkStillSize(stored, stored); err != nil {
+			return headerRead{}, err
+		}
 	}
 	if err := completeProfile(ctx, e, h.ref+selector, req.path, h.scenes); err != nil {
 		return headerRead{}, err
@@ -243,7 +249,9 @@ type Source struct {
 // ImageMagick when it is encoded. A file of several images that is neither a
 // GIF nor a WebP is refused with ErrUnsupportedType unless h.Still is set, and
 // so is a video file, whatever h says. An animation over the caps is refused
-// with ErrTooLarge before any frame is decoded.
+// with ErrTooLarge before any frame is decoded. A still that no decode stage
+// can reduce is refused here if its stored size is over the caps; one that
+// can be reduced is judged by Encode against its targets.
 //
 // The caller must Close the Source.
 func (e Env) Open(ctx context.Context, path string, h Hints) (*Source, error) {
@@ -275,7 +283,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	if hdr.route == routeStill {
 		count = 1
 		s.layout.uw, s.layout.uh = uprightSize(first.width, first.height, cmp.Or(override, first.orientation))
-		s.ref, s.soft, s.jpeg = hdr.ref+"[0]", first.soft, first.format == "JPEG"
+		s.ref, s.soft, s.jpeg = hdr.ref+"[0]", first.soft, reducible(first.format)
 		s.stored = [2]int{first.width, first.height}
 		if fullReadFormats[first.format] {
 			s.softRef = hdr.ref
@@ -514,24 +522,34 @@ func (s *Source) fits(enc encoding) bool {
 	return !resize
 }
 
-// reduction decides whether a JPEG still is decoded at a reduced size for
-// encodes at encs and, if so, returns the read option and the exact size of
-// each output. The decoded size is the smallest eighth of the stored size
-// that covers jpegSizeMargin times every output in both dimensions; the exact
+// reducible reports whether a decode of the ImageMagick coder format may be
+// reduced at decode time. It is the one predicate for the header check and for
+// choosing a reduction; a format for which it holds is still confirmed with
+// the decoder (see decodePlan).
+func reducible(format string) bool { return format == "JPEG" }
+
+// reducedEighths decides whether a still is decoded at a reduced size for
+// encodes at encs. If so it returns n, 1 to 7, such that the decoded frame
+// is n eighths of the stored size, and the exact size of each output; else 0
+// and nil. It is the one place the reduction is chosen: the read option
+// and the cap on the decoded size both come from it.
+//
+// The decoded size is the smallest eighth of the stored size that covers
+// jpegSizeMargin times every output in both dimensions. The exact output
 // sizes are computed here, from the size and orientation the header gives,
 // because ImageMagick would round each side of the reduced frame separately.
-func (s *Source) reduction(encs []encoding) (readOps []string, sizes [][2]int) {
+func (s *Source) reducedEighths(encs []encoding) (n int, sizes [][2]int) {
 	if !s.jpeg || !s.reduce {
-		return nil, nil
+		return 0, nil
 	}
-	n := 1
+	n = 1
 	sizes = make([][2]int, len(encs))
 	sw, sh := s.stored[0], s.stored[1]
 	swapped := s.upright[0] != sw || s.upright[1] != sh
 	for i, enc := range encs {
 		tw, th, resize := fitSize(s.upright[0], s.upright[1], enc.maxEdge, enc.maxArea)
 		if !resize {
-			return nil, nil
+			return 0, nil
 		}
 		sizes[i] = [2]int{tw, th}
 		if swapped {
@@ -540,17 +558,82 @@ func (s *Source) reduction(encs []encoding) (readOps []string, sizes [][2]int) {
 		n = max(n, ceilDiv(8*jpegSizeMargin*tw, sw), ceilDiv(8*jpegSizeMargin*th, sh))
 	}
 	if n >= 8 {
+		return 0, nil
+	}
+	return n, sizes
+}
+
+// decodedSize is the size of the frame decoding the still yields for encodes
+// at encs, in the stored orientation.
+func (s *Source) decodedSize(encs []encoding) [2]int {
+	n, _ := s.reducedEighths(encs)
+	if n == 0 {
+		return s.stored
+	}
+	return [2]int{ceilDiv(s.stored[0]*n, 8), ceilDiv(s.stored[1]*n, 8)}
+}
+
+// reduction returns the read option that makes the decode of a JPEG still
+// the size decodedSize gives, and the exact size of each output; nil, nil
+// when the decode is not reduced.
+func (s *Source) reduction(encs []encoding) (readOps []string, sizes [][2]int) {
+	n, sizes := s.reducedEighths(encs)
+	if n == 0 {
 		return nil, nil
 	}
-	hint := fmt.Sprintf("%dx%d", ceilDiv(sw*n, 8), ceilDiv(sh*n, 8))
-	return []string{"-define", "jpeg:size=" + hint}, sizes
+	d := s.decodedSize(encs)
+	return []string{"-define", fmt.Sprintf("jpeg:size=%dx%d", d[0], d[1])}, sizes
 }
 
 func ceilDiv(a, b int) int { return (a + b - 1) / b }
 
+// decodePlan returns the read option, the exact output sizes and the size of
+// the decoded frame for encodes at encs. The reduction reducedEighths chooses
+// is confirmed by a header read made with the option, which reports the size
+// the decoder really produces: a decoder may ignore the hint (a lossless JPEG
+// does). When the answer is not decodedSize the reduction is dropped and the
+// still is judged at its stored size.
+func (s *Source) decodePlan(ctx context.Context, encs []encoding) (readOps []string, sizes [][2]int, decoded [2]int, err error) {
+	readOps, sizes = s.reduction(encs)
+	if readOps == nil {
+		return nil, nil, s.stored, nil
+	}
+	got, err := s.pingDecoded(ctx, readOps)
+	if err != nil {
+		return nil, nil, [2]int{}, err
+	}
+	if got != s.decodedSize(encs) {
+		return nil, nil, s.stored, nil
+	}
+	return readOps, sizes, got, nil
+}
+
+// pingDecoded returns the size, in the stored orientation, that reading the
+// still with readOps decodes to, from the header alone.
+func (s *Source) pingDecoded(ctx context.Context, readOps []string) ([2]int, error) {
+	args := append([]string{"identify", "-ping"}, readOps...)
+	args = append(args, "-format", "%w %h", s.ref)
+	res, err := s.env.runMagick(ctx, args...)
+	if terr := timeLimitError(res.Stderr, err); terr != nil {
+		return [2]int{}, fmt.Errorf("reading the reduced size: %w", terr)
+	}
+	var d [2]int
+	if _, err := fmt.Sscanf(string(res.Stdout), "%d %d", &d[0], &d[1]); err != nil {
+		return [2]int{}, fmt.Errorf("reading the reduced size from %q: %w", res.Stdout, err)
+	}
+	return d, nil
+}
+
 // encodeStills runs the fused still encode for the targets and returns what
 // each reported.
 func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []string) ([]encodedFrame, error) {
+	readOps, sizes, decoded, err := s.decodePlan(ctx, encs)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkStillSize(s.stored, decoded); err != nil {
+		return nil, err
+	}
 	if s.softRef != "" && slices.ContainsFunc(encs, func(e encoding) bool { return !s.fits(e) }) {
 		soft, err := fullSoft(ctx, s.env, s.softRef)
 		if err != nil {
@@ -558,7 +641,6 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 		}
 		s.soft, s.softRef = soft, ""
 	}
-	readOps, sizes := s.reduction(encs)
 	targets := make([]fusedTarget, len(encs))
 	for i, enc := range encs {
 		f, err := s.stillFrame(enc)
@@ -588,10 +670,14 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 // one animated file; a still, or one selected frame, makes a plain image, and
 // a target's Format must be WebP when there are several. A frame identical to
 // the one before it at the target's size is dropped, so Artifact.Frames says
-// which frames the file holds. A still is decoded once for all targets. A run
-// that hits ImageMagick's time limit fails with ErrTimeLimit, and one that
-// reports a frame above the bounds of its target fails too; neither returns
-// an artifact.
+// which frames the file holds. A still is decoded once for all targets. It is
+// refused with ErrTooLarge, before any pixel is decoded, when the frame the
+// decode yields for these targets has a side over 16384 or more than 52
+// million pixels; a JPEG that the targets let the decode reduce is judged at
+// the reduced size, any other still at its stored size. A run that hits
+// ImageMagick's time limit fails with ErrTimeLimit, and one that reports a
+// frame above the bounds of its target fails too; neither returns an
+// artifact.
 func (s *Source) Encode(ctx context.Context, maxFrames int, targets ...Encoding) ([]Artifact, error) {
 	encs := make([]encoding, len(targets))
 	for i, t := range targets {

@@ -84,6 +84,21 @@ are resolved, limited and cancelled, and where scratch files live.
   twice every target in both dimensions. The output size is then computed in
   Go from the headers' size and orientation (`fitSize`), because
   ImageMagick would round each side of the reduced frame separately.
+  The still caps (a side of at most 16384 and at most 52 million pixels)
+  apply to the frame the decode produces, on `Env` as on the `Processor`,
+  and a still over them is refused with `ErrTooLarge`. `Open` refuses a still
+  that no decode stage can reduce when its stored size is over them, before
+  the profile read that may decode it. `Encode` judges a JPEG against the
+  targets it is given, before any pixel is decoded: at the reduced size, or
+  at its stored size when the reduction does not apply. A header read made
+  with the hint confirms the size the decoder will produce, since a lossless
+  JPEG ignores `jpeg:size`; when it differs from the computed size the JPEG
+  is decoded and judged unreduced. One function chooses the reduction and
+  gives the size that is checked, so the two cannot disagree. A 73 MP JPEG
+  (7308x10000) is admitted when the largest target reduces it to at most
+  six eighths (a target up to 3750 px) and refused at seven eighths (about
+  55.9 MP) and where nothing reduces it; a 16382x3628 JPEG is admitted at
+  targets of 2048 and below.
 - `Env.ProbeFrames` reads each scene's delay and ICC flag from the headers,
   so a still of any size is accepted. The profile of a single-frame WebP is
   found in its RIFF chunk list when the layout settles it and by one decode
@@ -319,7 +334,9 @@ hours (the stream's duration, else the container's), or when a video
 container holds more than 32 streams. `AnimationFrames` and
 `AnimationFramesAt` also refuse a call whose returned frames times the canvas
 exceed 64 million pixels, and the message names the largest count that fits.
-These refusals wrap `ErrTooLarge`, naming the cap and the values.
+These refusals wrap `ErrTooLarge`, naming the cap and the values. The frame
+caps apply to a still as it is decoded, not as it is stored (see `Env.Open`
+above); a refusal names both sizes.
 
 **Where the numbers come from.** The caps and ceilings were set from
 measurements of the largest inputs they admit, made on a 12-CPU x86_64 host
@@ -327,7 +344,15 @@ with `measure` (below). A 25 MiB 4K 60 fps video, 10-bit HEVC (HLG or PQ) or
 H.264, takes about 2.5 minutes with 64 samples and uses up to 2.7 times its
 wall time in CPU, since the decoder and filters are bound to 4 threads. Its
 peak, 2.8 GiB, is ImageMagick encoding the samples; ffmpeg stays near 300 MiB.
-A 48 MP HEIC takes 8 s and 0.9 GiB. ImageMagick keeps 16 bytes per pixel, so
+A 48 MP HEIC takes 8 s and 0.9 GiB. The still caps were measured on the
+three Raspberry Pi 5 nodes of the media service, which runs with its
+low-memory configuration: every format passes at 52 MP with at least 34% time
+and 39% memory headroom, and a HEIC panorama at 52 MP takes about 25 s
+(inferred from 28.7 s at 59.6 MP). 80 MP was rejected, since AVIF (1399 MiB
+at 80 MP) and HEIC panoramas would need exceptions. The decision and its
+measurements are in winnow's
+`docs/plans/rearchitecture/2026-11-07_unified-pipeline.md`.
+ImageMagick keeps 16 bytes per pixel, so
 animations set the frame and pixel caps: it holds every composited frame
 beside the decoded ones, and a GIF of full-canvas frames read by ImageMagick
 completed up to 185 MP in all and failed at 194 MP, while a single 81 MP frame
