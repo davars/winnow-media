@@ -357,7 +357,7 @@ func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
 		{input: "gif:" + d7, prelude: []string{"-coalesce"}, delayCS: -1},
 	}
 	_, err := env.runEncode(context.Background(), encodeArgs(frames, encodeSource{}, webpEncoding(8),
-		encodeOutput{kind: outputAnimation, path: out}))
+		encodeOutput{kind: outputAnimation, path: out}), encodeCheck{})
 	if err != nil {
 		t.Fatal(err)
 	}

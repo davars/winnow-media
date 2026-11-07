@@ -500,7 +500,7 @@ func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
 		{"compositor", func(name string, _ []string) bool { return name == webpFramesTool }, "composited 1 of 4"},
 		{"probe", func(name string, args []string) bool {
 			return name == "magick" && slices.Contains(args, "info:") && slices.Contains(args, "-format") && !slices.Contains(args, "identify")
-		}, "probe returned 1 frames, want 4"},
+		}, "encode reported 1 frames, want 4"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			env := real

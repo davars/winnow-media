@@ -1,7 +1,9 @@
 package media
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -119,6 +121,88 @@ const encodeFormat = "%#|%w|%h\n"
 type encodedFrame struct {
 	signature     string
 	width, height int
+}
+
+// encodeBound is what the size of one encoded frame must satisfy.
+type encodeBound struct {
+	maxEdge, maxArea int
+	// width and height, when both are set, are the exact size.
+	width, height int
+}
+
+// boundOf is the bound of a frame of enc encoded with src.
+func boundOf(enc encoding, src encodeSource) encodeBound {
+	return encodeBound{enc.maxEdge, enc.maxArea, src.width, src.height}
+}
+
+// verify returns an error if a frame of size w x h breaks the bound.
+func (b encodeBound) verify(w, h int) error {
+	switch {
+	case b.width > 0 && b.height > 0 && (w != b.width || h != b.height):
+		return fmt.Errorf("encoded frame is %dx%d, want exactly %dx%d", w, h, b.width, b.height)
+	case max(w, h) > b.maxEdge || w*h > b.maxArea:
+		return fmt.Errorf("encoded frame is %dx%d, above the bounds of %d on a side and %d pixels", w, h, b.maxEdge, b.maxArea)
+	}
+	return nil
+}
+
+// encodeCheck is what runEncode holds the run to. The zero value checks
+// nothing.
+type encodeCheck struct {
+	// bounds holds the bound of each reported frame, or one bound for all of
+	// them.
+	bounds []encodeBound
+	// frames is the number of frames the run must report; 0 leaves it
+	// unchecked.
+	frames int
+	// outputs are the files the run writes. They are removed when the run
+	// fails or is refused.
+	outputs []string
+}
+
+// timeLimitMessage is what ImageMagick prints when a run exceeds its time
+// limit.
+var timeLimitMessage = []byte("time limit exceeded")
+
+// timeLimitError returns err, made to wrap ErrTimeLimit if ImageMagick
+// reported its time limit on stderr, whatever its exit status; runErr is the
+// error of the run, nil when it exited 0. A run that exited 0 yields an error
+// quoting stderr; the error of a failed run already does.
+func timeLimitError(stderr []byte, runErr error) error {
+	switch {
+	case !bytes.Contains(stderr, timeLimitMessage):
+		return runErr
+	case runErr != nil:
+		return fmt.Errorf("%w: %w", ErrTimeLimit, runErr)
+	}
+	return fmt.Errorf("magick: %w: %s", ErrTimeLimit, bytes.TrimSpace(stderr))
+}
+
+// checkFrames returns an error for a frame outside its bound, which is how a
+// resize that did not happen shows when stderr cannot be read.
+func (c encodeCheck) checkFrames(frames []encodedFrame) error {
+	want := max(c.frames, len(c.bounds))
+	if c.frames > 0 || len(c.bounds) > 1 {
+		if len(frames) != want {
+			return fmt.Errorf("encode reported %d frames, want %d", len(frames), want)
+		}
+	}
+	for i, f := range frames {
+		if len(c.bounds) == 0 {
+			break
+		}
+		if err := c.bounds[min(i, len(c.bounds)-1)].verify(f.width, f.height); err != nil {
+			return fmt.Errorf("magick: frame %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// removeOutputs deletes the files of the run, ignoring errors.
+func (c encodeCheck) removeOutputs() {
+	for _, p := range c.outputs {
+		_ = os.Remove(p)
+	}
 }
 
 // encodeArgs returns the arguments of the magick run that is the one encode

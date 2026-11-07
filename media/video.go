@@ -79,6 +79,7 @@ func (e Env) encodeVideoAnimations(ctx context.Context, dir string, plan videoPl
 	}
 	for _, out := range outputs {
 		src := plan.source(out.enc)
+		bound := []encodeBound{boundOf(out.enc, src)}
 		framesOf := func(positions []int) []encodeFrame {
 			frames := make([]encodeFrame, len(positions))
 			for i, position := range positions {
@@ -92,12 +93,10 @@ func (e Env) encodeVideoAnimations(ctx context.Context, dir string, plan videoPl
 			for i := range all {
 				all[i] = i
 			}
-			probed, err := e.runEncode(ctx, encodeArgs(framesOf(all), src, out.enc, encodeOutput{kind: outputProbe}))
+			probed, err := e.runEncode(ctx, encodeArgs(framesOf(all), src, out.enc, encodeOutput{kind: outputProbe}),
+				encodeCheck{frames: len(all), bounds: bound})
 			if err != nil {
 				return fmt.Errorf("probing sampled frames: %w", err)
-			}
-			if len(probed) != len(samples) {
-				return fmt.Errorf("frame probe returned %d frames, want %d", len(probed), len(samples))
 			}
 			kept = kept[:0]
 			for i, f := range probed {
@@ -106,7 +105,8 @@ func (e Env) encodeVideoAnimations(ctx context.Context, dir string, plan videoPl
 				}
 			}
 		}
-		if _, err := e.runEncode(ctx, encodeArgs(framesOf(kept), src, out.enc, encodeOutput{kind: outputAnimation, path: out.path})); err != nil {
+		if _, err := e.runEncode(ctx, encodeArgs(framesOf(kept), src, out.enc, encodeOutput{kind: outputAnimation, path: out.path}),
+			encodeCheck{frames: len(kept), bounds: bound, outputs: []string{out.path}}); err != nil {
 			return fmt.Errorf("encoding animation: %w", err)
 		}
 		scenes, _, _, err := e.IdentifyArtifact(ctx, out.path)

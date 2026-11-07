@@ -11,6 +11,16 @@ import (
 // it with errors.Is.
 var ErrTooLarge = errors.New("input too large")
 
+// ErrTimeLimit is returned, wrapped with what the tool reported, when an
+// encode or a header read (ProbeFrames, Open and the operations built on
+// them) reached ImageMagick's time limit. ImageMagick often exits 0 when it
+// does, with the work unfinished, so such a run's output is never used. The
+// error is recognised from ImageMagick's message on stderr: through an Env it
+// needs the Runner to fill Result.Stderr, and without it only the size check
+// of the encodes catches an unfinished one. A Processor always fills it. Test
+// for it with errors.Is.
+var ErrTimeLimit = errors.New("time limit exceeded")
+
 // The caps below are the one place the limits are stated; the ImageMagick
 // policy ceilings are derived from them. Each was set from measurements of the
 // largest inputs it admits, made with internal/cmd/measure on a 12-CPU x86_64
@@ -80,9 +90,11 @@ func ffmpegThreadsFor(width, height int) int {
 	return ffmpegThreads
 }
 
-// policyTimeSeconds is the ImageMagick policy's time ceiling, the longest any
-// one run may take. A compositor waits no longer than this for ImageMagick to
-// consume a frame it wrote, since a run that long has already been stopped.
+// policyTimeSeconds is the ImageMagick policy's time ceiling, the longest
+// ImageMagick works on any one image: the clock starts when an image is
+// created, clones inherit it, and it is checked when pixels are next
+// accessed, so it bounds neither a process nor a run of several images. A
+// compositor waits this long for ImageMagick to consume a frame it wrote.
 const policyTimeSeconds = 300
 
 // consumeTimeout is how long a compositor waits for a written frame to be

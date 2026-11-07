@@ -27,6 +27,11 @@ import (
 // Result is one completed tool run.
 type Result struct {
 	Stdout []byte
+	// Stderr is the tail of the tool's standard error, or nil when the
+	// runner does not capture it. ImageMagick reports a run that hit its time
+	// limit there and nowhere else, so a runner that leaves it nil leaves
+	// only the size check of the encodes to notice.
+	Stderr []byte
 	// Usage is nil when the runner cannot measure it; it is never zero-filled.
 	Usage *Usage
 }

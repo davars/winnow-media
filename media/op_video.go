@@ -776,15 +776,14 @@ func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 		return nil
 	}
 	pattern := strings.ReplaceAll(filepath.Join(s.dir, ".enc-"), "%", "%%") + "%d" + s.enc.ext
-	encoded, err := s.env.runEncode(ctx, encodeArgs(batch, s.src, s.enc, encodeOutput{kind: outputFiles, path: pattern}))
+	encoded, err := s.env.runEncode(ctx, encodeArgs(batch, s.src, s.enc, encodeOutput{kind: outputFiles, path: pattern}),
+		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch))})
 	if err != nil {
 		return fmt.Errorf("encoding frames %d to %d: %w", s.seen, s.seen+len(batch)-1, err)
 	}
-	if len(encoded) != len(batch) {
-		return fmt.Errorf("encoding frames %d to %d: %d results", s.seen, s.seen+len(batch)-1, len(encoded))
-	}
+	files := s.batchFiles(len(encoded))
 	for j, f := range encoded {
-		tmp := filepath.Join(s.dir, ".enc-"+strconv.Itoa(j)+s.enc.ext)
+		tmp := files[j]
 		if s.seen+j > 0 && f.signature == s.lastSig {
 			if err := os.Remove(tmp); err != nil {
 				return err
@@ -800,6 +799,15 @@ func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 	}
 	s.seen += len(batch)
 	return nil
+}
+
+// batchFiles are the files a run of n frames writes.
+func (s *sampleEncoder) batchFiles(n int) []string {
+	files := make([]string, n)
+	for j := range files {
+		files[j] = filepath.Join(s.dir, ".enc-"+strconv.Itoa(j)+s.enc.ext)
+	}
+	return files
 }
 
 // encodeSamples encodes frames, all of s.framePixels pixels, in batches.

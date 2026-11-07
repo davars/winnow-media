@@ -241,7 +241,7 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	var stdout bytes.Buffer
 	var stderr tailBuffer
 	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
-	return Result{Stdout: stdout.Bytes(), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
+	return Result{Stdout: stdout.Bytes(), Stderr: bytes.TrimSpace(stderr.buf), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
 }
 
 // helperError turns the outcome of one helper run into an error, or nil.

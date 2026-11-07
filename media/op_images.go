@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -142,7 +143,8 @@ func fullSoft(ctx context.Context, env Env, ref string) (bool, error) {
 // by a coder and suffixed by a scene selector, and parses each scene's
 // header. ping reads headers only. A file with more scenes than the list
 // length ceiling of LimitArgs is refused with an error wrapping ErrTooLarge,
-// before any frame is held.
+// before any frame is held, and a read that reaches the time limit with one
+// wrapping ErrTimeLimit.
 func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) ([]sceneHeader, error) {
 	args := append([]string{"identify"}, LimitArgs()...)
 	if ping {
@@ -150,6 +152,9 @@ func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) (
 	}
 	args = append(args, "-format", sceneHeaderFormat, inputRef)
 	res, err := env.Run(ctx, "magick", args...)
+	if terr := timeLimitError(res.Stderr, err); errors.Is(terr, ErrTimeLimit) {
+		return nil, fmt.Errorf("reading headers: %w", terr)
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), listLengthRefusal) {
 			return nil, tooLarge("file holds more than %s scenes, the limit is %d", policyListLength, maxAnimationFrames)
@@ -259,12 +264,23 @@ func placeSRGB(dir string) (string, error) {
 }
 
 // runEncode runs one encode and returns what it reported, one entry per frame.
-func (e Env) runEncode(ctx context.Context, args []string) ([]encodedFrame, error) {
+// A run that failed, hit ImageMagick's time limit (ErrTimeLimit) or reported
+// a frame count or size outside chk is an error, and removes the outputs chk
+// names.
+func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]encodedFrame, error) {
 	res, err := e.Run(ctx, "magick", args...)
+	err = timeLimitError(res.Stderr, err)
+	var frames []encodedFrame
+	if err == nil {
+		if frames, err = parseEncoded(res.Stdout); err == nil {
+			err = chk.checkFrames(frames)
+		}
+	}
 	if err != nil {
+		chk.removeOutputs()
 		return nil, err
 	}
-	return parseEncoded(res.Stdout)
+	return frames, nil
 }
 
 // animationLayout is what the header read of an animation decided: the
