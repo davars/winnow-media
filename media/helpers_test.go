@@ -64,12 +64,18 @@ func requireMagick(t *testing.T) Env {
 // test ends, and skips the test when a tool cannot be found.
 func requireProcessor(t *testing.T) *Processor {
 	t.Helper()
+	return requireProcessorWith(t, HighMemory)
+}
+
+// requireProcessorWith is requireProcessor under the memory profile.
+func requireProcessorWith(t *testing.T, profile MemoryProfile) *Processor {
+	t.Helper()
 	for _, name := range []string{"magick", "ffmpeg", "ffprobe"} {
 		if _, err := tool.Resolve(name); err != nil {
 			t.Skip(name + " not available")
 		}
 	}
-	p, err := NewProcessor(context.Background())
+	p, err := NewProcessor(context.Background(), profile)
 	if err != nil {
 		t.Fatal(err)
 	}

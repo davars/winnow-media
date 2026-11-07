@@ -11,18 +11,19 @@ import (
 	"testing"
 )
 
-// timeLimitArgs returns args with the time limit of LimitArgs replaced by
-// seconds.
+// timeLimitArgs returns args preceded by the limit flags of LimitArgs with
+// the time limit replaced by seconds. The flags follow the ones runMagick
+// adds, so they win.
 func timeLimitArgs(t *testing.T, args []string, seconds string) []string {
 	t.Helper()
-	args = slices.Clone(args)
-	for i := 0; i+2 < len(args); i++ {
-		if args[i] == "-limit" && args[i+1] == "time" {
-			args[i+2] = seconds
-			return args
+	limit := LimitArgs()
+	for i := 0; i+2 < len(limit); i++ {
+		if limit[i] == "-limit" && limit[i+1] == "time" {
+			limit[i+2] = seconds
+			return append(limit, args...)
 		}
 	}
-	t.Fatal("no time limit in the arguments")
+	t.Fatal("no time limit in LimitArgs")
 	return nil
 }
 
@@ -144,7 +145,7 @@ func TestEncodeTimeLimitThroughTheProcessorPolicy(t *testing.T) {
 	p := requireProcessor(t)
 	src := writeBigPNG(t, requireMagick(t))
 	out := filepath.Join(t.TempDir(), "out.jpg")
-	rules := processorPolicy()
+	rules := processorPolicy(memoryProfiles[HighMemory])
 	for i, r := range rules {
 		if r.domain == "resource" && r.name == "time" {
 			rules[i].value = "1"

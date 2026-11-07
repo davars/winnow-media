@@ -307,7 +307,7 @@ func TestNewProcessorRequiresInit(t *testing.T) {
 	initCalled.Store(false)
 	defer initCalled.Store(true)
 	start := time.Now()
-	_, err := NewProcessor(context.Background())
+	_, err := NewProcessor(context.Background(), HighMemory)
 	if err == nil || !strings.Contains(err.Error(), "media.Init") {
 		t.Fatalf("err = %v, want one that says to call media.Init", err)
 	}

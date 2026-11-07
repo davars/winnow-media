@@ -136,7 +136,7 @@ func generate(ctx context.Context, dir string, specs []inputSpec) error {
 }
 
 func measure(ctx context.Context, dir string, specs []inputSpec, repeat int) ([]row, error) {
-	p, err := media.NewProcessor(ctx)
+	p, err := media.NewProcessor(ctx, media.HighMemory)
 	if err != nil {
 		return nil, err
 	}

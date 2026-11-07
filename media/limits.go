@@ -115,14 +115,52 @@ var composeTimeout = consumeTimeout
 // times a 12-CPU x86_64 host (CPU 4.1 times for 4K HEVC decode, wall time 4.0
 // times for two 8000x8000 GIF frames).
 const (
-	policyMemory     = "1GiB"
-	policyMap        = "2GiB"
 	policyDisk       = "4GiB"
 	policyArea       = "512MP"
 	policyDimension  = "65536"
 	policyListLength = "2048"
 	policyThreads    = "4"
 )
+
+// MemoryProfile names the ImageMagick memory limits a run is held to. The
+// zero value is HighMemory. NewProcessor and the Env methods return an error
+// for an undefined value, and LimitArgs panics.
+type MemoryProfile int
+
+const (
+	// HighMemory suits a host with plenty of RAM: 1 GiB of memory and 2 GiB
+	// of map.
+	HighMemory MemoryProfile = iota
+	// LowMemory suits a memory-limited container: 512 MiB of memory and
+	// 1 GiB of map.
+	LowMemory
+)
+
+func (p MemoryProfile) String() string {
+	switch p {
+	case HighMemory:
+		return "HighMemory"
+	case LowMemory:
+		return "LowMemory"
+	}
+	return fmt.Sprintf("MemoryProfile(%d)", int(p))
+}
+
+// profileSettings is what a MemoryProfile sets, as ImageMagick spells it.
+type profileSettings struct{ memory, mapLimit string }
+
+var memoryProfiles = map[MemoryProfile]profileSettings{
+	HighMemory: {memory: "1GiB", mapLimit: "2GiB"},
+	LowMemory:  {memory: "512MiB", mapLimit: "1GiB"},
+}
+
+func (p MemoryProfile) settings() (profileSettings, error) {
+	s, ok := memoryProfiles[p]
+	if !ok {
+		return profileSettings{}, fmt.Errorf("unknown memory profile %d", int(p))
+	}
+	return s, nil
+}
 
 func tooLarge(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrTooLarge, fmt.Sprintf(format, args...))

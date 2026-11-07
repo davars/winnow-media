@@ -18,9 +18,10 @@ const stderrTail = 4 << 10
 // refuses to be created unless ImageMagick reports that policy as the only
 // one in effect. A Processor is safe for concurrent use.
 type Processor struct {
-	dir   string
-	tools map[string]string
-	run   Runner
+	dir    string
+	memory MemoryProfile
+	tools  map[string]string
+	run    Runner
 	// compose runs the frame compositor of a GIF or animated WebP; tests
 	// replace it.
 	compose func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
@@ -36,7 +37,14 @@ type Processor struct {
 // running. NewProcessor requires that Init was called, and refuses to return
 // unless the helper reports the sandbox applied. It returns an error on
 // platforms other than Linux on amd64 or arm64.
-func NewProcessor(ctx context.Context) (*Processor, error) {
+//
+// profile sets ImageMagick's memory and map limits, in the policy and in the
+// flags of every run; it is an error if undefined.
+func NewProcessor(ctx context.Context, profile MemoryProfile) (*Processor, error) {
+	settings, err := profile.settings()
+	if err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
 	if err := sandboxAvailable(); err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
@@ -64,10 +72,10 @@ func NewProcessor(ctx context.Context) (*Processor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	p := &Processor{dir: dir, tools: tools}
+	p := &Processor{dir: dir, memory: profile, tools: tools}
 	p.run = p.runTool
 	p.compose = p.composeFrames
-	rules := processorPolicy()
+	rules := processorPolicy(settings)
 	if err := p.install(rules); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
@@ -130,6 +138,7 @@ type meter struct{ usage Usage }
 // env returns an Env that runs through the Processor and adds each run to m.
 func (p *Processor) env(m *meter) Env {
 	return Env{
+		Memory: p.memory,
 		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
 			res, err := p.run(ctx, name, args...)
 			m.add(res.Usage)
