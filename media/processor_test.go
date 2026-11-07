@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"image"
 	"os"
 	"path/filepath"
 	"slices"
@@ -464,5 +465,28 @@ func TestVideoSizeCapRefusesBeforeSampling(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"ffprobe"}) {
 		t.Errorf("tool runs %v, want only ffprobe", names)
+	}
+}
+
+// A tool run that is killed, here by its context's deadline, leaves nothing
+// behind in the Processor's temporary directory. ImageMagick's disk pixel
+// cache lives there, and a killed magick cannot remove its own files.
+func TestKilledRunLeavesNothingInTheProcessorsTempDir(t *testing.T) {
+	p := requireProcessor(t)
+	var pam bytes.Buffer
+	if err := writePAM(&pam, image.NewNRGBA(image.Rect(0, 0, 2000, 2000))); err != nil {
+		t.Fatal(err)
+	}
+	input := writeFile(t, "x.pam", pam.Bytes())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Memory and map limits of one byte send the pixel cache to disk.
+	_, err := p.run(ctx, "magick", "-limit", "memory", "1", "-limit", "map", "1",
+		"pam:"+input, "-blur", "0x40", "-format", "%#", "info:")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline", err)
+	}
+	if got := dirNames(t, p.tmpDir()); len(got) != 0 {
+		t.Errorf("the Processor's temporary directory holds %v after a killed run", got)
 	}
 }

@@ -56,11 +56,12 @@ func NewProcessor(ctx context.Context) (*Processor, error) {
 			return nil, fmt.Errorf("processor: %w", err)
 		}
 	}
-	dir, err := os.MkdirTemp("", "media-processor-")
+	base, err := filepath.Abs(os.TempDir())
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	if dir, err = filepath.Abs(dir); err != nil {
+	dir, err := os.MkdirTemp(base, "media-processor-")
+	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
 	p := &Processor{dir: dir, tools: tools}
@@ -91,16 +92,23 @@ func (p *Processor) tmpDir() string { return filepath.Join(p.dir, "tmp") }
 // afterwards.
 func (p *Processor) Close() error { return os.RemoveAll(p.dir) }
 
-// environ is the whole environment of a tool run. ImageMagick also reads
-// $XDG_CONFIG_HOME/ImageMagick/policy.xml and $HOME/.config/ImageMagick/policy.xml
-// after the directory MAGICK_CONFIGURE_PATH names, and the last matching rule
-// wins, so inheriting either variable would let the caller's files widen the
-// policy.
-func (p *Processor) environ() []string {
+// runTempDir creates the directory of one tool run, under the Processor's
+// temporary directory. The caller removes it when the run ends: a killed tool
+// cannot remove what it wrote there, such as ImageMagick's pixel cache.
+func (p *Processor) runTempDir() (string, error) {
+	return os.MkdirTemp(p.tmpDir(), "run-")
+}
+
+// environ is the whole environment of a tool run, whose temporary files go
+// in tmp. ImageMagick also reads $XDG_CONFIG_HOME/ImageMagick/policy.xml and
+// $HOME/.config/ImageMagick/policy.xml after the directory
+// MAGICK_CONFIGURE_PATH names, and the last matching rule wins, so inheriting
+// either variable would let the caller's files widen the policy.
+func (p *Processor) environ(tmp string) []string {
 	return []string{
 		"MAGICK_CONFIGURE_PATH=" + p.dir,
-		"MAGICK_TEMPORARY_PATH=" + p.tmpDir(),
-		"TMPDIR=" + p.tmpDir(),
+		"MAGICK_TEMPORARY_PATH=" + tmp,
+		"TMPDIR=" + tmp,
 		"LC_ALL=C",
 	}
 }
