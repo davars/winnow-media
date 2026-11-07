@@ -18,14 +18,18 @@ type Hints struct {
 	// fallback.
 	MediaType string
 	// Orientation, 1 to 8 as in EXIF, replaces the orientation the file
-	// carries; 0 leaves the file's own.
+	// carries; 0 leaves the file's own. It is an error for a video.
 	Orientation int
 	// Frames is the number of frames selected from an animation, evenly
 	// spaced from the first; 0 selects every frame. It must not be negative.
+	// For a video it is the number of samples, taken at the centres of equal
+	// intervals of the duration (fewer when the video has fewer frames); 0
+	// takes 15, and it must be at most 64.
 	Frames int
 	// Still selects the first image of the file alone, and excludes Frames.
 	// Without it a file of several images that is neither a GIF nor a WebP is
-	// refused with ErrUnsupportedType.
+	// refused with ErrUnsupportedType. A video has no still: the hint is an
+	// error for one.
 	Still bool
 }
 
@@ -85,6 +89,8 @@ const (
 	routeGIF
 	// routeWebP is the webp-frames tool, for a WebP with the animation flag.
 	routeWebP
+	// routeVideo is ffprobe and ffmpeg, for a video.
+	routeVideo
 )
 
 // openRequest is what Env.Open and the Processor's operations share.
@@ -107,6 +113,9 @@ type openRequest struct {
 	// stream leaves the frames undecoded until EncodeFrames, which decodes
 	// and encodes them in batches so that no more than a batch is on disk.
 	stream bool
+	// video, when set, makes the input a video, read with dec; for a request
+	// that is not pinned, Env.open sets it from the bytes.
+	video *videoRequest
 }
 
 // headerRead is what the header read of a file decided.
@@ -132,8 +141,6 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 				coder = "gif"
 			case typeWebP:
 				coder = "webp"
-			case typeMP4, typeMOV, typeWebM, typeMKV:
-				return headerRead{}, fmt.Errorf("%w: %s", ErrUnsupportedType, kind)
 			}
 		case !errors.Is(err, ErrUnsupportedType):
 			return headerRead{}, err
@@ -198,8 +205,8 @@ type srcFrame struct {
 }
 
 // Source is a file whose frames have been selected for encoding: the first
-// image of a still, or the frames of a GIF or animated WebP composited onto
-// their canvas. It is not safe for concurrent use.
+// image of a still, the frames of a GIF or animated WebP composited onto
+// their canvas, or the samples of a video. It is not safe for concurrent use.
 type Source struct {
 	env    Env
 	route  route
@@ -235,6 +242,9 @@ type Source struct {
 	upright [2]int
 	// reduce allows a reduced decode of a JPEG.
 	reduce bool
+	// video is set for a video, whose frames are the samples decoded by the
+	// first encode.
+	video *videoSource
 	// softRef is the identify input whose first scene decides soft by a full
 	// read, which is made when an encode first resizes; "" when the -ping
 	// read decided it.
@@ -247,11 +257,24 @@ type Source struct {
 // GIF is composited by the package and a WebP with the animation flag by the
 // webp-frames tool, whatever their frame count; any other image is decoded by
 // ImageMagick when it is encoded. A file of several images that is neither a
-// GIF nor a WebP is refused with ErrUnsupportedType unless h.Still is set, and
-// so is a video file, whatever h says. An animation over the caps is refused
-// with ErrTooLarge before any frame is decoded. A still that no decode stage
-// can reduce is refused here if its stored size is over the caps; one that
-// can be reduced is judged by Encode against its targets.
+// GIF nor a WebP is refused with ErrUnsupportedType unless h.Still is set. An
+// animation over the caps is refused with ErrTooLarge before any frame is
+// decoded. A still that no decode stage can reduce is refused here if its
+// stored size is over the caps; one that can be reduced is judged by Encode
+// against its targets.
+//
+// A video is an MP4, QuickTime, WebM or Matroska file, which the bytes name,
+// or any other container ffmpeg detects among AVI, ASF, FLV, MPEG program
+// and transport streams and raw MPEG video. A file that leads one of those
+// containers is probed as a video first, and ImageMagick never reads it
+// unless the probe refuses it; any other file that sniff names no type for is
+// read as an image first, and probed as a video if ImageMagick cannot read
+// it. A file that is neither is refused with ErrUnsupportedType. Open probes
+// a video, refuses one over the caps with ErrTooLarge, and chooses h.Frames
+// sample times. The samples are decoded by the first encode, at the size that
+// encode's targets need, so a video's Frames are final only after it (see
+// Source.Frames). It takes h.Frames and no other hint: MediaType is ignored,
+// and Still and Orientation are errors.
 //
 // The caller must Close the Source.
 func (e Env) Open(ctx context.Context, path string, h Hints) (*Source, error) {
@@ -259,6 +282,27 @@ func (e Env) Open(ctx context.Context, path string, h Hints) (*Source, error) {
 }
 
 func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
+	// videoErr is why a file whose leading bytes look like a video container
+	// was not opened as one.
+	var videoErr error
+	if req.video == nil && !req.pinned {
+		route, dec := videoRouteOf(req.path)
+		vreq := req
+		vreq.dec, vreq.pinned, vreq.video = dec, true, &videoRequest{}
+		switch route {
+		case routeSniffed:
+			return e.openVideo(ctx, vreq)
+		case routeLooksLike:
+			s, err := e.openVideo(ctx, vreq)
+			if herr := (hintError{}); err == nil || errors.Is(err, ErrTooLarge) || errors.As(err, &herr) {
+				return s, err
+			}
+			videoErr = err
+		}
+	}
+	if req.video != nil {
+		return e.openVideo(ctx, req)
+	}
 	h := req.hints
 	if h.Frames < 0 {
 		return nil, fmt.Errorf("frames %d is negative", h.Frames)
@@ -272,6 +316,18 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	}
 	hdr, err := e.readSource(ctx, req)
 	if err != nil {
+		if !req.pinned && notImage(req.path, err) {
+			if videoErr == nil {
+				videoErr = e.probeOtherVideo(ctx, req)
+				if videoErr == nil {
+					return e.openOtherVideo(ctx, req)
+				}
+			}
+			if errors.Is(videoErr, ErrTooLarge) {
+				return nil, videoErr
+			}
+			return nil, fmt.Errorf("%w: not an image (%v) and not a video (%v)", ErrUnsupportedType, err, videoErr)
+		}
 		return nil, err
 	}
 	s := &Source{
@@ -305,15 +361,8 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 		}
 	}
 
-	if req.scratch != "" {
-		s.dir = req.scratch
-	} else {
-		if e.Scratch == nil {
-			return nil, errors.New("Env.Scratch is required to open a source")
-		}
-		if s.dir, s.cleanup, err = e.Scratch(); err != nil {
-			return nil, err
-		}
+	if s.dir, s.cleanup, err = e.scratchFor(req); err != nil {
+		return nil, err
 	}
 	if hdr.route == routeStill {
 		return s, nil
@@ -339,6 +388,42 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 		}
 	}
 	return s, nil
+}
+
+// scratchFor returns the directory a source decodes into: the request's, or a
+// new one from Env.Scratch whose cleanup removes it.
+func (e Env) scratchFor(req openRequest) (dir string, cleanup func(), err error) {
+	if req.scratch != "" {
+		return req.scratch, nil, nil
+	}
+	if e.Scratch == nil {
+		return "", nil, errors.New("Env.Scratch is required to open a source")
+	}
+	return e.Scratch()
+}
+
+// notImage reports whether err, from reading the headers of the file at path,
+// leaves open that the file is a video: its bytes name no type, and the
+// failure is not a refusal or a cancelled run.
+func notImage(path string, err error) bool {
+	if errors.Is(err, ErrTooLarge) || errors.Is(err, ErrUnsupportedType) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	_, serr := sniffFile(path)
+	return errors.Is(serr, ErrUnsupportedType)
+}
+
+// probeOtherVideo returns nil if the file at req.path is a video of one of the
+// demuxers ffmpeg detects under detectedFormats, and why it is not otherwise.
+func (e Env) probeOtherVideo(ctx context.Context, req openRequest) error {
+	_, err := e.probeChecked(ctx, unnamedVideoDecoder, req.path)
+	return err
+}
+
+// openOtherVideo opens as a video a file probeOtherVideo accepted.
+func (e Env) openOtherVideo(ctx context.Context, req openRequest) (*Source, error) {
+	req.dec, req.pinned, req.video = unnamedVideoDecoder, true, &videoRequest{}
+	return e.openVideo(ctx, req)
 }
 
 // selection returns the source frames a request selects of count frames.
@@ -405,9 +490,24 @@ func (e Env) composeFrames(ctx context.Context, req composeRequest, onFrame func
 }
 
 // Frames returns the frames the source holds and when each is shown in the
-// original, in order.
+// original, in order. A video's frames have SourceFrame 0, since sampling
+// knows no frame index, and the time each was asked for as SourceTimeMS. They
+// are the sample times Open chose until the first encode decodes them, which
+// may leave out a time that has no frame; Artifact.Frames is the final word.
 func (s *Source) Frames() []Frame {
-	return mappingOf(s.selected, s.layout.infos)
+	return s.mapping(s.selected)
+}
+
+// mapping returns the Frame of each source frame index of s.
+func (s *Source) mapping(indices []int) []Frame {
+	if s.video == nil {
+		return mappingOf(indices, s.layout.infos)
+	}
+	frames := make([]Frame, len(indices))
+	for i, idx := range indices {
+		frames[i].SourceTimeMS = s.video.times[idx]
+	}
+	return frames
 }
 
 // mappingOf returns the Frame of each source frame index, with the time of
@@ -455,6 +555,22 @@ func (s *Source) srgb() (string, error) {
 	s.destination = path
 	s.placed = append(s.placed, path)
 	return path, nil
+}
+
+// framePixels is the pixel count of each decoded frame.
+func (s *Source) framePixels() int {
+	if s.video != nil {
+		return s.video.plan.fw * s.video.plan.fh
+	}
+	return s.layout.cw * s.layout.ch
+}
+
+// sourceOf is what the encode of enc needs to know about the frames.
+func (s *Source) sourceOf(enc encoding) encodeSource {
+	if s.video != nil {
+		return s.video.plan.source(enc)
+	}
+	return encodeSource{orientation: s.orientation}
 }
 
 // positions returns which of the source's frames a budget of maxFrames
@@ -696,6 +812,11 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 	if s.stream {
 		return nil, errors.New("a streaming source encodes frames to files only")
 	}
+	if s.video != nil {
+		if err := s.decodeVideo(ctx, encs); err != nil {
+			return nil, err
+		}
+	}
 	pos, err := s.positions(maxFrames)
 	if err != nil {
 		return nil, err
@@ -745,7 +866,7 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 		for j, p := range kept {
 			indices[j] = s.frames[p].sourceFrame
 		}
-		out[i].Frames = mappingOf(indices, s.layout.infos)
+		out[i].Frames = s.mapping(indices)
 	}
 	return out, nil
 }
@@ -763,7 +884,7 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 // scene count of the written file is the guarantee, and the dedup is what
 // keeps the check from failing on the common case.
 func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, path string) (w, h int, kept []int, err error) {
-	src := encodeSource{orientation: s.orientation}
+	src := s.sourceOf(enc)
 	frames, err := s.framesAt(pos, enc, true)
 	if err != nil {
 		return 0, 0, nil, err
@@ -792,7 +913,7 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 		kind = outputStill
 	}
 	res, err := s.env.runEncode(ctx, encodeArgs(keptFrames, src, enc, encodeOutput{kind: kind, path: path}),
-		encodeCheck{frames: len(kept), bounds: []encodeBound{boundOf(enc, src)}})
+		encodeCheck{frames: len(kept), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}})
 	if err != nil {
 		return 0, 0, nil, fmt.Errorf("encoding animation: %w", err)
 	}
@@ -811,7 +932,8 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 
 // EncodeFrames writes one file per frame of the source into dir, named
 // frame-NNN with the extension of enc.Format and numbered from 0, and returns
-// them in order; Image.Frame is the index of the source frame. A frame
+// them in order; Image.Frame is the index of the source frame, 0 for a video,
+// whose Image.TimeMS holds the time of the sample. A frame
 // identical to the one before it after resizing is dropped. dir must exist
 // and be empty. It fails as Encode does.
 func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]Image, error) {
@@ -823,6 +945,11 @@ func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]
 }
 
 func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]Image, error) {
+	if s.video != nil {
+		if err := s.decodeVideo(ctx, []encoding{enc}); err != nil {
+			return nil, err
+		}
+	}
 	if s.route == routeStill {
 		name := frameName(0, enc.ext)
 		res, err := s.encodeStills(ctx, []encoding{enc}, []string{filepath.Join(dir, name)})
@@ -833,10 +960,14 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 	}
 	var images []Image
 	encoder := &sampleEncoder{
-		env: s.env, src: encodeSource{orientation: s.orientation},
-		enc: enc, dir: dir, framePixels: s.layout.cw * s.layout.ch,
+		env: s.env, src: s.sourceOf(enc),
+		enc: enc, dir: dir, framePixels: s.framePixels(),
 		keep: func(i, n, w, h int) {
-			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: s.selected[i]})
+			img := Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: s.selected[i]}
+			if s.video != nil {
+				img.Frame, img.TimeMS = 0, s.video.times[i]
+			}
+			images = append(images, img)
 		},
 	}
 	if !s.stream {

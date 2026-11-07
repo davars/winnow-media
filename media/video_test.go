@@ -1027,3 +1027,13 @@ func TestTimeZeroIsTheFirstFrameOnBothPaths(t *testing.T) {
 		})
 	}
 }
+
+// planVideo probes the video and plans its samples for the largest encoding
+// decode.
+func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, decode encoding) (videoPlan, error) {
+	info, err := e.probeChecked(ctx, dec, inputPath)
+	if err != nil {
+		return videoPlan{}, err
+	}
+	return newVideoPlan(info, decode), nil
+}

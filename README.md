@@ -77,8 +77,25 @@ are resolved, limited and cancelled, and where scratch files live.
   rung selects of the whole file.
   Each `Encode` drops the consecutive frames that are equal at its own size
   and returns its own mapping. A file of several images that is neither a GIF
-  nor a WebP is refused with `ErrUnsupportedType` unless `Hints.Still` is set;
-  a video file is always refused.
+  nor a WebP is refused with `ErrUnsupportedType` unless `Hints.Still` is set.
+  An MP4, QuickTime, WebM or Matroska file is a video, as is any container
+  ffmpeg detects among `detectedFormats`. A file that sniffs as a video, or
+  that leads a QuickTime atom, AVI, ASF, FLV, an MPEG program or video stream
+  or a transport stream, is probed as one and ImageMagick does not read it
+  unless the probe refuses it. Any other file that sniffs as no type is read
+  as an image first and probed as a video only if ImageMagick cannot read it;
+  a file that is neither is refused with `ErrUnsupportedType`. The Processor
+  accepts only the sniffed types. `Open` probes a video
+  (refusing one over the caps with `ErrTooLarge`) and chooses `Hints.Frames`
+  sample times, 15 when 0 and at most 64, at the centres of equal intervals of
+  the duration. The first `Encode` reads the samples, once per seek or by one
+  select decode as `Processor.VideoFrames` does, at the size its targets need,
+  and a later `Encode` that needs larger frames reads them again. A video's
+  `Frame`s have `SourceFrame` 0 and the sample time as `SourceTimeMS`, and
+  `Source.Frames` lists the chosen times until that first `Encode` makes them
+  final. `Hints.Still` and `Hints.Orientation` are errors for a video. Samples
+  are encoded as any animation's frames are: each frame is shown for half a
+  second, and equal consecutive frames are dropped and the scene count checked.
   A JPEG is decoded at a reduced size (`-define jpeg:size`) when the largest
   target is far smaller: the smallest eighth of the stored size that covers
   twice every target in both dimensions. The output size is then computed in
@@ -117,15 +134,15 @@ are resolved, limited and cancelled, and where scratch files live.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
   path.
-- `Env.GenerateVideoThumbnails` writes two animated WebP thumbnails of fifteen
-  frames sampled evenly over a video, through the same pipeline as
-  `Processor.VideoFrames` (below): samples are read by one decode or by seeks, as
-  the stream's size decides, HDR is
+- `Env.GenerateVideoThumbnails` is `Open` and `Encode` at two targets. It
+  writes two animated WebP thumbnails of fifteen frames sampled evenly over a
+  video, through the same pipeline as `Processor.VideoFrames` (below): samples
+  are read by one decode or by seeks, as the stream's size decides, HDR is
   tone-mapped, output is upright, sized, stripped and 8-bit, a frame identical
   to the one before it is dropped, and each frame is shown for half a second.
   The stream is ffprobe's choice; its `streamIndex` and `frames` arguments are
-  ignored. The samples are staged in a subdirectory beside the outputs, and the
-  same bounds and caps as the Processor's apply. It does not take the type
+  ignored. The samples are staged in a subdirectory beside the outputs, and
+  the same bounds and caps as the Processor's apply. It does not take the type
   from the caller: the leading bytes pick the demuxer, and any other content
   is left to ffmpeg's detection, limited to video containers (`mov`,
   `matroska`, `avi`, `mpegts`, `mpeg`, `mpegvideo`, `flv`, `asf`), so a concat
