@@ -130,14 +130,25 @@ func TestSandboxEnvironmentAndArgumentsAreExactlyTheTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each run has a directory of its own under the Processor's.
+	var tmp string
+	got := lines(res.Stdout)
+	for i, l := range got {
+		if v, ok := strings.CutPrefix(l, "env TMPDIR="); ok {
+			tmp = v
+			got = slices.Delete(got, i, i+1)
+			break
+		}
+	}
+	if filepath.Dir(tmp) != p.tmpDir() || !strings.HasPrefix(filepath.Base(tmp), "run-") {
+		t.Errorf("TMPDIR = %q, want a run directory under %s", tmp, p.tmpDir())
+	}
 	want := []string{
 		"env MAGICK_CONFIGURE_PATH=" + p.dir,
-		"env MAGICK_TEMPORARY_PATH=" + p.tmpDir(),
-		"env TMPDIR=" + p.tmpDir(),
+		"env MAGICK_TEMPORARY_PATH=" + tmp,
 		"env LC_ALL=C",
 		"arg --tool", "arg environ", "arg one", "arg two words",
 	}
-	got := lines(res.Stdout)
 	if slices.Sort(got); !slices.Equal(got, sortedCopy(want)) {
 		t.Errorf("tool saw\n%q\nwant\n%q", got, sortedCopy(want))
 	}
@@ -424,5 +435,101 @@ func TestFilterProgram(t *testing.T) {
 				t.Errorf("x32 call %d: verdict %#x, want kill", nr, got)
 			}
 		}
+	}
+}
+
+// The status pipe and the lifeline are the helper's protocol with the
+// Processor. The tool must see only its standard descriptors: a tool that
+// inherits the status pipe can forge the helper's report, and a descendant
+// that outlives the helper keeps the Processor blocked reading it.
+func TestToolSeesOnlyItsStandardDescriptors(t *testing.T) {
+	p := fakeProcessor(t)
+	res, err := runFake(t, p, "fds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var extra []string
+	for _, l := range lines(res.Stdout) {
+		// "fd N -> target". The fake tool is a Go program: its runtime opens
+		// its cgroup's limits, on the lowest free descriptor, 3; and the directory it lists is closed again
+		// before its link can be read.
+		f := strings.Fields(l)
+		n, err := strconv.Atoi(f[1])
+		if err != nil {
+			t.Fatalf("unexpected line %q", l)
+		}
+		ownCgroup := n == 3 && strings.Contains(l, "/sys/fs/cgroup/")
+		if n > 2 && !ownCgroup && !strings.Contains(l, "no such file") {
+			extra = append(extra, l)
+		}
+	}
+	if len(extra) > 0 {
+		t.Errorf("the tool inherited descriptors beyond stdio: %q", extra)
+	}
+}
+
+// composeWithScript runs composeFrames with a shell script as the external
+// compositor. The script's process is killed when the test ends, and the
+// context is bound to a timeout.
+func composeWithScript(t *testing.T, p *Processor, body string) error {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "compositor")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p.tools["compositor"] = script
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	req := composeRequest{external: "compositor", dir: t.TempDir(), path: "x", selected: []int{0}, frames: 1, width: 1, height: 1, inFlight: 1}
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.composeFrames(ctx, req, func(string, int) error { return nil })
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("composeFrames did not return within 5s")
+		return nil
+	}
+}
+
+// A compositor whose report the Processor rejects is stopped at once. Once the
+// Processor stops reading, nothing consumes the compositor's frames, so one
+// left running waits out its consume timeout with the operation blocked on it.
+func TestComposeStopsACompositorWhoseReportItRejects(t *testing.T) {
+	p := fakeProcessor(t)
+	// The sleep stands in for a compositor waiting for its frames to be
+	// consumed.
+	err := composeWithScript(t, p, "echo garbage\nexec /bin/sleep 20\n")
+	if err == nil || !strings.Contains(err.Error(), "compositor reported") {
+		t.Errorf("err = %v, want the rejected report", err)
+	}
+	if got := dirNames(t, p.tmpDir()); len(got) != 0 {
+		t.Errorf("the Processor's temporary directory holds %v after the run", got)
+	}
+}
+
+// An overlong line is the compositor's fault, not the caller's cancellation.
+func TestComposeNamesAnOverlongCompositorLine(t *testing.T) {
+	p := fakeProcessor(t)
+	err := composeWithScript(t, p, "printf '%0100d' 0\nexec /bin/sleep 20\n")
+	if err == nil || !strings.Contains(err.Error(), "overlong line") || errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the overlong line and not a cancellation", err)
+	}
+}
+
+// A compositor that succeeds leaves nothing in the Processor's temporary
+// directory either.
+func TestComposeRemovesItsRunDirectoryOnSuccess(t *testing.T) {
+	p := fakeProcessor(t)
+	if err := composeWithScript(t, p, "exit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := dirNames(t, p.tmpDir()); len(got) != 0 {
+		t.Errorf("the Processor's temporary directory holds %v after the run", got)
 	}
 }
