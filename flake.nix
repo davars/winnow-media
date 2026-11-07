@@ -23,7 +23,7 @@
           buildInputs = [ pkgs.libwebp ];
           buildPhase = ''
             runHook preBuild
-            $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpdemux -lwebp
+            $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpmux -lwebpdemux -lwebp
             runHook postBuild
           '';
           installPhase = ''
@@ -262,7 +262,7 @@
       checks = nixpkgs.lib.genAttrs systems (system:
         let s = perSystem system; in
         {
-          test = s.gate "test" s.allTools "go test ./...";
+          test = s.gate "test" s.allTools "go test -timeout 30m ./...";
           lint = s.gate "lint" [ s.golangci-lint ] "golangci-lint run ./...";
           gofumpt = s.gate "gofumpt" [ s.pkgs.gofumpt ] ''
             unformatted=$(gofumpt -l .)
@@ -288,6 +288,8 @@
         {
           default = pkgs.mkShell {
             packages = [ pkgs.go_1_26 s.golangci-lint pkgs.gofumpt pkgs.gopls ] ++ s.allTools;
+            # The integration-heavy media suite outlasts go test's 10m default.
+            GOFLAGS = "-timeout=30m";
           };
         });
     };

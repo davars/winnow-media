@@ -74,9 +74,9 @@ func orientationNumber(name string) (int, error) {
 	return 0, fmt.Errorf("unknown orientation %q", name)
 }
 
-// jpegSizeMargin is how many times the largest target a reduced JPEG decode
-// covers in each dimension.
-const jpegSizeMargin = 2
+// decodeMargin is how many times the largest target a reduced decode of a
+// JPEG or a still WebP covers in each dimension.
+const decodeMargin = 2
 
 // route is the decoder a file goes through.
 type route int
@@ -110,6 +110,9 @@ type openRequest struct {
 	pick func(sourceFrames int) ([]int, error)
 	// scratch is the directory for decoded frames; "" takes Env.Scratch.
 	scratch string
+	// webpProfileFromTool leaves the profile of a still WebP unread: the
+	// caller decodes it with webp-frames, which reports the profile.
+	webpProfileFromTool bool
 	// stream leaves the frames undecoded until EncodeFrames, which decodes
 	// and encodes them in batches so that no more than a batch is on disk.
 	stream bool
@@ -187,8 +190,12 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 			return headerRead{}, err
 		}
 	}
-	if err := completeProfile(ctx, e, h.ref+selector, req.path, h.scenes); err != nil {
-		return headerRead{}, err
+	// A still WebP's profile is reported by the tool that decodes it, so a
+	// caller that decodes it does not need the whole-image read that finds it.
+	if !req.webpProfileFromTool || h.route != routeStill || h.scenes[0].format != "WEBP" {
+		if err := completeProfile(ctx, e, h.ref+selector, req.path, h.scenes); err != nil {
+			return headerRead{}, err
+		}
 	}
 	if h.layout, err = layoutOf(h.scenes); err != nil {
 		return headerRead{}, err
@@ -240,11 +247,18 @@ type Source struct {
 	stored [2]int
 	// upright is the size of the canvas after orientation, from the headers.
 	upright [2]int
-	// reduce allows a reduced decode of a JPEG.
+	// reduce allows a reduced decode of a JPEG or a still WebP.
 	reduce bool
 	// video is set for a video, whose frames are the samples decoded by the
 	// first encode.
 	video *videoSource
+	// webp is set for a still WebP, which webp-frames decodes whatever the
+	// targets. exif is the name of the orientation ImageMagick applies to it,
+	// "" for none, once exifKnown; a hint replaces it. webp-frames applies
+	// none.
+	webp      bool
+	exif      string
+	exifKnown bool
 	// softRef is the identify input whose first scene decides soft by a full
 	// read, which is made when an encode first resizes; "" when the -ping
 	// read decided it.
@@ -254,14 +268,15 @@ type Source struct {
 // Open reads the headers of the file at path, applies the caps and selects
 // its frames, decoding those of a GIF or animated WebP onto a full canvas in
 // the directory Env.Scratch provides. The type comes from the file's bytes: a
-// GIF is composited by the package and a WebP with the animation flag by the
-// webp-frames tool, whatever their frame count; any other image is decoded by
-// ImageMagick when it is encoded. A file of several images that is neither a
-// GIF nor a WebP is refused with ErrUnsupportedType unless h.Still is set. An
-// animation over the caps is refused with ErrTooLarge before any frame is
-// decoded. A still that no decode stage can reduce is refused here if its
-// stored size is over the caps; one that can be reduced is judged by Encode
-// against its targets.
+// GIF is composited by the package and a WebP by the webp-frames tool, whatever
+// its frame count (a still WebP is decoded when it is encoded, at a size that
+// covers its targets); any other image is decoded by ImageMagick when it is
+// encoded. A file of several images that is neither a GIF nor a WebP is
+// refused with ErrUnsupportedType unless h.Still is set. An animation over the
+// caps is refused with ErrTooLarge before any frame is decoded. A still that
+// no decode stage can reduce is refused here if its stored size is over the
+// caps, a WebP included, as libwebp's scaling does not bound its memory; one
+// that can be reduced is judged by Encode against its targets.
 //
 // A video is an MP4, QuickTime, WebM or Matroska file, which the bytes name,
 // or any other container ffmpeg detects among AVI, ASF, FLV, MPEG program
@@ -314,6 +329,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.webpProfileFromTool = true
 	hdr, err := e.readSource(ctx, req)
 	if err != nil {
 		if !req.pinned && notImage(req.path, err) {
@@ -338,7 +354,17 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	count := len(hdr.layout.infos)
 	if hdr.route == routeStill {
 		count = 1
-		s.layout.uw, s.layout.uh = uprightSize(first.width, first.height, cmp.Or(override, first.orientation))
+		tag := first.orientation
+		if first.format == "WEBP" {
+			s.webp = true
+			s.req = composeRequest{
+				path: req.path, external: webpFramesTool, width: first.width, height: first.height,
+			}
+			// The orientation is read from the file's metadata when it is
+			// decoded; until then only a hint says it.
+			tag = ""
+		}
+		s.layout.uw, s.layout.uh = uprightSize(first.width, first.height, cmp.Or(override, tag))
 		s.ref, s.soft, s.jpeg = hdr.ref+"[0]", first.soft, reducible(first.format)
 		s.stored = [2]int{first.width, first.height}
 		if fullReadFormats[first.format] {
@@ -642,6 +668,12 @@ func (s *Source) fits(enc encoding) bool {
 // reduced at decode time. It is the one predicate for the header check and for
 // choosing a reduction; a format for which it holds is still confirmed with
 // the decoder (see decodePlan).
+//
+// A WebP is reduced too, inside libwebp by webp-frames, but is not reducible
+// here: libwebp's scaling bounds memory only for lossy images without alpha
+// (a 268 MP lossless WebP of 82 KB peaks at 1 GB decoding at 1024), so a WebP
+// is capped at its stored size at the header, like a format that cannot be
+// reduced.
 func reducible(format string) bool { return format == "JPEG" }
 
 // reducedEighths decides whether a still is decoded at a reduced size for
@@ -651,27 +683,21 @@ func reducible(format string) bool { return format == "JPEG" }
 // and the cap on the decoded size both come from it.
 //
 // The decoded size is the smallest eighth of the stored size that covers
-// jpegSizeMargin times every output in both dimensions. The exact output
+// decodeMargin times every output in both dimensions. The exact output
 // sizes are computed here, from the size and orientation the header gives,
 // because ImageMagick would round each side of the reduced frame separately.
 func (s *Source) reducedEighths(encs []encoding) (n int, sizes [][2]int) {
 	if !s.jpeg || !s.reduce {
 		return 0, nil
 	}
+	sizes = s.outputSizes(encs)
+	if sizes == nil {
+		return 0, nil
+	}
 	n = 1
-	sizes = make([][2]int, len(encs))
 	sw, sh := s.stored[0], s.stored[1]
-	swapped := s.upright[0] != sw || s.upright[1] != sh
-	for i, enc := range encs {
-		tw, th, resize := fitSize(s.upright[0], s.upright[1], enc.maxEdge, enc.maxArea)
-		if !resize {
-			return 0, nil
-		}
-		sizes[i] = [2]int{tw, th}
-		if swapped {
-			tw, th = th, tw
-		}
-		n = max(n, ceilDiv(8*jpegSizeMargin*tw, sw), ceilDiv(8*jpegSizeMargin*th, sh))
+	for _, t := range s.storedSizes(sizes) {
+		n = max(n, ceilDiv(8*decodeMargin*t[0], sw), ceilDiv(8*decodeMargin*t[1], sh))
 	}
 	if n >= 8 {
 		return 0, nil
@@ -740,9 +766,74 @@ func (s *Source) pingDecoded(ctx context.Context, readOps []string) ([2]int, err
 	return d, nil
 }
 
-// encodeStills runs the fused still encode for the targets and returns what
-// each reported.
+// outputSizes returns the exact size of each output of encs, or nil when any
+// of them needs no resize, which no reduced decode serves.
+func (s *Source) outputSizes(encs []encoding) [][2]int {
+	sizes := make([][2]int, len(encs))
+	for i, enc := range encs {
+		tw, th, resize := fitSize(s.upright[0], s.upright[1], enc.maxEdge, enc.maxArea)
+		if !resize {
+			return nil
+		}
+		sizes[i] = [2]int{tw, th}
+	}
+	return sizes
+}
+
+// storedSizes turns upright output sizes into the sides of the stored image
+// they bound.
+func (s *Source) storedSizes(sizes [][2]int) [][2]int {
+	if s.upright == s.stored {
+		return sizes
+	}
+	swapped := make([][2]int, len(sizes))
+	for i, t := range sizes {
+		swapped[i] = [2]int{t[1], t[0]}
+	}
+	return swapped
+}
+
+// webpDecodeSize returns the size a still WebP is decoded at for encodes at
+// encs: the stored size, or a reduction when every target needs a resize and
+// twice the largest is at most 7/8 of the stored size on both sides, the
+// smallest step a JPEG reduction takes (a smaller reduction is not worth the
+// scaler's different upsampling). libwebp scales to any size, so a reduction
+// is the stored aspect at decodeMargin times every output in both dimensions.
+//
+// The size does not depend on the file's orientation, which is read from the
+// decoded file: fitSize is symmetric under swapping width and height, so an
+// output's fit in the stored axes is the same either way.
+func (s *Source) webpDecodeSize(encs []encoding) [2]int {
+	sw, sh := s.stored[0], s.stored[1]
+	if !s.reduce {
+		return s.stored
+	}
+	var decoded [2]int
+	for _, enc := range encs {
+		tw, th, resize := fitSize(sw, sh, enc.maxEdge, enc.maxArea)
+		if !resize {
+			return s.stored
+		}
+		tw, th = decodeMargin*tw, decodeMargin*th
+		// The side that needs the larger scale fixes it; the other follows.
+		w, h := tw, ceilDiv(sh*tw, sw)
+		if tw*sh < th*sw {
+			w, h = ceilDiv(sw*th, sh), th
+		}
+		decoded = [2]int{max(decoded[0], w), max(decoded[1], h)}
+	}
+	if 8*decoded[0] > 7*sw || 8*decoded[1] > 7*sh {
+		return s.stored
+	}
+	return decoded
+}
+
+// encodeStills runs the still encode for the targets and returns what each
+// reported: one ImageMagick run for all of them, except for a WebP.
 func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []string) ([]encodedFrame, error) {
+	if s.webp {
+		return s.encodeWebPStill(ctx, encs, paths)
+	}
 	readOps, sizes, decoded, err := s.decodePlan(ctx, encs)
 	if err != nil {
 		return nil, err
@@ -757,6 +848,7 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 		}
 		s.soft, s.softRef = soft, ""
 	}
+	src := encodeSource{orientation: s.orientation}
 	targets := make([]fusedTarget, len(encs))
 	for i, enc := range encs {
 		f, err := s.stillFrame(enc)
@@ -768,16 +860,123 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 			targets[i].width, targets[i].height = sizes[i][0], sizes[i][1]
 		}
 	}
-	src := encodeSource{orientation: s.orientation}
 	chk := encodeCheck{frames: len(encs), outputs: paths}
 	for _, t := range targets {
 		chk.bounds = append(chk.bounds, boundOf(t.enc, t.source(src)))
 	}
-	res, err := s.env.runEncode(ctx, fusedArgs(readOps, src, targets), chk)
+	return s.env.runEncode(ctx, fusedArgs(readOps, src, targets), chk)
+}
+
+// encodeWebPStill decodes the still WebP once with webp-frames, at the size
+// webpDecodeSize gives, and encodes each target from that frame in a run of
+// its own. The frame carries no orientation tag, so the file's own is given,
+// read from the metadata the tool reports. The output size is exact when the
+// decode was reduced and ImageMagick's computation on the oriented frame
+// otherwise.
+func (s *Source) encodeWebPStill(ctx context.Context, encs []encoding, paths []string) ([]encodedFrame, error) {
+	decoded := s.webpDecodeSize(encs)
+	frame, meta, cleanup, err := s.decodeWebP(ctx, decoded)
 	if err != nil {
 		return nil, err
 	}
+	defer cleanup()
+	orientation, err := s.webpOrientation(ctx, meta)
+	if err != nil {
+		return nil, err
+	}
+	s.upright[0], s.upright[1] = uprightSize(s.stored[0], s.stored[1], orientation)
+	var sizes [][2]int
+	if decoded != s.stored {
+		sizes = s.outputSizes(encs)
+	}
+	res := make([]encodedFrame, len(encs))
+	for i, enc := range encs {
+		src := encodeSource{orientation: orientation}
+		if sizes != nil {
+			src.width, src.height = sizes[i][0], sizes[i][1]
+		}
+		f, err := s.frameOf(frame, enc)
+		if err != nil {
+			return nil, err
+		}
+		out, err := s.env.runEncode(ctx,
+			encodeArgs([]encodeFrame{f}, src, enc, encodeOutput{kind: outputStill, path: paths[i]}),
+			encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}})
+		if err != nil {
+			return nil, err
+		}
+		res[i] = out[0]
+	}
 	return res, nil
+}
+
+// webpOrientation returns the name of the orientation to give the frame of the
+// still WebP that was decoded with the metadata meta: the hint if there is one,
+// else what meta settles, else what ImageMagick's own read of the whole image
+// reports, which is the one thing asked of ImageMagick for such a file (its
+// header read under -ping misses a WebP's orientation). The answer is
+// the same for every decode of the file and is kept.
+func (s *Source) webpOrientation(ctx context.Context, meta stillMeta) (string, error) {
+	if s.orientation != "" {
+		return s.orientation, nil
+	}
+	if s.exifKnown {
+		return s.exif, nil
+	}
+	n, ok := meta.orientation()
+	if !ok {
+		full, err := identifyHeaders(ctx, s.env, s.ref, false)
+		if err != nil {
+			return "", err
+		}
+		if n, err = orientationNumber(full[0].orientation); err != nil {
+			n = 0 // an orientation ImageMagick does not recognise turns nothing
+		}
+	}
+	s.exif, _ = orientationName(n)
+	s.exifKnown = true
+	return s.exif, nil
+}
+
+// decodeWebP has webp-frames decode the still WebP at size into the scratch
+// directory and returns the frame and the metadata the tool read, with the
+// function that removes what the decode left. size is at most the stored size,
+// which the header read has held to the caps. A failed decode leaves nothing
+// in the directory.
+func (s *Source) decodeWebP(ctx context.Context, size [2]int) (srcFrame, stillMeta, func(), error) {
+	req := s.req
+	req.dir, req.scaled = s.dir, size
+	var frame srcFrame
+	got := 0
+	leftovers := []string{
+		filepath.Join(s.dir, gifSampleName(0)), filepath.Join(s.dir, stillEXIFName), filepath.Join(s.dir, stillXMPName),
+	}
+	cleanup := func() { removeFiles(leftovers) }
+	err := s.env.composeFrames(ctx, req, func(f composedFrame) error {
+		if got++; got > 1 {
+			return errors.New("webp-frames wrote more than one image")
+		}
+		if f.profile > 0 {
+			if p := filepath.Join(s.dir, composedProfileName(f.profile)); !slices.Contains(s.placed, p) {
+				s.placed = append(s.placed, p)
+			}
+		}
+		frame = srcFrame{path: f.path, profile: f.profile, soft: f.soft}
+		return nil
+	})
+	if err == nil && got != 1 {
+		err = fmt.Errorf("webp-frames wrote %d images, want 1", got)
+	}
+	var meta stillMeta
+	if err == nil {
+		meta, err = readStillMeta(s.dir)
+	}
+	if err != nil {
+		cleanup()
+		removeFiles([]string{filepath.Join(s.dir, composedProfileName(1))})
+		return srcFrame{}, stillMeta{}, nil, fmt.Errorf("decoding at %dx%d: %w", size[0], size[1], err)
+	}
+	return frame, meta, cleanup, nil
 }
 
 // Encode writes one file per target through Env.Stage and returns them in the
