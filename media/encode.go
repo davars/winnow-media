@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -553,17 +554,34 @@ type FrameInfo struct {
 // an ICC profile. The returned length is the source frame count.
 //
 // Scenes are read from their headers, without decoding and without regard to
-// their size; EncodeRung applies the caps. A single-frame WebP is decoded
-// once for its profile, which the header read can miss. A failed read is
-// retried once with the coder CoderForMIME names for mimeType ("" disables the
-// retry), because magick cannot sniff some formats from an extensionless path.
+// their size, except that a file of more scenes than the list-length ceiling
+// of LimitArgs is refused with ErrTooLarge; EncodeRung applies the caps. A
+// single-frame WebP is decoded once for its profile, which the header read can
+// miss. A failed read is retried once with the coder CoderForMIME names for
+// mimeType ("" disables the retry), because magick cannot sniff some formats
+// from an extensionless path.
 func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]FrameInfo, error) {
-	scenes, err := e.probeScenes(ctx, inputPath, mimeType, true)
+	read := func(ping bool) ([]sceneHeader, error) {
+		scenes, err := identifyHeaders(ctx, e, inputPath, ping)
+		if err == nil || errors.Is(err, ErrTooLarge) {
+			return scenes, err
+		}
+		coder, ok := CoderForMIME(mimeType)
+		if !ok {
+			return nil, err
+		}
+		scenes, retryErr := identifyHeaders(ctx, e, coder+":"+inputPath, ping)
+		if retryErr != nil {
+			return nil, fmt.Errorf("%w; retried with coder %q, which also failed: %v", err, coder, retryErr)
+		}
+		return scenes, nil
+	}
+	scenes, err := read(true)
 	if err != nil {
 		return nil, err
 	}
 	if kind, _ := sniffFile(inputPath); len(scenes) == 1 && kind == typeWebP {
-		full, err := e.probeScenes(ctx, inputPath, mimeType, false)
+		full, err := read(false)
 		if err != nil {
 			return nil, err
 		}
@@ -577,26 +595,6 @@ func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]Fra
 		frames[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
 	}
 	return frames, nil
-}
-
-// probeScenes runs one identify over every scene of inputPath. ping reads
-// headers only.
-func (e Env) probeScenes(ctx context.Context, inputPath, mimeType string, ping bool) ([]sceneHeader, error) {
-	out, err := e.RunMagickWithCoderFallback(ctx, mimeType, func(coder string) []string {
-		path := inputPath
-		if coder != "" {
-			path = coder + ":" + path
-		}
-		args := append([]string{"identify"}, LimitArgs()...)
-		if ping {
-			args = append(args, "-ping")
-		}
-		return append(args, "-format", sceneHeaderFormat, path)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("reading headers: %w", err)
-	}
-	return parseSceneHeaders(out)
 }
 
 func profileListHasICC(profiles string) bool {

@@ -73,7 +73,7 @@ type sceneHeader struct {
 // all, "[0]" for the first) of path, decoded with decoder, and refuses ones
 // that exceed the caps before any pixel is decoded.
 func readHeaders(ctx context.Context, env Env, dec decoder, path, selector string, animated bool) ([]sceneHeader, error) {
-	scenes, err := identifyScenes(ctx, env, dec, path, selector, true)
+	scenes, err := identifyHeaders(ctx, env, dec.name+":"+path+selector, true)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func readHeaders(ctx context.Context, env Env, dec decoder, path, selector strin
 	// read from the decoded image, which the caps now allow. An animation is
 	// not decoded here: webp-frames reports its profile with the frames.
 	if dec.name == "webp" && (!animated || len(scenes) == 1) {
-		full, err := identifyScenes(ctx, env, dec, path, selector, false)
+		full, err := identifyHeaders(ctx, env, dec.name+":"+path+selector, false)
 		if err != nil {
 			return nil, err
 		}
@@ -98,18 +98,19 @@ func readHeaders(ctx context.Context, env Env, dec decoder, path, selector strin
 	return scenes, nil
 }
 
-// identifyScenes runs one identify over the scenes selected by selector. ping
-// reads headers only.
-func identifyScenes(ctx context.Context, env Env, dec decoder, path, selector string, ping bool) ([]sceneHeader, error) {
+// identifyHeaders runs one identify over inputRef, a path optionally prefixed
+// by a coder and suffixed by a scene selector, and parses each scene's
+// header. ping reads headers only. A file with more scenes than the list
+// length ceiling of LimitArgs is refused with an error wrapping ErrTooLarge,
+// before any frame is held.
+func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) ([]sceneHeader, error) {
 	args := append([]string{"identify"}, LimitArgs()...)
 	if ping {
 		args = append(args, "-ping")
 	}
-	args = append(args, "-format", sceneHeaderFormat, dec.name+":"+path+selector)
+	args = append(args, "-format", sceneHeaderFormat, inputRef)
 	res, err := env.Run(ctx, "magick", args...)
 	if err != nil {
-		// The policy's list length stops the read of a file with more scenes
-		// than it allows, before the frame cap can be checked.
 		if strings.Contains(err.Error(), listLengthRefusal) {
 			return nil, tooLarge("file holds more than %s scenes, the limit is %d", policyListLength, maxAnimationFrames)
 		}
@@ -248,7 +249,7 @@ func withProfile(outDir string, profiled bool, fn func(profilePath string) error
 // each hold exactly one scene.
 func identifySizes(ctx context.Context, env Env, paths []string) ([][2]int, error) {
 	args := append([]string{"identify"}, LimitArgs()...)
-	args = append(args, "-format", "%w %h\n")
+	args = append(args, "-ping", "-format", "%w %h\n")
 	args = append(args, paths...)
 	res, err := env.Run(ctx, "magick", args...)
 	if err != nil {

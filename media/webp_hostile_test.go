@@ -109,7 +109,7 @@ func TestHostileAnimatedWebPsFailCleanly(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				path := writeFile(t, "x.webp", c.data)
-				scenes, headerErr := identifyScenes(ctx, env, decoder{"magick", "webp"}, path, "", true)
+				scenes, headerErr := identifyHeaders(ctx, env, "webp:"+path, true)
 				started := false
 				old := p.compose
 				t.Cleanup(func() { p.compose = old })

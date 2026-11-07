@@ -504,3 +504,23 @@ func assertNoProfile(t *testing.T, name string, args []string) {
 		t.Fatalf("%s unexpectedly has -profile at %d: %q", name, at, args)
 	}
 }
+
+// IdentifyArtifact needs the scene count and the first scene's size, which the
+// artifact's container headers state. Without -ping identify decodes every
+// scene: 94 ms for a 2048x1365 WebP still against 25 ms, on every rung of every
+// item, and the whole animation on an animated artifact.
+func TestIdentifyArtifactReadsHeadersOnly(t *testing.T) {
+	real := requireMagick(t)
+	env, calls := countingEnv(real)
+	artifact := filepath.Join(t.TempDir(), "artifact.webp")
+	magick(t, real, "-size", "12x8", "xc:red", "xc:blue", artifact)
+	scenes, w, h, err := env.IdentifyArtifact(context.Background(), artifact)
+	if err != nil || scenes != 2 || w != 12 || h != 8 {
+		t.Fatalf("scenes %d size %dx%d err %v, want 2 scenes of 12x8", scenes, w, h, err)
+	}
+	for _, call := range calls() {
+		if !slices.Contains(call, "-ping") {
+			t.Errorf("the artifact was decoded to count its scenes: %q", call)
+		}
+	}
+}

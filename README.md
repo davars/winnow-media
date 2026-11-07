@@ -49,7 +49,8 @@ are resolved, limited and cancelled, and where scratch files live.
   bytes of scratch space per pixel of canvas for each, so what ImageMagick
   holds does not grow with the length of the animation; it applies the
   animation caps to the frames it is given.
-  `Env.IdentifyArtifact` is the post-encode scene and size check.
+  `Env.IdentifyArtifact` is the post-encode scene and size check, read from
+  headers.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
   path.
@@ -57,7 +58,9 @@ are resolved, limited and cancelled, and where scratch files live.
   evenly spaced frames of a video stream into two animated WebP thumbnails,
   decoding short streams in full and seeking to the samples of long ones.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
-  their own invocations over these artifacts.
+  their own invocations over these artifacts. `LimitArgs` bounds memory, map,
+  area, list length (2048 scenes) and time; a header read that reaches the list
+  length fails with `ErrTooLarge`.
 
 ### Operations
 
@@ -217,6 +220,8 @@ type the operation accepts gives an error wrapping `ErrUnsupportedType`, which
 names the type found. The decoder is then pinned to that type, so no tool
 picks a format from content. Image headers are read without decoding pixels
 (`-ping`) and an input is refused when a frame is wider or taller than 16384
+pixels or has more than 52 million, when an animation's canvas (the largest
+width by the largest height over its frames) is wider or taller than 16384
 pixels or has more than 52 million, when an animation has more than 2000
 frames or more than 900 million pixels to decode (all frames times the
 canvas), when a video stream is wider or taller than 16384 or longer than six

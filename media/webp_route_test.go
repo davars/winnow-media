@@ -85,11 +85,11 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 	}
 	dec := decoder{"magick", "webp"}
 	ctx := context.Background()
-	scenes, err := identifyScenes(ctx, env, dec, path, "", true)
+	scenes, err := identifyHeaders(ctx, env, "webp:"+path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, err := identifyScenes(ctx, env, dec, path, "", false)
+	full, err := identifyHeaders(ctx, env, "webp:"+path, false)
 	if err != nil {
 		t.Fatal(err)
 	}

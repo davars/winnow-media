@@ -48,14 +48,15 @@ func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, bu
 }
 
 // LimitArgs returns the resource-limit flags that bound one magick process:
-// memory, map, area and time. Every magick invocation the package builds
-// starts with them, and callers building their own invocations over the
-// package's artifacts should too. The slice is fresh on every call.
+// memory, map, area, list length and time. Every magick invocation the
+// package builds starts with them, and callers building their own invocations
+// over the package's artifacts should too. The slice is fresh on every call.
 func LimitArgs() []string {
 	return []string{
 		"-limit", "memory", "1GiB",
 		"-limit", "map", "2GiB",
 		"-limit", "area", "512MP",
+		"-limit", "list-length", policyListLength,
 		"-limit", "time", "300",
 	}
 }
@@ -83,7 +84,7 @@ func DeleteExpr(keep []int, sourceFrames int) string {
 // is the post-encode check: a still must hold exactly one scene.
 func (e Env) IdentifyArtifact(ctx context.Context, path string) (scenes, width, height int, err error) {
 	args := append([]string{"identify"}, LimitArgs()...)
-	args = append(args, "-format", "%s %w %h\n", path)
+	args = append(args, "-ping", "-format", "%s %w %h\n", path)
 	res, err := e.Run(ctx, "magick", args...)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("identifying artifact: %w", err)
