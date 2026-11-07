@@ -45,8 +45,11 @@ are resolved, limited and cancelled, and where scratch files live.
   frame-size, frame-count and decoded-pixel caps above. `Ladder` lists the
   fallback rungs (frames are spent before resolution). `Env.EncodeRung`
   encodes one rung as a WebP, still or animation, and returns the frame
-  mapping the artifact holds, with the colour, orientation, no-upscale and
-  resource-limit arguments applied. It composites an animation's selected
+  mapping the artifact holds. The output is upright (the caller's `orient`
+  replaces the file's orientation, in an animation as in a still), sized by
+  the one rule of the next section with the rung's ceiling as the longest side,
+  converted to sRGB when the source carries an ICC profile, free of metadata
+  and made under the resource limits. It composites an animation's selected
   frames itself (a GIF in process, a WebP with `webp-frames`, which `Env.Run`
   must be able to run) and gives ImageMagick only those frames, at about four
   bytes of scratch space per pixel of canvas for each, so what ImageMagick
@@ -103,9 +106,8 @@ tools itself because the input is untrusted:
     compositor plus one batch in ImageMagick. A GIF's ICC profiles (the
     `ICCRGBG1012` extension, any number of distinct ones) are written beside
     the frames as they are first needed. Each frame carries the profile it has
-    after `-coalesce`, and is assigned it and converted to sRGB; ImageMagick
-    gets a separate run wherever the profile changes, never more than one per
-    frame. A GIF that ends between blocks without its trailer is decoded as
+    after `-coalesce`, and is assigned it and converted to sRGB, whatever the
+    profiles of the frames beside it in the batch. A GIF that ends between blocks without its trailer is decoded as
     ImageMagick does; one truncated inside a block or with a frame outside the
     logical screen is refused.
   - An animated WebP is composited by `webp-frames`
@@ -129,8 +131,7 @@ tools itself because the input is untrusted:
     result is opaque and 2 where it is partly transparent; and canvas no frame
     covers is transparent, where ImageMagick makes it opaque black if the file
     declares no alpha. The output of an opaque animation can differ in file
-    shape (PNG colour type) and in the resampling filter ImageMagick picks for
-    frames it gives an alpha channel.
+    shape (PNG colour type).
 - `Processor.VideoFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
   accepts MP4 and QuickTime (ffmpeg demuxer `mov`) and WebM and Matroska
   (demuxer `matroska`) and writes `frame-000.<ext>`, `frame-001.<ext>`, and
@@ -269,9 +270,22 @@ memory, map, disk, area, width, height, list length, time and threads.
 the pixel count, 256-100000000 (default 3750000). The output satisfies both
 bounds with one resample, is never upscaled, is upright, is converted to sRGB
 when the source carries an ICC profile, has transparency flattened onto white
-for JPEG, and carries no metadata. The sRGB profile is embedded in the library
-and exists as a temporary dot-file in the output directory only while a tool
-runs.
+for JPEG, and carries no metadata: the converted profile is not embedded, and
+an image without one is left as it is. The sRGB profile is embedded in the
+library and exists as a temporary dot-file in the output directory only while
+a tool runs.
+
+Every image output, from a still, an animation, a video sample or `EncodeRung`,
+is made by one ImageMagick argument list, so the choices below do not depend
+on how the pixels reached the encode. The size is the largest one within both
+bounds with the source's aspect ratio, each side rounded down (a 4000x3001
+image at `MaxEdge` 2048 is 2048x1536), and is asked of ImageMagick exactly
+(`-resize WxH!`) so that nothing it rounds can change it. The filter is
+Lanczos, set explicitly because ImageMagick's default is Mitchell for an image
+that has a palette or alpha channel. Each frame is oriented and converted
+inside its own parentheses, so frames of one run may carry different profiles.
+The size of an output is read from the run that wrote it. A PNG is written at
+the bit depth of the image the encode is given.
 
 `dir` is an existing, empty directory the caller owns; the operation names its
 own output files and moves no bytes beyond reading the source and writing

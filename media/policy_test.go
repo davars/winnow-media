@@ -146,7 +146,7 @@ func TestProcessorPolicyContents(t *testing.T) {
 		}
 	}
 	want := []string{
-		"GIF=read", "HEIC=read", "ICC=read", "INFO=write", "JPEG=read|write", "JPG=read|write",
+		"GIF=read", "HEIC=read", "ICC=read", "INFO=write", "JPEG=write", "JPG=write",
 		"PAM=read", "PNG=read|write", "WEBP=read|write",
 	}
 	if !slices.Equal(coders, want) {

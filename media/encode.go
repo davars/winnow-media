@@ -1,13 +1,13 @@
 package media
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 )
 
@@ -148,9 +148,14 @@ func displayDelayCS(delay int) int {
 // artifact, its canvas size and the frame mapping the artifact actually
 // holds. sourceFrames is ProbeFrames' result for inputPath; mimeType keys the
 // coder fallback ("" disables it); quality is the WebP quality; profilePath
-// is the sRGB destination profile and is read only when a frame carries an
-// ICC profile; orient, when set, is a magick orientation name assigned to a
-// still before auto-orientation.
+// is the sRGB destination profile, with "" meaning the package's own, and is
+// read only when a frame carries an ICC profile; orient, when set, is a
+// magick orientation name that replaces the orientation the file carries, in
+// a still or an animation alike.
+//
+// The output is upright, sized by fitSize to the rung's ceiling on its longest
+// side and never upscaled, converted to sRGB when its source carries an ICC
+// profile, and free of metadata.
 //
 // An animation is read from its headers first, as AnimationFrames reads one,
 // and refused with an error wrapping ErrTooLarge, before anything is decoded,
@@ -171,10 +176,14 @@ func displayDelayCS(delay int) int {
 func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 	animated bool, rung Rung, sourceFrames []FrameInfo, profilePath, orient string, quality int,
 ) (outputPath string, cleanupFn func(), width, height int, frames []Frame, err error) {
+	enc := encoding{
+		format: WebP, ext: ".webp", quality: quality,
+		maxEdge: rung.CeilingPx, maxArea: rung.CeilingPx * rung.CeilingPx,
+	}
 	if !animated {
 		profiled := len(sourceFrames) > 0 && sourceFrames[0].hasICC
 		outputPath, cleanupFn, width, height, err = e.encodeStill(
-			ctx, inputPath, mimeType, rung.CeilingPx, profilePath, profiled, orient, quality)
+			ctx, inputPath, mimeType, enc, profilePath, profiled, orient)
 		if err != nil {
 			return "", nil, 0, 0, nil, fmt.Errorf("encoding still: %w", err)
 		}
@@ -194,8 +203,21 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 		if err := checkFramesAgree(sourceFrames, layout.infos); err != nil {
 			return "", nil, 0, 0, nil, err
 		}
+	default:
+		// Only a one-frame file is read whole; any other is refused when the
+		// frames are composited.
+		if len(sourceFrames) > 1 {
+			break
+		}
+		scenes, _, err := identifyWithFallback(ctx, e, inputPath, "", mimeType)
+		if err != nil {
+			return "", nil, 0, 0, nil, err
+		}
+		if layout, err = layoutOf(scenes); err != nil {
+			return "", nil, 0, 0, nil, err
+		}
 	}
-	return e.encodeAnimation(ctx, inputPath, mimeType, kind, layout, rung, sourceFrames, profilePath, quality)
+	return e.encodeAnimation(ctx, inputPath, mimeType, kind, layout, rung, enc, sourceFrames, profilePath, orient)
 }
 
 // checkFramesAgree requires the frames the caller passed to be those the
@@ -211,9 +233,10 @@ func checkFramesAgree(given, read []FrameInfo) error {
 // encodeAnimation samples, deduplicates and encodes one animation rung.
 //
 // Two magick passes over the same frames. The first reports, per selected
-// frame, the signature of the pixels that will actually be encoded (%# taken
+// frame, the signature of the pixels that will actually be encoded (taken
 // after the resize, since two frames differing only in fine detail can become
-// identical once downscaled). The second encodes.
+// identical once downscaled). The second encodes. A one-frame selection has
+// nothing to deduplicate and skips the first.
 //
 // The dedup between them exists because magick's WebP writer collapses runs
 // of identical consecutive frames and no -define prevents it: a four-frame
@@ -234,7 +257,7 @@ func checkFramesAgree(given, read []FrameInfo) error {
 // A one-frame animation is read whole by ImageMagick, which holds that one
 // frame either way. Any other is composited by composeSelected.
 func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType, kind string, layout animationLayout,
-	rung Rung, sourceFrames []FrameInfo, profilePath string, quality int,
+	rung Rung, enc encoding, sourceFrames []FrameInfo, profilePath, orient string,
 ) (outputPath string, cleanupFn func(), width, height int, frames []Frame, err error) {
 	sourceFrameCount := len(sourceFrames)
 	n := frameCount(rung.MaxFrames, sourceFrameCount, true)
@@ -251,62 +274,92 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType, kind stri
 		cleanupFn()
 		return "", nil, 0, 0, nil, err
 	}
-
-	// stage is the argument list that decodes, orients, converts and resizes
-	// the frames at positions keep of the selection.
-	stage := func(coder string, _ []int) []string {
-		return animationPipeline(inputPath, rung.CeilingPx, coder, profilePath, profiled)
+	scratch, err := os.MkdirTemp(filepath.Dir(outputPath), ".rung-frames-*")
+	if err != nil {
+		return fail(err)
 	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	orientation := cmp.Or(orient, layout.orientation)
+	uw, uh := uprightSize(layout.cw, layout.ch, orientation)
+	src := encodeSource{orientation: orientation, width: uw, height: uh}
+
+	// destination is the sRGB profile the frames that carry one convert to.
+	var destination string
+	needsDestination := profiled
+	var composed []composedFrame
 	runMIME := mimeType
 	if sourceFrameCount > 1 {
-		scratch, err := os.MkdirTemp(filepath.Dir(outputPath), ".rung-frames-*")
-		if err != nil {
-			return fail(err)
-		}
-		defer func() { _ = os.RemoveAll(scratch) }()
-		composed, err := e.composeSelected(ctx, kind, inputPath, scratch, layout, selected)
+		composed, err = e.composeSelected(ctx, kind, inputPath, scratch, layout, selected)
 		if err != nil {
 			return fail(fmt.Errorf("compositing selected frames: %w", err))
 		}
-		stage, err = composedStage(composed, sourceFrames, selected, scratch, profilePath, layout.orientation, rung.CeilingPx)
-		if err != nil {
-			return fail(err)
-		}
+		needsDestination = slices.ContainsFunc(composed, func(f composedFrame) bool { return f.profile > 0 })
 		// The frames are read by an explicit coder, so there is no sniffing to
 		// fall back from.
 		runMIME = ""
 	}
-
-	all := make([]int, len(selected))
-	for i := range all {
-		all[i] = i
-	}
-	out, err := e.RunMagickWithCoderFallback(ctx, runMIME, func(coder string) []string {
-		return append(stage(coder, all), "-format", "%s %#\n", "info:")
-	})
-	if err != nil {
-		return fail(fmt.Errorf("probing selected frames: %w", err))
-	}
-	probed, err := parseProbe(out)
-	if err != nil {
+	if destination, err = rungDestination(scratch, profilePath, needsDestination); err != nil {
 		return fail(err)
 	}
-	if len(probed) != len(selected) {
-		return fail(fmt.Errorf("frame selection probe returned %d frames, want %d", len(probed), len(selected)))
+
+	// framesAt returns the frames at positions of the selection.
+	framesAt := func(coder string, positions []int) []encodeFrame {
+		if composed == nil {
+			input := inputPath
+			if coder != "" {
+				input = coder + ":" + input
+			}
+			f := encodeFrame{input: input, prelude: []string{"-coalesce"}, delayCS: -1}
+			if profiled {
+				f.convertTo = destination
+			}
+			return []encodeFrame{f}
+		}
+		fs := make([]encodeFrame, len(positions))
+		for i, position := range positions {
+			c := composed[position]
+			fs[i] = encodeFrame{input: "pam:" + c.path, delayCS: sourceFrames[selected[position]].delayCS}
+			if c.profile > 0 {
+				fs[i].convertTo = destination
+				fs[i].assign = filepath.Join(scratch, composedProfileName(c.profile))
+			}
+		}
+		return fs
 	}
 
-	kept := make([]int, 0, len(probed))
-	lastSig := ""
-	for i, frame := range probed {
-		if i > 0 && frame.signature == lastSig {
-			continue
+	kept := []int{0}
+	if len(selected) > 1 {
+		all := make([]int, len(selected))
+		for i := range all {
+			all[i] = i
 		}
-		kept = append(kept, i)
-		lastSig = frame.signature
+		out, err := e.RunMagickWithCoderFallback(ctx, runMIME, func(coder string) []string {
+			return encodeArgs(framesAt(coder, all), src, enc, encodeOutput{kind: outputProbe})
+		})
+		if err != nil {
+			return fail(fmt.Errorf("probing selected frames: %w", err))
+		}
+		probed, err := parseEncoded(out)
+		if err != nil {
+			return fail(err)
+		}
+		if len(probed) != len(selected) {
+			return fail(fmt.Errorf("frame selection probe returned %d frames, want %d", len(probed), len(selected)))
+		}
+		kept = make([]int, 0, len(probed))
+		lastSig := ""
+		for i, frame := range probed {
+			if i > 0 && frame.signature == lastSig {
+				continue
+			}
+			kept = append(kept, i)
+			lastSig = frame.signature
+		}
 	}
 
 	if _, err := e.RunMagickWithCoderFallback(ctx, runMIME, func(coder string) []string {
-		return append(stage(coder, kept), "-quality", strconv.Itoa(quality), outputPath)
+		return encodeArgs(framesAt(coder, kept), src, enc, encodeOutput{kind: outputAnimation, path: outputPath})
 	}); err != nil {
 		return fail(fmt.Errorf("encoding animation: %w", err))
 	}
@@ -329,6 +382,19 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType, kind stri
 		frames = append(frames, Frame{SourceFrame: sourceFrame, SourceTimeMS: timestamps[sourceFrame]})
 	}
 	return outputPath, cleanupFn, w, h, frames, nil
+}
+
+// rungDestination returns the sRGB profile a rung converts to: profilePath
+// when given, otherwise the package's own, written into scratch. It returns
+// "" when no frame needs one.
+func rungDestination(scratch, profilePath string, needed bool) (string, error) {
+	if !needed {
+		return "", nil
+	}
+	if profilePath != "" {
+		return profilePath, nil
+	}
+	return placeSRGB(scratch)
 }
 
 // composedFrame is a selected frame written as a full-canvas PAM file, and
@@ -391,154 +457,67 @@ func (e Env) composeSelected(ctx context.Context, kind, inputPath, dir string, l
 	return composed, nil
 }
 
-// composedStage returns the stage that reads the composed frames at the
-// positions it is given, in order. Each frame is read inside its own
-// parentheses and oriented, converted and resized there, so ImageMagick never
-// holds more than one full canvas at a time. A frame with an ICC profile is
-// assigned it and converted to the sRGB destination, as -coalesce would have
-// left it to the list-wide -profile.
-func composedStage(composed []composedFrame, sourceFrames []FrameInfo, selected []int, dir, profilePath, orientation string, ceiling int) (func(coder string, keep []int) []string, error) {
-	srgb := profilePath
-	for _, f := range composed {
-		if f.profile > 0 && srgb == "" {
-			srgb = filepath.Join(dir, profileName)
-			if err := os.WriteFile(srgb, srgbProfile, 0o600); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return func(_ string, keep []int) []string {
-		args := append([]string{}, LimitArgs()...)
-		for _, position := range keep {
-			f := composed[position]
-			args = append(args, "(", "-delay", strconv.Itoa(sourceFrames[selected[position]].delayCS), "pam:"+f.path)
-			if orientation != "" && orientation != "Undefined" {
-				args = append(args, "-orient", orientation)
-			}
-			args = append(args, "-auto-orient")
-			if f.profile > 0 {
-				args = append(args, "-profile", filepath.Join(dir, composedProfileName(f.profile)))
-				args = append(args, colorArgs(srgb, true)...)
-			}
-			args = append(args, "-thumbnail", fmt.Sprintf("%dx%d>", ceiling, ceiling), ")")
-		}
-		return args
-	}, nil
-}
-
-// probedFrame is one line of the selection probe.
-type probedFrame struct {
-	sourceFrame int
-	signature   string
-}
-
-// parseProbe reads the "%s %#" lines a selection probe prints.
-func parseProbe(out []byte) ([]probedFrame, error) {
-	var probed []probedFrame
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			return nil, fmt.Errorf("probe line %q missing fields", line)
-		}
-		sourceFrame, err := strconv.Atoi(fields[0])
-		if err != nil {
-			return nil, fmt.Errorf("parsing scene index from %q: %w", line, err)
-		}
-		probed = append(probed, probedFrame{sourceFrame: sourceFrame, signature: fields[1]})
-	}
-	return probed, nil
-}
-
-// animationPipeline is the stage that reads a one-frame animation whole.
-// The probe and the encode share it, so the frames the probe reports on are
-// exactly the frames the encode writes.
-//
-// -layers optimize is deliberately absent: it is a GIF palette and disposal
-// optimization that does not apply to WebP output.
-func animationPipeline(inputPath string, ceiling int, coder, profilePath string, profiled bool) []string {
-	arg0 := inputPath
-	if coder != "" {
-		arg0 = coder + ":" + arg0
-	}
-	args := append([]string{}, LimitArgs()...)
-	args = append(args, arg0, "-coalesce", "-auto-orient")
-	args = append(args, colorArgs(profilePath, profiled)...)
-	return append(args, "-thumbnail", fmt.Sprintf("%dx%d>", ceiling, ceiling))
-}
-
-// colorArgs is the one conditional color-normalization stage shared
-// by stills and both animation pixel passes. ImageMagick's -profile transforms
-// from an existing embedded source profile to this destination profile; it is
-// deliberately omitted for unprofiled input, where it would assign rather
-// than convert.
-func colorArgs(profilePath string, sourceProfiled bool) []string {
-	if !sourceProfiled {
-		return nil
-	}
-	return []string{"-profile", profilePath}
-}
-
-// encodeStill runs one real magick encode of inputPath at the given ceiling:
-// the [0] frame selector, -auto-orient, the shrink-only ceiling, -quality,
-// then the post-encode identify check that confirms exactly one scene and
-// returns the frame-0 canvas dimensions.
+// encodeStill encodes the first frame of inputPath as one WebP at enc: the
+// header read that sizes it, then one magick run that decodes, orients,
+// converts, resizes and writes it and reports the size it wrote. The decode
+// falls back to the coder CoderForMIME names for mimeType when the bare read
+// fails.
 //
 // The caller owns the returned staging file via cleanupFn; on error the
 // staging file is already removed.
-func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, ceiling int, profilePath string, profiled bool, orient string, quality int) (outputPath string, cleanupFn func(), width, height int, err error) {
+func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, enc encoding, profilePath string, profiled bool, orient string) (outputPath string, cleanupFn func(), width, height int, err error) {
+	scenes, _, err := identifyWithFallback(ctx, e, inputPath, "[0]", mimeType)
+	if err != nil {
+		return "", nil, 0, 0, err
+	}
+	head := scenes[0]
+	orientation := cmp.Or(orient, head.orientation)
+	w, h := uprightSize(head.width, head.height, orientation)
+	if w < 1 || h < 1 {
+		return "", nil, 0, 0, fmt.Errorf("input reports size %dx%d", w, h)
+	}
 	outputPath, cleanupFn, err = e.Stage(".webp")
 	if err != nil {
 		return "", nil, 0, 0, err
 	}
-	if err := e.generateStill(ctx, inputPath, outputPath, ceiling, mimeType, profilePath, profiled, orient, quality); err != nil {
+	fail := func(err error) (string, func(), int, int, error) {
 		cleanupFn()
 		return "", nil, 0, 0, err
 	}
-	scenes, w, h, err := e.IdentifyArtifact(ctx, outputPath)
-	if err != nil {
-		cleanupFn()
-		return "", nil, 0, 0, err
+	destination := ""
+	if profiled {
+		if destination = profilePath; destination == "" {
+			scratch, err := os.MkdirTemp(filepath.Dir(outputPath), ".rung-still-*")
+			if err != nil {
+				return fail(err)
+			}
+			defer func() { _ = os.RemoveAll(scratch) }()
+			if destination, err = placeSRGB(scratch); err != nil {
+				return fail(err)
+			}
+		}
 	}
-	if scenes != 1 {
-		cleanupFn()
-		return "", nil, 0, 0, fmt.Errorf("still encode produced %d scenes, want 1", scenes)
-	}
-	return outputPath, cleanupFn, w, h, nil
-}
 
-// generateStill invokes magick against inputPath through the
-// shared coder-retry runner, so a still gets the same extensionless-sniffing
-// fallback the probe and the animation encode do.
-func (e Env) generateStill(ctx context.Context, inputPath, outputPath string, ceiling int, mimeType, profilePath string, profiled bool, orient string, quality int) error {
-	_, err := e.RunMagickWithCoderFallback(ctx, mimeType, func(coder string) []string {
-		return stillArgs(inputPath, outputPath, ceiling, coder, profilePath, orient, profiled, quality)
+	out, err := e.RunMagickWithCoderFallback(ctx, mimeType, func(coder string) []string {
+		input := inputPath + "[0]"
+		if coder != "" {
+			input = coder + ":" + input
+		}
+		return encodeArgs([]encodeFrame{{input: input, convertTo: destination}},
+			encodeSource{orientation: orientation, width: w, height: h}, enc,
+			encodeOutput{kind: outputStill, path: outputPath})
 	})
-	return err
-}
-
-// stillArgs builds one magick invocation for the still-image path: the
-// frame-0 selector, the mandatory resource limits, an -auto-orient
-// (preceded by -orient when orient is set, for an embedded image that lost
-// its orientation tag) ahead of the shrink-only "<C>x<C>>" ceiling (the ">"
-// flag is the whole no-upscale contract), and -quality.
-func stillArgs(inputPath, outputPath string, ceiling int, coder, profilePath, orient string, profiled bool, quality int) []string {
-	arg0 := inputPath + "[0]"
-	if coder != "" {
-		arg0 = coder + ":" + arg0
+	if err != nil {
+		return fail(err)
 	}
-	args := append([]string{}, LimitArgs()...)
-	args = append(args, arg0)
-	if orient != "" {
-		args = append(args, "-orient", orient)
+	encoded, err := parseEncoded(out)
+	if err != nil {
+		return fail(err)
 	}
-	args = append(args, "-auto-orient")
-	args = append(args, colorArgs(profilePath, profiled)...)
-	args = append(args,
-		"-thumbnail", fmt.Sprintf("%dx%d>", ceiling, ceiling),
-		"-quality", strconv.Itoa(quality),
-		outputPath,
-	)
-	return args
+	if len(encoded) != 1 {
+		return fail(fmt.Errorf("still encode produced %d scenes, want 1", len(encoded)))
+	}
+	return outputPath, cleanupFn, encoded[0].width, encoded[0].height, nil
 }
 
 // FrameInfo is the header-only metadata needed before a rung decodes
@@ -564,21 +543,7 @@ type FrameInfo struct {
 // with the coder CoderForMIME names for mimeType ("" disables the retry),
 // because magick cannot sniff some formats from an extensionless path.
 func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]FrameInfo, error) {
-	ref := inputPath
-	scenes, err := identifyHeaders(ctx, e, ref, true)
-	if err != nil && !errors.Is(err, ErrTooLarge) {
-		coder, ok := CoderForMIME(mimeType)
-		if !ok {
-			return nil, err
-		}
-		ref = coder + ":" + inputPath
-		var retryErr error
-		scenes, retryErr = identifyHeaders(ctx, e, ref, true)
-		if retryErr != nil {
-			return nil, fmt.Errorf("%w; retried with coder %q, which also failed: %w", err, coder, retryErr)
-		}
-		err = nil
-	}
+	scenes, ref, err := identifyWithFallback(ctx, e, inputPath, "", mimeType)
 	if err != nil {
 		return nil, err
 	}
@@ -590,6 +555,28 @@ func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]Fra
 		frames[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
 	}
 	return frames, nil
+}
+
+// identifyWithFallback reads the headers of the scenes of path selected by
+// selector ("" for all). A failed read is retried once with the coder
+// CoderForMIME names for mimeType ("" disables the retry). ref is the input
+// reference the headers were read from.
+func identifyWithFallback(ctx context.Context, env Env, path, selector, mimeType string) (scenes []sceneHeader, ref string, err error) {
+	ref = path + selector
+	scenes, err = identifyHeaders(ctx, env, ref, true)
+	if err == nil || errors.Is(err, ErrTooLarge) {
+		return scenes, ref, err
+	}
+	coder, ok := CoderForMIME(mimeType)
+	if !ok {
+		return nil, "", err
+	}
+	ref = coder + ":" + path + selector
+	scenes, retryErr := identifyHeaders(ctx, env, ref, true)
+	if retryErr != nil {
+		return nil, "", fmt.Errorf("%w; retried with coder %q, which also failed: %w", err, coder, retryErr)
+	}
+	return scenes, ref, nil
 }
 
 func profileListHasICC(profiles string) bool {

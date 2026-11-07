@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -83,7 +84,6 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 	if err != nil {
 		t.Fatal(err)
 	}
-	dec := decoder{"magick", "webp"}
 	ctx := context.Background()
 	scenes, err := identifyHeaders(ctx, env, "webp:"+path, true)
 	if err != nil {
@@ -118,20 +118,24 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 		defer func() { _ = os.Remove(assignPath) }()
 	}
 	err = withProfile(dir, profiled || assign != nil, func(profilePath string) error {
-		p := imagePipeline{
-			decoder: dec, inputPath: path, coalesce: true, deleteExpr: DeleteExpr(selected, len(scenes)),
-			profilePath: profilePath, profiled: profiled && assign == nil, flatten: ec.format == JPEG,
+		args := append(LimitArgs(), "webp:"+path, "-coalesce")
+		if del := DeleteExpr(selected, len(scenes)); del != "" {
+			args = append(args, "-delete", del)
+		}
+		args = append(args, "-auto-orient")
+		if assign != nil {
+			args = append(args, "-profile", assignPath, "-profile", profilePath)
+		} else if profiled {
+			args = append(args, "-profile", profilePath)
+		}
+		if ec.format == JPEG {
+			args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
 		}
 		if resize {
-			p.resizeTo = &[2]int{tw, th}
+			args = append(args, "-filter", resizeFilter, "-resize", fmt.Sprintf("%dx%d!", tw, th))
 		}
 		pattern := filepath.Join(dir, "frame-") + "%03d" + ec.ext
-		args := p.args()
-		if assign != nil {
-			i := slices.Index(args, "-auto-orient")
-			args = slices.Insert(args, i+1, "-profile", assignPath, "-profile", profilePath)
-		}
-		args = append(args, "-scene", "0", "+adjoin", "-quality", strconv.Itoa(ec.quality), pattern)
+		args = append(args, "-strip", "-scene", "0", "+adjoin", "-quality", strconv.Itoa(ec.quality), pattern)
 		_, err := env.Run(ctx, "magick", args...)
 		return err
 	})
