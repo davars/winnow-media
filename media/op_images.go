@@ -67,35 +67,55 @@ type sceneHeader struct {
 	canvasW       int
 	canvasH       int
 	orientation   string
+	format        string // ImageMagick's coder name for the file, as %m
 }
 
 // readHeaders reads the headers of the scenes selected by selector ("" for
 // all, "[0]" for the first) of path, decoded with decoder, and refuses ones
 // that exceed the caps before any pixel is decoded.
 func readHeaders(ctx context.Context, env Env, dec decoder, path, selector string, animated bool) ([]sceneHeader, error) {
-	scenes, err := identifyHeaders(ctx, env, dec.name+":"+path+selector, true)
+	ref := dec.name + ":" + path + selector
+	scenes, err := identifyHeaders(ctx, env, ref, true)
 	if err != nil {
 		return nil, err
 	}
 	if err := checkSceneHeaders(scenes, animated); err != nil {
 		return nil, err
 	}
-	// libwebp's header read skips the ICC chunk, so the profile of a still is
-	// read from the decoded image, which the caps now allow. An animation is
-	// not decoded here: webp-frames reports its profile with the frames.
-	if dec.name == "webp" && (!animated || len(scenes) == 1) {
-		full, err := identifyHeaders(ctx, env, dec.name+":"+path+selector, false)
-		if err != nil {
-			return nil, err
-		}
-		if len(full) != len(scenes) {
-			return nil, fmt.Errorf("reading headers: %d scenes, then %d", len(scenes), len(full))
-		}
-		for i := range scenes {
-			scenes[i].hasICC = full[i].hasICC
-		}
+	if err := completeProfile(ctx, env, ref, path, scenes); err != nil {
+		return nil, err
 	}
 	return scenes, nil
+}
+
+// completeProfile fills in hasICC for the one scene of a file whose coder
+// does not report its profile under -ping. ref is the identify input the
+// headers were read from, path the file it names. A WebP still is answered by
+// its chunk list. A JXL still is decoded, which the callers' caps already
+// allow; a multi-scene JXL is not, since the operations refuse it. An
+// animated WebP is not examined: webp-frames reports its frames' profiles.
+func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sceneHeader) error {
+	if len(scenes) != 1 {
+		return nil
+	}
+	switch scenes[0].format {
+	case "WEBP":
+		hasICC, err := webpHasICC(path)
+		if err != nil {
+			return fmt.Errorf("reading headers: %w", err)
+		}
+		scenes[0].hasICC = hasICC
+	case "JXL":
+		full, err := identifyHeaders(ctx, env, ref, false)
+		if err != nil {
+			return err
+		}
+		if len(full) != 1 {
+			return fmt.Errorf("reading headers: 1 scene, then %d", len(full))
+		}
+		scenes[0].hasICC = full[0].hasICC
+	}
+	return nil
 }
 
 // identifyHeaders runs one identify over inputRef, a path optionally prefixed
@@ -119,8 +139,10 @@ func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) (
 	return parseSceneHeaders(res.Stdout)
 }
 
-// sceneHeaderFormat is the identify -format that parseSceneHeaders reads.
-const sceneHeaderFormat = "%T|%[profiles]|%w|%h|%W|%H|%[orientation]|END\n"
+// sceneHeaderFormat is the identify -format that parseSceneHeaders reads. %m
+// is the coder that read the file, which -ping reports even where it cannot
+// report the profiles.
+const sceneHeaderFormat = "%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|END\n"
 
 // parseSceneHeaders reads the output of identify -format sceneHeaderFormat.
 func parseSceneHeaders(out []byte) ([]sceneHeader, error) {
@@ -131,7 +153,7 @@ func parseSceneHeaders(out []byte) ([]sceneHeader, error) {
 	var scenes []sceneHeader
 	for _, line := range strings.Split(trimmed, "\n") {
 		f := strings.Split(line, "|")
-		if len(f) != 8 || f[7] != "END" {
+		if len(f) != 9 || f[8] != "END" {
 			return nil, fmt.Errorf("identify line %q missing fields", line)
 		}
 		var nums [5]int
@@ -145,7 +167,7 @@ func parseSceneHeaders(out []byte) ([]sceneHeader, error) {
 		scenes = append(scenes, sceneHeader{
 			delayCS: nums[0], hasICC: profileListHasICC(f[1]),
 			width: nums[1], height: nums[2], canvasW: nums[3], canvasH: nums[4],
-			orientation: f[6],
+			format: f[6], orientation: f[7],
 		})
 	}
 	return scenes, nil
