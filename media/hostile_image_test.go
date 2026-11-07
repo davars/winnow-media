@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -347,4 +349,168 @@ func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
 			t.Error("no images")
 		}
 	})
+}
+
+// meteredEnv returns env with each run's peak RSS and the wall time of the
+// whole call recorded, for the Env path, which has no Processor to meter.
+func meteredEnv(env Env) (Env, func() int64) {
+	var mu sync.Mutex
+	var peak int64
+	wrapped := env
+	wrapped.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
+		res, err := env.Run(ctx, name, args...)
+		if res.Usage != nil {
+			mu.Lock()
+			peak = max(peak, res.Usage.MaxRSS)
+			mu.Unlock()
+		}
+		return res, err
+	}
+	return wrapped, func() int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		return peak
+	}
+}
+
+// The Env path's header read runs identify over every scene with no list
+// length ceiling (the Processor's policy sets 2048), so the memory of the read
+// grows with the number of frames before the frame cap can be checked:
+// ImageMagick holds about 40 KiB per scene in ping mode, 827 MiB for 20000
+// one-pixel frames (300 KiB of file) and 3.9 GiB for 100000 (1.5 MiB), well
+// inside the 25 MiB the Processor admits and the 256 MiB winnow admits.
+func TestProbeFramesHeaderReadIsBoundedForManyFrameAnimations(t *testing.T) {
+	env, peak := meteredEnv(requireMagick(t))
+	data := manyFrameGIF(1, 1, 20_000)
+	start := time.Now()
+	frames, err := env.ProbeFrames(context.Background(), writeFile(t, "content", data), "image/gif")
+	if err != nil && !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want nil or ErrTooLarge", err)
+	}
+	if err == nil && len(frames) != 20_000 {
+		t.Errorf("%d frames, want 20000", len(frames))
+	}
+	if wall := time.Since(start); wall > 5*time.Second {
+		t.Errorf("header read took %v, the bound is 5s", wall)
+	}
+	if rss := peak(); rss > 256<<20 {
+		t.Errorf("header read peaked at %d bytes of RSS for a %d-byte file, the bound is 256 MiB", rss, len(data))
+	}
+}
+
+// gifWithFrames returns a GIF whose logical screen is lsdW x lsdH (0 x 0 is
+// allowed, as ImageMagick reads it) and whose frames are one-colour
+// rectangles at the given left, top, width and height.
+func gifWithFrames(t *testing.T, lsdW, lsdH int, rects [][4]int) []byte {
+	t.Helper()
+	b := []byte("GIF89a")
+	b = binary.LittleEndian.AppendUint16(b, uint16(lsdW))
+	b = binary.LittleEndian.AppendUint16(b, uint16(lsdH))
+	b = append(b, 0x80, 0, 0, 0, 0, 0, 255, 255, 255)
+	for _, r := range rects {
+		var packed bytes.Buffer
+		zw := lzw.NewWriter(&packed, lzw.LSB, 8)
+		row := make([]byte, r[2])
+		for range r[3] {
+			if _, err := zw.Write(row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		b = append(b, 0x2C)
+		for _, v := range r {
+			b = binary.LittleEndian.AppendUint16(b, uint16(v))
+		}
+		b = append(b, 0, 8)
+		for data := packed.Bytes(); len(data) > 0; {
+			k := min(len(data), 255)
+			b = append(b, byte(k))
+			b = append(b, data[:k]...)
+			data = data[k:]
+		}
+		b = append(b, 0)
+	}
+	return append(b, 0x3B)
+}
+
+// The canvas an animation is composited on is the largest width by the
+// largest height over its scenes, but checkSceneHeaders bounds each scene's
+// own canvas, not that product. A GIF without a logical screen (0 x 0, which
+// ImageMagick reports as each frame's own size) holding a 16384x1 frame and
+// a 1x16384 one declares two frames within every per-frame cap and a
+// composite canvas of 268 MP, five times maxFramePixels: ProbeAnimation
+// reports it as admissible, and the GIF compositor allocates it (1 GiB, plus
+// a 1 GiB saved copy) before the standard library refuses the frame.
+func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
+	data := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
+	t.Run("ProbeAnimation", func(t *testing.T) {
+		p := requireProcessor(t)
+		info, _, err := p.ProbeAnimation(context.Background(), writeFile(t, "wide.gif", data))
+		if errors.Is(err, ErrTooLarge) {
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if px := int64(info.Width) * int64(info.Height); px > maxFramePixels {
+			t.Errorf("probe admits a %dx%d canvas, %d pixels, over the %d cap", info.Width, info.Height, px, int64(maxFramePixels))
+		}
+	})
+	t.Run("EncodeRung", func(t *testing.T) {
+		env := requireMagick(t)
+		path := writeFile(t, "content", data)
+		frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/gif", true,
+			Rung{CeilingPx: 2048, MaxFrames: 2}, frames, "", "", 80)
+		if err == nil {
+			cleanup()
+			t.Fatal("encoded a 268 MP composite canvas")
+		}
+		if !errors.Is(err, ErrTooLarge) {
+			t.Errorf("err = %v, want ErrTooLarge before the compositor runs", err)
+		}
+	})
+}
+
+// ImageMagick's list-length ceiling stops the header read of a file with more
+// scenes than LimitArgs allows, and every caller of the shared reader gets
+// ErrTooLarge naming the ceiling.
+func TestHeaderReadMapsTheListLengthCeilingToErrTooLarge(t *testing.T) {
+	data := manyFrameGIF(1, 1, 2100)
+	t.Run("ProbeFrames", func(t *testing.T) {
+		env := requireMagick(t)
+		_, err := env.ProbeFrames(context.Background(), writeFile(t, "content", data), "image/gif")
+		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), policyListLength) {
+			t.Errorf("err = %v, want ErrTooLarge naming %s", err, policyListLength)
+		}
+	})
+	t.Run("ProbeAnimation", func(t *testing.T) {
+		p := requireProcessor(t)
+		_, _, err := p.ProbeAnimation(context.Background(), writeFile(t, "many.gif", data))
+		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), policyListLength) {
+			t.Errorf("err = %v, want ErrTooLarge naming %s", err, policyListLength)
+		}
+	})
+}
+
+// A GIF without a logical screen is composited on the extent of its frames,
+// which scanGIF bounds before any canvas is allocated.
+func TestScanGIFBoundsTheExtentOfAZeroLogicalScreen(t *testing.T) {
+	wide := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
+	if _, err := scanGIF(wide, 10); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("scanGIF of a 268 MP extent: err = %v, want ErrTooLarge", err)
+	}
+	over := gifWithFrames(t, 0, 0, [][4]int{{maxDimension, 0, 2, 1}})
+	if _, err := scanGIF(over, 10); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("scanGIF of a %d-wide extent: err = %v, want ErrTooLarge", maxDimension+2, err)
+	}
+	small := gifWithFrames(t, 0, 0, [][4]int{{0, 0, 3, 2}, {1, 1, 4, 4}})
+	if l, err := scanGIF(small, 10); err != nil || l.width != 5 || l.height != 5 {
+		t.Errorf("scanGIF of a small extent = %dx%d, %v, want 5x5", l.width, l.height, err)
+	}
 }

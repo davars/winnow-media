@@ -64,10 +64,13 @@ type gifLayout struct {
 }
 
 // scanGIF walks the blocks of a GIF without decoding any pixels and refuses
-// one that is truncated inside a block, has more than maxFrames frames, has a
-// frame that reaches outside the logical screen. A GIF that ends between blocks
-// without a trailer is accepted. It is what bounds the decode that follows:
-// the number of frames and the extent of the canvas.
+// one that is truncated inside a block, has more than maxFrames frames, or has
+// a frame that reaches outside the logical screen. A canvas (the logical
+// screen, or the extent of the frames when that is 0x0) wider or taller than
+// maxDimension or larger than maxFramePixels is refused with ErrTooLarge. A
+// GIF that ends between blocks without a trailer is accepted. It is what
+// bounds the decode that follows: the number of frames and the extent of the
+// canvas.
 func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	if len(data) < 13 || (string(data[:6]) != "GIF87a" && string(data[:6]) != "GIF89a") {
 		return gifLayout{}, errors.New("not a GIF")
@@ -189,6 +192,12 @@ func scanGIF(data []byte, maxFrames int) (gifLayout, error) {
 	}
 	if l.width == 0 || l.height == 0 {
 		l.width, l.height = extentW, extentH
+	}
+	if l.width > maxDimension || l.height > maxDimension {
+		return gifLayout{}, tooLarge("GIF canvas is %dx%d, the limit is %d on each side", l.width, l.height, maxDimension)
+	}
+	if px := int64(l.width) * int64(l.height); px > maxFramePixels {
+		return gifLayout{}, tooLarge("GIF canvas has %d pixels, the limit is %d", px, int64(maxFramePixels))
 	}
 	if l.frames == 0 || l.width == 0 || l.height == 0 {
 		return gifLayout{}, errors.New("GIF has no frames")

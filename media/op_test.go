@@ -674,3 +674,24 @@ func checkGolden(t *testing.T, name, got string) {
 		t.Errorf("argv differs from %s:\n--- got\n%s\n--- want\n%s", path, got, want)
 	}
 }
+
+// identifySizes reads back the size of each output, which its headers state.
+// Without -ping identify decodes the file: every Still pays a decode of its
+// own JPEG output, and animationFrames one per frame file.
+func TestIdentifySizesReadsHeadersOnly(t *testing.T) {
+	real := requireMagick(t)
+	env, calls := countingEnv(real)
+	dir := t.TempDir()
+	paths := []string{filepath.Join(dir, "a.jpg"), filepath.Join(dir, "b.png")}
+	magick(t, real, "-size", "12x8", "xc:red", paths[0])
+	magick(t, real, "-size", "6x4", "xc:blue", paths[1])
+	sizes, err := identifySizes(context.Background(), env, paths)
+	if err != nil || !slices.Equal(sizes, [][2]int{{12, 8}, {6, 4}}) {
+		t.Fatalf("sizes %v, err %v", sizes, err)
+	}
+	for _, call := range calls() {
+		if !slices.Contains(call, "-ping") {
+			t.Errorf("the outputs were decoded to read their sizes: %q", call)
+		}
+	}
+}

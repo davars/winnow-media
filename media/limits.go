@@ -143,6 +143,11 @@ func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
 		}
 		cw, ch = max(cw, w), max(ch, h)
 	}
+	// The compositor allocates the largest width by the largest height, which
+	// no single scene need reach; each side is already within maxDimension.
+	if px := int64(cw) * int64(ch); px > maxFramePixels {
+		return tooLarge("composite canvas has %d pixels, the limit is %d", px, int64(maxFramePixels))
+	}
 	if animated {
 		if total := int64(len(scenes)) * int64(cw) * int64(ch); total > maxDecodedPixels {
 			return tooLarge("animation has %d frames of %dx%d, %d pixels to decode, the limit is %d",
