@@ -261,6 +261,8 @@
 "%[fx:max(1,min(max(1,floor(w*min(1,min(2576/max(w,h),sqrt(3750000/(w*h))))+0.000000001)),floor(3750000/max(1,floor(h*min(1,min(2576/max(w,h),sqrt(3750000/(w*h))))+0.000000001)))))]x%[fx:max(1,min(max(1,floor(h*min(1,min(2576/max(w,h),sqrt(3750000/(w*h))))+0.000000001)),floor(3750000/max(1,min(max(1,floor(w*min(1,min(2576/max(w,h),sqrt(3750000/(w*h))))+0.000000001)),floor(3750000/max(1,floor(h*min(1,min(2576/max(w,h),sqrt(3750000/(w*h))))+0.000000001))))))))]!"
 ")"
 "-strip"
+"-depth"
+"8"
 "-quality"
 "90"
 "+adjoin"

@@ -43,6 +43,8 @@
 "-resize"
 "%[fx:max(1,min(max(1,floor(w*min(1,min(400/max(w,h),sqrt(100000/(w*h))))+0.000000001)),floor(100000/max(1,floor(h*min(1,min(400/max(w,h),sqrt(100000/(w*h))))+0.000000001)))))]x%[fx:max(1,min(max(1,floor(h*min(1,min(400/max(w,h),sqrt(100000/(w*h))))+0.000000001)),floor(100000/max(1,min(max(1,floor(w*min(1,min(400/max(w,h),sqrt(100000/(w*h))))+0.000000001)),floor(100000/max(1,floor(h*min(1,min(400/max(w,h),sqrt(100000/(w*h))))+0.000000001))))))))]!"
 "-strip"
+"-depth"
+"8"
 "-quality"
 "75"
 "-write"

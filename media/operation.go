@@ -24,7 +24,8 @@ const (
 
 // Encoding is how an operation sizes and encodes each output image. The
 // output satisfies both size bounds with one resample, each side rounded down,
-// and is never upscaled. Zero fields take defaults.
+// and is never upscaled; it is written at 8 bits per channel whatever the
+// depth of the source. Zero fields take defaults.
 type Encoding struct {
 	// Format defaults to JPEG.
 	Format Format

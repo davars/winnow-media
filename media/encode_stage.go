@@ -98,7 +98,8 @@ type encodedFrame struct {
 // the frame as ImageMagick has oriented it, computed by ImageMagick (see
 // fitExpr) so that it follows the rotation actually applied, whatever the
 // header said, and asked for exactly. Metadata is stripped last, after the
-// conversion that needed it. The run prints one encodedFrame line per frame,
+// conversion that needed it, and every output is written at 8 bits per channel
+// whatever the depth of the source. The run prints one encodedFrame line per frame,
 // which parseEncoded reads.
 //
 // The result starts with LimitArgs. outputFiles requires out.path to be a
@@ -119,9 +120,13 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 			args = append(args, "-set", "delay", strconv.Itoa(f.delayCS))
 		}
 		if src.orientation != "" && src.orientation != "Undefined" {
-			args = append(args, "-orient", src.orientation)
+			args = append(args, "-orient", src.orientation, "-auto-orient",
+				// -orient also sets the orientation the writers record, which
+				// a PNG would carry on pixels already turned upright.
+				"-orient", "TopLeft")
+		} else {
+			args = append(args, "-auto-orient")
 		}
-		args = append(args, "-auto-orient")
 		if f.convertTo != "" {
 			if f.assign != "" {
 				args = append(args, "-profile", f.assign)
@@ -136,7 +141,7 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 			args = append(args, ")")
 		}
 	}
-	args = append(args, "-strip", "-quality", strconv.Itoa(enc.quality))
+	args = append(args, "-strip", "-depth", "8", "-quality", strconv.Itoa(enc.quality))
 	switch out.kind {
 	case outputStill, outputAnimation:
 		args = append(args, "-write", out.path)
