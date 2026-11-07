@@ -232,7 +232,8 @@ func (p *Processor) admitInput(s spec, path string) (admitted, error) {
 // be empty. Every argument is validated, and the input checked against the
 // size caps, before any tool runs: a type the operation does not accept gives
 // an error wrapping ErrUnsupportedType, and an input over a cap one wrapping
-// ErrTooLarge. On failure Still removes what it wrote, leaving dir empty.
+// ErrTooLarge. A tool run that reaches ImageMagick's time limit gives an error
+// wrapping ErrTimeLimit. On failure Still removes what it wrote, leaving dir empty.
 // Usage covers every tool run of the call, including those of a failed one.
 func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir string) (Image, Usage, error) {
 	ec, err := enc.resolve()

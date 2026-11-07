@@ -570,12 +570,14 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 			targets[i].width, targets[i].height = sizes[i][0], sizes[i][1]
 		}
 	}
-	res, err := s.env.runEncode(ctx, fusedArgs(readOps, encodeSource{orientation: s.orientation}, targets))
+	src := encodeSource{orientation: s.orientation}
+	chk := encodeCheck{frames: len(encs), outputs: paths}
+	for _, t := range targets {
+		chk.bounds = append(chk.bounds, boundOf(t.enc, t.source(src)))
+	}
+	res, err := s.env.runEncode(ctx, fusedArgs(readOps, src, targets), chk)
 	if err != nil {
 		return nil, err
-	}
-	if len(res) != len(encs) {
-		return nil, fmt.Errorf("still encode produced %d results, want %d", len(res), len(encs))
 	}
 	return res, nil
 }
@@ -586,7 +588,10 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 // one animated file; a still, or one selected frame, makes a plain image, and
 // a target's Format must be WebP when there are several. A frame identical to
 // the one before it at the target's size is dropped, so Artifact.Frames says
-// which frames the file holds. A still is decoded once for all targets.
+// which frames the file holds. A still is decoded once for all targets. A run
+// that hits ImageMagick's time limit fails with ErrTimeLimit, and one that
+// reports a frame above the bounds of its target fails too; neither returns
+// an artifact.
 func (s *Source) Encode(ctx context.Context, maxFrames int, targets ...Encoding) ([]Artifact, error) {
 	encs := make([]encoding, len(targets))
 	for i, t := range targets {
@@ -679,12 +684,10 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 	}
 	keepAt := []int{0}
 	if len(pos) > 1 {
-		probed, err := s.env.runEncode(ctx, encodeArgs(frames, src, enc, encodeOutput{kind: outputProbe}))
+		probed, err := s.env.runEncode(ctx, encodeArgs(frames, src, enc, encodeOutput{kind: outputProbe}),
+			encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}})
 		if err != nil {
 			return 0, 0, nil, fmt.Errorf("probing selected frames: %w", err)
-		}
-		if len(probed) != len(pos) {
-			return 0, 0, nil, fmt.Errorf("frame selection probe returned %d frames, want %d", len(probed), len(pos))
 		}
 		keepAt = keepAt[:0]
 		for i, f := range probed {
@@ -702,14 +705,12 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 	if len(kept) == 1 {
 		kind = outputStill
 	}
-	res, err := s.env.runEncode(ctx, encodeArgs(keptFrames, src, enc, encodeOutput{kind: kind, path: path}))
+	res, err := s.env.runEncode(ctx, encodeArgs(keptFrames, src, enc, encodeOutput{kind: kind, path: path}),
+		encodeCheck{frames: len(kept), bounds: []encodeBound{boundOf(enc, src)}})
 	if err != nil {
 		return 0, 0, nil, fmt.Errorf("encoding animation: %w", err)
 	}
 	if len(kept) == 1 {
-		if len(res) != 1 {
-			return 0, 0, nil, fmt.Errorf("encode produced %d scenes, want 1", len(res))
-		}
 		return res[0].width, res[0].height, kept, nil
 	}
 	scenes, w, h, err := s.env.IdentifyArtifact(ctx, path)
@@ -726,7 +727,7 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 // frame-NNN with the extension of enc.Format and numbered from 0, and returns
 // them in order; Image.Frame is the index of the source frame. A frame
 // identical to the one before it after resizing is dropped. dir must exist
-// and be empty.
+// and be empty. It fails as Encode does.
 func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]Image, error) {
 	ec, err := enc.resolve()
 	if err != nil {

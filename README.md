@@ -30,9 +30,15 @@ are resolved, limited and cancelled, and where scratch files live.
 
 - `Env{Run, Stage, Scratch}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
   (Result, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
-  A `Result` holds the tool's `Stdout` and a `*Usage` (CPU time, peak RSS in
+  A `Result` holds the tool's `Stdout`, its `Stderr` (the tail; nil when the
+  runner does not capture it) and a `*Usage` (CPU time, peak RSS in
   bytes) that is nil when the runner cannot measure it; `UsageOf` builds one
-  from an exited `*os.ProcessState`.
+  from an exited `*os.ProcessState`. ImageMagick exits 0 when it hits its time
+  limit and prints `time limit exceeded` on stderr only, so a runner that
+  fills `Stderr` lets the encodes and header reads fail with `ErrTimeLimit`
+  (a `Processor` always does); whatever the runner, an encode whose output is
+  larger than its encoding allows, or does not have the size it was asked for,
+  fails and leaves no output.
   `Stage` is a `Stager` that creates an empty scratch file whose name ends in
   an extension (`".webp"`) and returns its path and a cleanup function.
   `Scratch` is a `Scratcher` that creates a new empty directory for decoded
@@ -111,7 +117,8 @@ are resolved, limited and cancelled, and where scratch files live.
   or HLS list that names other files is refused.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts. `LimitArgs` bounds memory, map,
-  area, list length (2048 scenes) and time; a header read that reaches the list
+  area and list length (2048 scenes) for the process and time for each image
+  (not for the process as a whole); a header read that reaches the list
   length fails with `ErrTooLarge`.
 
 ### Operations

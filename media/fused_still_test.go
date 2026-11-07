@@ -150,10 +150,10 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 						fused.convertTo = destination
 						materialised.convertTo, materialised.assign = destination, sidecar
 					}
-					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{fused}, fusedSrc, enc, encodeOutput{kind: outputStill, path: fusedOut})); err != nil {
+					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{fused}, fusedSrc, enc, encodeOutput{kind: outputStill, path: fusedOut}), encodeCheck{}); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{materialised}, materialisedSrc, enc, encodeOutput{kind: outputStill, path: matOut})); err != nil {
+					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{materialised}, materialisedSrc, enc, encodeOutput{kind: outputStill, path: matOut}), encodeCheck{}); err != nil {
 						t.Fatal(err)
 					}
 					a, b := mustReadFile(t, fusedOut), mustReadFile(t, matOut)

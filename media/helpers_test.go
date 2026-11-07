@@ -31,7 +31,7 @@ func testEnv(t *testing.T) Env {
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			out, err := cmd.Output()
-			res := Result{Stdout: out, Usage: UsageOf(cmd.ProcessState)}
+			res := Result{Stdout: out, Stderr: stderr.Bytes(), Usage: UsageOf(cmd.ProcessState)}
 			if err != nil {
 				return res, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(stderr.String()))
 			}

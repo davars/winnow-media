@@ -47,8 +47,11 @@ func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, bu
 	return retried.Stdout, nil
 }
 
-// LimitArgs returns the resource-limit flags that bound one magick process:
-// memory, map, area, list length and time. Every magick invocation the
+// LimitArgs returns the resource-limit flags for one magick process: memory,
+// map, area and list length bound the process, and time bounds each image
+// (its clock starts when the image is created, and ImageMagick stops work on
+// an image that has run past it, exiting 0 in most cases; see ErrTimeLimit).
+// It does not bound the process's total time. Every magick invocation the
 // package builds starts with them, and callers building their own invocations
 // over the package's artifacts should too. The slice is fresh on every call.
 func LimitArgs() []string {

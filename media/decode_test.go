@@ -746,7 +746,7 @@ func TestFusedAndMaterialisedEncodesAgreeOnTwoTargetsAndReducedJPEG(t *testing.T
 				}
 				out := filepath.Join(dir, fmt.Sprintf("mat-%t-%d.webp", reduce, i))
 				if _, err := real.runEncode(ctx, encodeArgs([]encodeFrame{frame}, src, enc,
-					encodeOutput{kind: outputStill, path: out})); err != nil {
+					encodeOutput{kind: outputStill, path: out}), encodeCheck{}); err != nil {
 					t.Fatal(err)
 				}
 				if a, b := mustReadFile(t, fused[i].Path), mustReadFile(t, out); !bytes.Equal(a, b) {
@@ -989,7 +989,7 @@ func TestSourceEncodeEqualsMaterialisedForPNGs(t *testing.T) {
 				out := filepath.Join(dir, fmt.Sprintf("mat-%d.webp", edge))
 				frame := encodeFrame{input: "pam:" + mid, filter: f.filter, fits: edge >= 64}
 				if _, err := real.runEncode(ctx, encodeArgs([]encodeFrame{frame}, encodeSource{}, enc,
-					encodeOutput{kind: outputStill, path: out})); err != nil {
+					encodeOutput{kind: outputStill, path: out}), encodeCheck{}); err != nil {
 					t.Fatal(err)
 				}
 				return mustReadFile(t, out)
