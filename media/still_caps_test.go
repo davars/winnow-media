@@ -182,7 +182,7 @@ func TestDecodedSizeIsWhatTheHintDecodes(t *testing.T) {
 			// The decode is the smallest eighth covering twice the output.
 			tw, th, _ := fitSize(sz[0], sz[1], edge, edge*edge)
 			covers := func(n int) bool {
-				return sz[0]*n >= 8*jpegSizeMargin*tw && sz[1]*n >= 8*jpegSizeMargin*th
+				return sz[0]*n >= 8*decodeMargin*tw && sz[1]*n >= 8*decodeMargin*th
 			}
 			n := want[0] * 8 / sz[0]
 			if !covers(n) || (n > 1 && covers(n-1)) {

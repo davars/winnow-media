@@ -62,12 +62,14 @@ are resolved, limited and cancelled, and where scratch files live.
   |---|---|
   | GIF, any number of frames | the Go compositor, in this process |
   | WebP with the VP8X animation flag, any number of frames | `webp-frames`, which `Env.Run` must be able to run |
+  | WebP without the animation flag | `webp-frames still`, then ImageMagick |
   | any other image | ImageMagick, in the same run as the encode (`[0]`) |
 
-  A still is never written out: one ImageMagick run decodes it and writes
-  every target, each from a clone of the decoded image, so a source costs one
-  decode however many targets it has. The frames of a GIF or animated WebP
-  are composited onto their canvas into `Env.Scratch` by `Open`, where every
+  A still other than a WebP is never written out: one ImageMagick run decodes
+  it and writes every target, each from a clone of the decoded image, so a
+  source costs one decode however many targets it has. The frames of a GIF or
+  animated WebP are composited onto their canvas into `Env.Scratch` by `Open`,
+  where every
   `Encode` reads them (about four bytes per pixel of the canvas for each
   selected frame); the GIF compositor stops after the last selected frame.
   `maxFrames` of `Encode` selects, evenly spaced from the first, that many of
@@ -104,8 +106,8 @@ are resolved, limited and cancelled, and where scratch files live.
   The still caps (a side of at most 16384 and at most 52 million pixels)
   apply to the frame the decode produces, on `Env` as on the `Processor`,
   and a still over them is refused with `ErrTooLarge`. `Open` refuses a still
-  that no decode stage can reduce when its stored size is over them, before
-  the profile read that may decode it. `Encode` judges a JPEG against the
+  that no decode stage can reduce, a WebP included (see below), when its
+  stored size is over them, before the profile read that may decode it. `Encode` judges a JPEG against the
   targets it is given, before any pixel is decoded: at the reduced size, or
   at its stored size when the reduction does not apply. A header read made
   with the hint confirms the size the decoder will produce, since a lossless
@@ -116,6 +118,42 @@ are resolved, limited and cancelled, and where scratch files live.
   six eighths (a target up to 3750 px) and refused at seven eighths (about
   55.9 MP) and where nothing reduces it; a 16382x3628 JPEG is admitted at
   targets of 2048 and below.
+  A still WebP is always decoded by `webp-frames still`, so one decoder
+  serves it at every target. libwebp scales to any size, which ImageMagick's
+  WebP reader cannot: the decode is at twice the largest target in the stored
+  aspect, never upscaled, when every target needs a resize and that is at
+  most 7/8 of the stored size on both sides, and at the stored size
+  otherwise; so one target that needs no resize makes the decode full-size
+  for all targets of that `Encode`, as it does for a JPEG. The tool writes a
+  PAM with the declared alpha and the ICC profile beside it, reported like an
+  animation frame, and every target is encoded from that one frame in a run of
+  its own, at the exact size `fitSize` gives when the decode was reduced and
+  at the size ImageMagick computes otherwise. A WebP is reduced inside the
+  decoder but is not in the set of formats whose caps follow the decoded size:
+  its stored size is held to the still caps at the header, before any read of
+  the whole image. libwebp's scaling bounds memory only for lossy images
+  without alpha (268 MP of lossless, an 82 KB file, needs about 1 GB to
+  decode at 1024; lossy with alpha about 370 MB; lossy without alpha 7 MB), so
+  the scaling is a gain in time and memory for those, not a cap relaxation.
+  The frame has no orientation tag, so the orientation is given: the hint if
+  there is one, else the first EXIF directory when it settles it, else what
+  ImageMagick's read of the whole image reports (its header read under `-ping`
+  misses a WebP's orientation). The metadata comes from the tool, which reads
+  it as ImageMagick does, through libwebp's mux: a file whose chunks the mux
+  refuses (an alpha image without the VP8X alpha flag, a misplaced or repeated
+  ALPH chunk, flags that disagree with the chunks) has no EXIF and no profile
+  for ImageMagick, is decoded all the same, and so is oriented as stored. The
+  decode size does not depend on the orientation, so the tool runs first and
+  the exact output sizes follow from what it reports. The package's reading of
+  the EXIF is the first directory's orientation, and declines (and asks
+  ImageMagick) when an entry before it has a type outside 1 to 12, a count of
+  2^31 or more or is a pointer to another directory, when the orientation is
+  not a single SHORT of 1 to 8, and when the file has an XMP chunk, which
+  ImageMagick also reads an orientation from. The profile is the tool's, so
+  the one whole-image read ImageMagick may be asked for is the orientation's.
+  Pixels differ from ImageMagick's own decode and resize by under 1 level of
+  255 on average, because libwebp's scaler and upsampling are not its
+  filter.
 - `Env.ProbeFrames` reads each scene's delay and ICC flag from the headers,
   so a still of any size is accepted. The profile of a single-frame WebP is
   found in its RIFF chunk list when the layout settles it and by one decode
@@ -216,14 +254,15 @@ tools itself because the input is untrusted:
     does not grow with the number of frames. The file's ICC profile, if it has
     one, is written like a GIF's, assigned to the frames and converted to sRGB;
     ImageMagick's own decode of an animated WebP ignores it, as it ignores the
-    EXIF orientation, so an oriented animation is output as stored; this is why a
-    WebP with the animation flag always goes through it, even with one frame.
-    A WebP without the flag is a still, read by ImageMagick. Against `-coalesce` the pixels are identical except
-    where frames are blended over earlier content (blending without disposal),
-    which differs by at most 1 level of alpha, 1 or 2 of colour where the
-    result is opaque and 2 where it is partly transparent; and canvas no frame
-    covers is transparent, where ImageMagick makes it opaque black if the file
-    declares no alpha. The output of an opaque animation can differ in file
+    EXIF orientation, so an oriented animation is output as stored; this is why
+    a WebP with the animation flag always goes through it, even with one frame
+    (a WebP without the flag is a still, which `webp-frames still` decodes,
+    described above). Against `-coalesce` the animation's pixels are identical
+    except where frames are blended over earlier content (blending without
+    disposal), which differs by at most 1 level of alpha, 1 or 2 of colour where
+    the result is opaque and 2 where it is partly transparent; and canvas no
+    frame covers is transparent, where ImageMagick makes it opaque black if the
+    file declares no alpha. The output of an opaque animation can differ in file
     shape (PNG colour type).
 - `Processor.VideoFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
   accepts MP4 and QuickTime (ffmpeg demuxer `mov`) and WebM and Matroska

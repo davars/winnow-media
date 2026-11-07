@@ -374,6 +374,10 @@ type composeRequest struct {
 	// external names the tool that composites the frames, or is empty for
 	// the GIF compositor of this package.
 	external string
+	// scaled, when not zero, asks the external tool for the one image of a
+	// still WebP at this width and height, at most the size of the file's,
+	// instead of frames; selected, frames and inFlight are then unused.
+	scaled [2]int
 }
 
 // ownMask renders own as a string of 0 and 1, one per frame.
@@ -420,8 +424,15 @@ func (r composeRequest) args() []string {
 }
 
 // externalArgs are the arguments of the webp-frames tool, which is told the
-// header read's canvas and frame count and refuses a file that differs.
+// header read's canvas and frame count, or for a still its size, and refuses
+// a file that differs.
 func (r composeRequest) externalArgs() []string {
+	if r.scaled != [2]int{} {
+		return []string{
+			"still", r.path, r.dir, strconv.Itoa(r.width), strconv.Itoa(r.height),
+			strconv.Itoa(r.scaled[0]), strconv.Itoa(r.scaled[1]),
+		}
+	}
 	idx := make([]string, len(r.selected))
 	for i, n := range r.selected {
 		idx[i] = strconv.Itoa(n)

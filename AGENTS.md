@@ -5,7 +5,8 @@
 Run every Go command through the flake's development shell so it uses the
 pinned toolchain and tools: `nix develop --command go test ./...`,
 `nix develop --command golangci-lint run ./...`. `nix flake check` runs the
-full gate.
+full gate. The shell sets `GOFLAGS=-timeout=30m`, as the gate does, because the
+media suite outlasts go test's 10m default.
 
 ## Vocabulary
 

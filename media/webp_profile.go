@@ -1,9 +1,12 @@
 package media
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 )
 
 // maxWebPChunks bounds the chunk headers webpICC reads; a still WebP has a
@@ -110,4 +113,115 @@ func webpAnimated(path string) bool {
 	}
 	return string(head[:4]) == "RIFF" && string(head[8:16]) == "WEBPVP8X" &&
 		binary.LittleEndian.Uint32(head[16:20]) >= 10 && head[20]&webpAnimFlag != 0
+}
+
+// maxEXIFRead bounds how much of the EXIF chunk a decode of a still WebP
+// reads back; the first directory of a real one is in its first kilobytes.
+const maxEXIFRead = 64 << 10
+
+// parseEXIFOrientation returns the orientation, 1 to 8, in the first
+// directory of the EXIF data b, with or without the "Exif\0\0" prefix, and 0
+// when the directory has none. ok is false for data it cannot read with
+// certainty: a directory or value out of range, an orientation outside 1 to 8
+// or not a single SHORT, and any entry before the orientation (or, without
+// one, in the directory) that ImageMagick may stop at or follow first: a type
+// outside 1 to 12, a count of 2^31 or more, or a pointer to another directory.
+func parseEXIFOrientation(b []byte) (orientation int, ok bool) {
+	b = bytes.TrimPrefix(b, []byte("Exif\x00\x00"))
+	if len(b) < 8 {
+		return 0, false
+	}
+	var order binary.ByteOrder
+	switch string(b[:2]) {
+	case "II":
+		order = binary.LittleEndian
+	case "MM":
+		order = binary.BigEndian
+	default:
+		return 0, false
+	}
+	if order.Uint16(b[2:]) != 42 {
+		return 0, false
+	}
+	dir := int64(order.Uint32(b[4:]))
+	if dir+2 > int64(len(b)) {
+		return 0, false
+	}
+	count := int64(order.Uint16(b[dir:]))
+	if dir+2+12*count > int64(len(b)) {
+		return 0, false
+	}
+	for i := range count {
+		entry := b[dir+2+12*i:][:12]
+		tag, typ, n := order.Uint16(entry), order.Uint16(entry[2:]), order.Uint32(entry[4:])
+		if tag == 0x0112 {
+			v := order.Uint16(entry[8:])
+			if typ != 3 || n != 1 || v < 1 || v > 8 {
+				return 0, false
+			}
+			return int(v), true
+		}
+		pointer := tag == 0x8769 || tag == 0x8825 || tag == 0xA005 // Exif, GPS, interoperability
+		if pointer || typ < 1 || typ > 12 || n >= 1<<31 {
+			return 0, false
+		}
+	}
+	return 0, true
+}
+
+// stillMeta is the metadata webp-frames read from a still WebP the way
+// ImageMagick does, through libwebp's mux: nothing when the mux refuses the
+// file's chunks.
+type stillMeta struct {
+	// exif is the file's EXIF chunk, up to maxEXIFRead bytes of it; nil when
+	// there is none.
+	exif []byte
+	// xmp is set when the file has an XMP chunk, from which ImageMagick may
+	// read an orientation that this package does not.
+	xmp bool
+}
+
+// orientation returns the orientation, 1 to 8 or 0 for none, that ImageMagick
+// applies to the file m was read from. ok is false when that is not certain
+// (see parseEXIFOrientation, and an XMP chunk) and the answer must be had
+// from ImageMagick's own read of the file.
+func (m stillMeta) orientation() (n int, ok bool) {
+	switch {
+	case m.xmp:
+		return 0, false
+	case m.exif == nil:
+		return 0, true
+	}
+	return parseEXIFOrientation(m.exif)
+}
+
+// Names of the metadata files webp-frames writes beside a decoded still.
+const (
+	stillEXIFName = ".exif-1.bin"
+	stillXMPName  = ".xmp-1.bin"
+)
+
+// readStillMeta reads the metadata files webp-frames left in dir, and removes
+// them.
+func readStillMeta(dir string) (stillMeta, error) {
+	var m stillMeta
+	exif := filepath.Join(dir, stillEXIFName)
+	defer removeFiles([]string{exif, filepath.Join(dir, stillXMPName)})
+	f, err := os.Open(exif)
+	switch {
+	case err == nil:
+		defer func() { _ = f.Close() }()
+		if m.exif, err = io.ReadAll(io.LimitReader(f, maxEXIFRead)); err != nil {
+			return stillMeta{}, err
+		}
+		if m.exif == nil {
+			m.exif = []byte{}
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return stillMeta{}, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, stillXMPName)); err == nil {
+		m.xmp = true
+	}
+	return m, nil
 }
