@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -158,16 +157,6 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 						t.Fatal(err)
 					}
 					a, b := mustReadFile(t, fusedOut), mustReadFile(t, matOut)
-					if enc.format == PNG && !bytes.Equal(a, b) {
-						// A PNG is written at the bit depth of the image it is
-						// given. The 16-bit intermediate of an 8-bit source
-						// keeps the resampled value the fused path rounds to 8
-						// bits, so the two differ by at most that rounding.
-						if d := maxAbsoluteDifference(t, env, fusedOut, matOut); d > 1.0/255+1e-6 {
-							t.Errorf("png at %d: pixels differ by %g, more than one 8-bit level", edge, d)
-						}
-						continue
-					}
 					if !bytes.Equal(a, b) {
 						t.Errorf("%s at %d: fused %d bytes, materialised %d bytes, they differ", enc.format, edge, len(a), len(b))
 					}
@@ -184,16 +173,6 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func maxAbsoluteDifference(t *testing.T, env Env, first, second string) float64 {
-	t.Helper()
-	out := magick(t, env, first, second, "-compose", "difference", "-composite", "-format", "%[fx:maxima]", "info:")
-	v, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-	if err != nil {
-		t.Fatalf("parsing image difference %q: %v", out, err)
-	}
-	return v
 }
 
 // findCMYKProfile returns a CMYK ICC profile installed on the machine, or

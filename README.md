@@ -286,8 +286,8 @@ whatever orientation the file's header does or does not report. The filter is
 Lanczos, set explicitly because ImageMagick's default is Mitchell for an image
 that has a palette or alpha channel. Each frame is oriented and converted
 inside its own parentheses, so frames of one run may carry different profiles.
-The size of an output is read from the run that wrote it. A PNG is written at
-the bit depth of the image the encode is given.
+The size of an output is read from the run that wrote it. Every output is
+written at 8 bits per channel, whatever the depth of the source.
 
 `dir` is an existing, empty directory the caller owns; the operation names its
 own output files and moves no bytes beyond reading the source and writing

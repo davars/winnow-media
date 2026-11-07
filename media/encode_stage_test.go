@@ -268,12 +268,12 @@ func TestEncodeArgsStages(t *testing.T) {
 			fitW, fitH := fitExpr(c.enc.maxEdge, c.enc.maxArea)
 			args := encodeArgs([]encodeFrame{frame}, src, c.enc, c.out)
 			want := []string{
-				"-orient", "RightTop", "-auto-orient", "-profile", "/own.icc", "-profile", "/srgb.icc",
+				"-orient", "RightTop", "-auto-orient", "-orient", "TopLeft", "-profile", "/own.icc", "-profile", "/srgb.icc",
 			}
 			if c.enc.format == JPEG {
 				want = append(want, "-background", "white", "-alpha", "remove", "-alpha", "off")
 			}
-			want = append(want, "-filter", "Lanczos", "-resize", fitW+"x"+fitH+"!", "-strip", "-quality", fmt.Sprint(c.enc.quality))
+			want = append(want, "-filter", "Lanczos", "-resize", fitW+"x"+fitH+"!", "-strip", "-depth", "8", "-quality", fmt.Sprint(c.enc.quality))
 			if !argsContainInOrder(args, want...) {
 				t.Errorf("args %q lack the stages %q", args, want)
 			}
@@ -604,6 +604,10 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 				t.Fatalf("%d frames, want 2", len(images))
 			}
 			requireUpright(t, decodePNG(t, real, filepath.Join(dir, images[0].Name)), want, 3)
+			// The PNG must not also say the picture is to be turned.
+			if got := strings.TrimSpace(string(magick(t, real, "identify", "-format", "%[orientation]", filepath.Join(dir, images[0].Name)))); got != "TopLeft" && got != "Undefined" {
+				t.Errorf("the upright PNG carries orientation %s", got)
+			}
 		})
 
 		t.Run(name+"/animated WebP composited by the operation", func(t *testing.T) {
@@ -804,7 +808,7 @@ func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
 			tw, th, _ := fitSize(uw, uh, edge, edge*edge)
 			reference := filepath.Join(t.TempDir(), "reference.png")
 			size := fmt.Sprintf("%dx%d!", tw, th)
-			magick(t, env, path+"[0]", "-auto-orient", "-filter", "Lanczos", "-resize", size, "-strip", reference)
+			magick(t, env, path+"[0]", "-auto-orient", "-filter", "Lanczos", "-resize", size, "-strip", "-depth", "8", reference)
 
 			t.Run("rung", func(t *testing.T) {
 				stagedRung := stagedEnv(env, t.TempDir())
@@ -849,5 +853,34 @@ func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+// A source of more than 8 bits per channel is written as an 8-bit PNG.
+func TestOutputsAreEightBit(t *testing.T) {
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	ec, _ := Encoding{Format: PNG}.resolve()
+	dir := t.TempDir()
+	for _, depth := range []string{"16", "10"} {
+		src := filepath.Join(dir, "src"+depth+".png")
+		magick(t, env, "-size", "32x24", "gradient:#0020ff-#ffb000", "-depth", depth, src)
+		if depth == "16" && strings.TrimSpace(string(magick(t, env, "identify", "-format", "%z", src))) != "16" {
+			t.Fatal("the source is not 16-bit")
+		}
+		out := t.TempDir()
+		img, err := env.still(context.Background(), decoder{"magick", "png"}, src, ec, out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(string(magick(t, env, "identify", "-format", "%z", filepath.Join(out, img.Name)))); got != "8" {
+			t.Errorf("a %s-bit source gave a %s-bit PNG", depth, got)
+		}
+	}
+	// The same through the Processor, from a 10-bit-capable HEIC fixture.
+	heic := heicFixtureFile(t, "adobe-64x64")
+	img, out := stillInto(t, p, heic, Encoding{Format: PNG})
+	if got := strings.TrimSpace(string(magick(t, env, "identify", "-format", "%z", filepath.Join(out, img.Name)))); got != "8" {
+		t.Errorf("a HEIC still gave a %s-bit PNG", got)
 	}
 }
