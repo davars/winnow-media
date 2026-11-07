@@ -199,6 +199,8 @@ func fitSize(w, h, maxEdge, maxArea int) (tw, th int, resize bool) {
 	if scale >= 1 {
 		return w, h, false
 	}
+	// eps keeps a product such as (E/m)*m that lands a hair below the
+	// integer E from flooring to E-1; fitExpr uses the same value.
 	const eps = 1e-9
 	tw = max(1, int(math.Floor(float64(w)*scale+eps)))
 	th = max(1, int(math.Floor(float64(h)*scale+eps)))

@@ -83,8 +83,8 @@ func fxSizes(t *testing.T, env Env, maxEdge, maxArea int, sizes [][2]int) [][2]i
 	return out
 }
 
-// fitSizeWithTheLoop is fitSize as it was written before its area loop was
-// replaced by a closed form, to show that the two agree.
+// fitSizeWithTheLoop states fitSize's area bound iteratively, as an oracle
+// for the closed form.
 func fitSizeWithTheLoop(w, h, maxEdge, maxArea int) (tw, th int, resize bool) {
 	scale := math.Min(1, float64(maxEdge)/float64(max(w, h)))
 	scale = math.Min(scale, math.Sqrt(float64(maxArea)/(float64(w)*float64(h))))
@@ -164,7 +164,7 @@ func sweepSizes(areas []int) [][2]int {
 }
 
 // The fx expressions give fitSize's size, to the pixel, for every bound the
-// encodings allow, and fitSize gives what its earlier loop form gave.
+// encodings allow, and fitSize agrees with the iterative oracle.
 func TestFitExprEqualsFitSize(t *testing.T) {
 	env := requireMagick(t)
 	edges := []int{16, 24, 100, 1024, 2048, 2576, 16384}
@@ -202,8 +202,8 @@ func TestFitExprEqualsFitSize(t *testing.T) {
 	t.Logf("%d (size, bounds) pairs checked, %d of them resized, %d mismatches", checked, resized, mismatches)
 }
 
-// The sizing rows the plan names, through ImageMagick: 4000x3001 at 2048 is
-// 2048x1536 where -thumbnail gave 1537.
+// The sizing rows the plan names, through ImageMagick: sides round down, so
+// 4000x3001 at 2048 is 2048x1536.
 func TestFitExprRoundsDown(t *testing.T) {
 	env := requireMagick(t)
 	for _, c := range []struct {
