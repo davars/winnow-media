@@ -431,6 +431,7 @@ func TestVideoFramesStripsMetadata(t *testing.T) {
 }
 
 func TestVideoFramesCleansUpOnFailure(t *testing.T) {
+	forceSeek(t)
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "160x120", 10, 4)
 	// Calls: probe, 4 samples, 1 encode of the 4.
@@ -450,6 +451,7 @@ func TestVideoFramesCleansUpOnFailure(t *testing.T) {
 }
 
 func TestVideoFramesCostIsIndependentOfDuration(t *testing.T) {
+	forceSeek(t)
 	env := requireFFmpeg(t)
 	cpu := func(seconds int) float64 {
 		src := sdrClip(t, env, "160x120", 10, seconds)
@@ -480,17 +482,23 @@ func TestVideoFramesGoldenArgv(t *testing.T) {
 		}, Encoding{Format: WebP}},
 		{"video-frames-rotated", func() string { return rotatedClip(t, env) }, Encoding{MaxEdge: 80}},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := requireProcessor(t)
-			rec := record(p)
-			input := c.input()
-			out := t.TempDir()
-			if _, _, err := p.VideoFrames(context.Background(), input, c.enc, 3, out); err != nil {
-				t.Fatal(err)
-			}
-			checkGolden(t, c.name, goldenArgv(rec.calls, input, out))
-		})
+	for _, path := range []struct {
+		name  string
+		limit int64
+	}{{"seek", 0}, {"select", selectMaxPixels}} {
+		for _, c := range cases {
+			t.Run(c.name+"-"+path.name, func(t *testing.T) {
+				forceSelectLimit(t, path.limit)
+				p := requireProcessor(t)
+				rec := record(p)
+				input := c.input()
+				out := t.TempDir()
+				if _, _, err := p.VideoFrames(context.Background(), input, c.enc, 3, out); err != nil {
+					t.Fatal(err)
+				}
+				checkGolden(t, c.name+"-"+path.name, goldenArgv(rec.calls, input, out))
+			})
+		}
 	}
 }
 
@@ -597,6 +605,7 @@ func TestVideoFramesRefusesOversizedProbeBeforeSampling(t *testing.T) {
 }
 
 func TestVideoToolRunsShareTheInputArguments(t *testing.T) {
+	forceSeek(t)
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	rec := record(p)
@@ -650,7 +659,7 @@ func TestVideoFramesEncodeAtMostOneBatchPerMagickRun(t *testing.T) {
 		}
 		n := 0
 		for _, a := range call[1:] {
-			if strings.HasPrefix(a, "png:") {
+			if strings.HasPrefix(a, "pam:") {
 				n++
 			}
 		}
