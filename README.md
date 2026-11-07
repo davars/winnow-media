@@ -260,12 +260,15 @@ HEVC video takes 8 minutes on the Raspberry Pi 5.
 
 **The policy.** Tools run through the sandbox helper, in the Processor's
 directory, with an environment of exactly `MAGICK_CONFIGURE_PATH`,
-`MAGICK_TEMPORARY_PATH`, `TMPDIR` and `LC_ALL=C`: no `PATH`, `HOME` or
-`XDG_CONFIG_HOME`, so no configuration file of the caller's can widen the
-policy. The generated `policy.xml` is derived from the coders each operation
-uses. It denies every delegate and every coder, then allows the used coders
-for reading, writing or both, denies `@` indirect reads and sets ceilings on
-memory, map, disk, area, width, height, list length, time and threads.
+`MAGICK_TEMPORARY_PATH`, `TMPDIR` and `LC_ALL=C`, the two temporary paths
+naming a directory made for that run and removed when the call returns (a
+killed process or a helper killed after its wait delay can leave it). There is
+no `PATH`, `HOME` or `XDG_CONFIG_HOME`, so no configuration file of the
+caller's can widen the policy. The generated `policy.xml` is derived from the
+coders each operation uses. It denies every delegate and every coder, then
+allows the used coders for reading, writing or both, denies `@` indirect reads
+and sets ceilings on memory, map, disk, area, width, height, list length, time
+and threads.
 
 `Encoding` sizes and encodes each output; zero fields take the defaults.
 `Format` is `JPEG` (default), `WebP` or `PNG`. `Quality` is 1-100 (default 90),
@@ -335,16 +338,18 @@ animated WebP compositor, `webp-frames`, is another, started from the tool
 directory like `magick`.
 
 The tool's environment and arguments are exactly those the `Processor`
-passes; nothing about the helper reaches it. The consumer gets no
-process-wide side effect. `NewProcessor` refuses to return unless `Init` was
-called, and then starts the helper once in a probe mode that tries `socket`
-under the filter and reads the limits back; it requires the call denied and
-every limit set. The helper's rusage includes the tool's, so `Usage` is the
+passes, and it inherits only descriptors 0, 1 and 2: the helper marks the
+rest close-on-exec (`close_range`, Linux 5.11) before starting it. Nothing
+about the helper reaches it. The consumer gets no process-wide side effect.
+`NewProcessor` refuses to return unless `Init` was called, and then starts the
+helper once in a probe mode that tries `socket` under the filter and reads
+the limits back; it requires the call denied and every limit set. The helper's rusage includes the tool's, so `Usage` is the
 tool's (a 48 MP HEIC measured 919 MiB and 12.7 s of CPU directly and the
 same through the helper), and the helper adds about 13 ms to a run.
 
-The sandbox needs Linux on amd64 or arm64; elsewhere `NewProcessor` returns
-an error (the `Env` functions still work). Landlock is not used: the nodes
+The sandbox needs Linux 5.11 or later on amd64 or arm64; elsewhere, and on an
+older kernel (its probe fails at `close_range`), `NewProcessor` returns an
+error (the `Env` functions still work). Landlock is not used: the nodes
 this was built for have none, so file confinement rests on the container.
 A deployment for hostile input must supply it: a Deployment of its own with
 no shared network namespace, a non-root user, a read-only root filesystem,
@@ -371,8 +376,7 @@ The limits come from per-process peaks sampled from `/proc` while `measure`
 ran its inputs on a 12-CPU x86_64 host: ImageMagick used up to 3.2 GiB of
 address space (a 64 MP frame; it aborts when the limit is 3.0 GiB and works
 at 3.3 GiB), 25 s of CPU (comparing a 4K video's 64 samples) and 199
-descriptors;
-ffmpeg used 2.0 GiB, 9 s and 28 threads on 4K HEVC (decoder frame threads,
+descriptors; ffmpeg used 2.0 GiB, 9 s and 28 threads on 4K HEVC (decoder frame threads,
 the filter pool and the scaler's threads, which follow the host's CPU
 count). `RLIMIT_NPROC` counts every task of the real user, so it is set
 relative to the count when the helper starts and bounds forks only where the

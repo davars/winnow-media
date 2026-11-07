@@ -636,7 +636,8 @@ func (f *frameLines) Write(p []byte) (int, error) {
 		return 0, f.err
 	}
 	if len(f.buf) > 64 {
-		return 0, errors.New("compositor wrote an overlong line")
+		f.err = errors.New("compositor wrote an overlong line")
+		return 0, f.err
 	}
 	return len(p), nil
 }

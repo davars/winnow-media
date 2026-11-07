@@ -58,6 +58,17 @@ func fakeTool(args []string) {
 		check(err)
 		_, err = os.Stdout.Write(b)
 		check(err)
+	case "fds":
+		// fds: list every open descriptor and what it refers to.
+		entries, err := os.ReadDir("/proc/self/fd")
+		check(err)
+		for _, e := range entries {
+			target, err := os.Readlink("/proc/self/fd/" + e.Name())
+			if err != nil {
+				target = err.Error()
+			}
+			fmt.Println("fd", e.Name(), "->", target)
+		}
 	case "exit":
 		n, _ := strconv.Atoi(args[1])
 		os.Exit(n)

@@ -214,6 +214,9 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 	// A write error means the helper is already gone; Wait reports why.
 	_ = json.NewEncoder(lifeW).Encode(cfg)
 	waitErr := cmd.Wait()
+	// The read needs no timer: the helper is reaped, no child of it holds the
+	// descriptor (it is close-on-exec) and the report is one write under
+	// PIPE_BUF.
 	var res helperResult
 	if decErr := json.NewDecoder(statusR).Decode(&res); decErr != nil {
 		if waitErr != nil {
@@ -230,9 +233,14 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
+	tmp, err := p.runTempDir()
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
 	var stdout bytes.Buffer
 	var stderr tailBuffer
-	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(), Dir: p.dir}, &stdout, &stderr)
+	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
 	return Result{Stdout: stdout.Bytes(), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
 }
 
@@ -260,6 +268,11 @@ func helperError(ctx context.Context, name string, res helperResult, err error, 
 // the compositor finishes it; if it fails the compositor is stopped and its
 // error returned. The usage returned covers the compositor.
 func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error) {
+	tmp, err := p.runTempDir()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
 	cfg := helperConfig{Args: req.args(), Dir: p.dir}
 	name := "gif compositor"
 	if req.external != "" {
@@ -267,7 +280,7 @@ func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFra
 		if !ok {
 			return nil, fmt.Errorf("unknown tool %q", req.external)
 		}
-		cfg.Tool, cfg.Env, name = path, p.environ(), req.external
+		cfg.Tool, cfg.Env, name = path, p.environ(tmp), req.external
 	} else {
 		exe, err := os.Executable()
 		if err != nil {
@@ -275,28 +288,40 @@ func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFra
 		}
 		cfg.Tool, cfg.Env = exe, []string{compositorEnv + "=1"}
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	parent := ctx
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	lines := &frameLines{dir: req.dir, onFrame: func(path string, profile int) error {
-		err := onFrame(path, profile)
-		if err != nil {
-			cancel()
-		}
-		return err
-	}}
+	lines := &frameLines{dir: req.dir, onFrame: onFrame}
 	var stderr tailBuffer
-	res, state, err := runHelper(ctx, cfg, lines, &stderr)
+	res, state, err := runHelper(ctx, cfg, stopOnError{lines, cancel}, &stderr)
 	usage := UsageOf(state)
 	if lines.err != nil {
 		return usage, lines.err
 	}
-	return usage, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
+	return usage, helperError(parent, name, res, err, bytes.TrimSpace(stderr.buf))
+}
+
+// stopOnError is a writer that calls stop when its writes fail, so that a
+// producer whose output is refused is cancelled instead of left running with
+// nobody reading it.
+type stopOnError struct {
+	w    io.Writer
+	stop func()
+}
+
+func (s stopOnError) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	if err != nil {
+		s.stop()
+	}
+	return n, err
 }
 
 // helperMain is the sandbox helper: it applies the sandbox to itself, runs
 // the tool as its child and then removes every process left under it. It
 // reads its configuration from descriptor 4, writes its report to
-// descriptor 3 and does not return.
+// descriptor 3 and does not return. The tool inherits only descriptors 0, 1
+// and 2.
 func helperMain() {
 	// Pdeathsig fires when the thread that started the tool exits, so the
 	// thread must live as long as the helper.
@@ -304,7 +329,9 @@ func helperMain() {
 	status, life := os.NewFile(3, "status"), os.NewFile(4, "lifeline")
 	var cfg helperConfig
 	var res helperResult
-	if err := json.NewDecoder(life).Decode(&cfg); err != nil {
+	if err := closeOnExecFrom(3); err != nil {
+		res.Err = fmt.Sprintf("closing inherited descriptors: %v", err)
+	} else if err := json.NewDecoder(life).Decode(&cfg); err != nil {
 		res.Err = fmt.Sprintf("reading configuration: %v", err)
 	} else {
 		res = helperRun(cfg, life)
@@ -314,6 +341,20 @@ func helperMain() {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// closeOnExecFrom marks every open descriptor from first up close-on-exec, so
+// that a process the helper starts does not inherit them. It needs Linux 5.11.
+func closeOnExecFrom(first uintptr) error {
+	const (
+		sysCloseRange        = 436 // the same number on amd64 and arm64
+		closeRangeCloexec    = 4
+		allDescriptorsFromTo = ^uintptr(0)
+	)
+	if _, _, e := syscall.RawSyscall(sysCloseRange, first, allDescriptorsFromTo, closeRangeCloexec); e != 0 {
+		return fmt.Errorf("the sandbox needs Linux 5.11 or later (close_range): %w", e)
+	}
+	return nil
 }
 
 func helperRun(cfg helperConfig, life *os.File) helperResult {
