@@ -163,7 +163,7 @@ func TestEncodeRungMatchesTheWholeFileEncode(t *testing.T) {
 		t.Errorf("mapping %v, want %v", mapping, want)
 	}
 	reference := filepath.Join(t.TempDir(), "reference.webp")
-	magick(t, real, path, "-coalesce", "-delete", "2,4", "-auto-orient", "-thumbnail", "64x64>", "-quality", strconv.Itoa(testQuality), reference)
+	magick(t, real, path, "-coalesce", "-delete", "2,4", "-auto-orient", "-filter", "Lanczos", "-resize", "64x42!", "-strip", "-quality", strconv.Itoa(testQuality), reference)
 	got, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)
@@ -210,9 +210,9 @@ func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
 	plain, converted := encode(base), encode(tagged)
 	reference := filepath.Join(t.TempDir(), "reference.webp")
 	taggedPath := writeFile(t, "tagged.gif", tagged)
-	magick(t, real, taggedPath, "-coalesce", "-auto-orient", "-profile", destination, "-thumbnail", "64x64>", "-quality", strconv.Itoa(testQuality), reference)
+	magick(t, real, taggedPath, "-coalesce", "-auto-orient", "-profile", destination, "-strip", "-quality", strconv.Itoa(testQuality), reference)
 	plainReference := filepath.Join(t.TempDir(), "plain-reference.webp")
-	magick(t, real, writeFile(t, "plain.gif", base), "-coalesce", "-auto-orient", "-thumbnail", "64x64>", "-quality", strconv.Itoa(testQuality), plainReference)
+	magick(t, real, writeFile(t, "plain.gif", base), "-coalesce", "-auto-orient", "-strip", "-quality", strconv.Itoa(testQuality), plainReference)
 	for i := range 3 {
 		if d := animationFrameDifferenceN(t, real, plain, plainReference, i); d > 0.004 {
 			t.Errorf("unprofiled frame %d differs from the whole-file encode by %.6f", i, d)

@@ -23,8 +23,8 @@ const (
 )
 
 // Encoding is how an operation sizes and encodes each output image. The
-// output satisfies both size bounds with one resample and is never upscaled.
-// Zero fields take defaults.
+// output satisfies both size bounds with one resample, each side rounded down,
+// and is never upscaled. Zero fields take defaults.
 type Encoding struct {
 	// Format defaults to JPEG.
 	Format Format
@@ -130,8 +130,9 @@ type spec struct {
 	inputs []acceptedInput
 	tools  []string
 	// reads and writes name the ImageMagick coders the operation reads and
-	// writes itself: its output formats, which it reads back to measure, and
-	// the intermediates it passes between tools.
+	// writes itself besides its input decoders: its output formats, the
+	// "info" coder its encode reports through, and the intermediates it passes
+	// between tools.
 	reads, writes []string
 }
 

@@ -46,45 +46,6 @@ func TestProfileDetectionAndAnimationPolicy(t *testing.T) {
 	}
 }
 
-// An untagged image must not be assigned an RGB profile merely because a
-// destination profile is available.
-func TestColorArgsAreConditional(t *testing.T) {
-	profile := "/profiles/sRGB2014.icc"
-	if got := colorArgs(profile, false); len(got) != 0 {
-		t.Fatalf("unprofiled color args = %q, want no color transform", got)
-	}
-	if got, want := colorArgs(profile, true), []string{"-profile", profile}; !slices.Equal(got, want) {
-		t.Fatalf("profiled color args = %q, want %q", got, want)
-	}
-}
-
-// The profile must be applied after orientation but before thumbnail discards
-// pixels, in the still encoder and in both sides of the animation dedup
-// contract.
-func TestColorStagePlacement(t *testing.T) {
-	const profile = "/profiles/sRGB2014.icc"
-
-	still := stillArgs("/in", "/out.webp", 640, "", profile, "", true, testQuality)
-	assertProfileBetween(t, "still", still, profile, "-auto-orient", "-thumbnail")
-	stillUntagged := stillArgs("/in", "/out.webp", 640, "", profile, "", false, testQuality)
-	assertNoProfile(t, "unprofiled still", stillUntagged)
-
-	animation := animationPipeline("/in", 640, "", profile, true)
-	assertProfileBetween(t, "animation probe/encode", animation, profile, "-auto-orient", "-thumbnail")
-	animationUntagged := animationPipeline("/in", 640, "", profile, false)
-	assertNoProfile(t, "unprofiled animation", animationUntagged)
-}
-
-func TestStillArgsOrderOrientBeforeAutoOrient(t *testing.T) {
-	args := strings.Join(stillArgs("/in", "/out.webp", 640, "", "", "LeftBottom", false, testQuality), " ")
-	if !strings.Contains(args, "-orient LeftBottom -auto-orient") {
-		t.Errorf("args = %q, want -orient LeftBottom immediately before -auto-orient", args)
-	}
-	if none := strings.Join(stillArgs("/in", "/out.webp", 640, "", "", "", false, testQuality), " "); strings.Contains(none, " -orient ") {
-		t.Errorf("args without orient = %q, want no -orient", none)
-	}
-}
-
 // The rung sequence itself, which the encoding tests only observe indirectly.
 func TestLadderOrder(t *testing.T) {
 	limits := Limits{Ceilings: []int{2048, 1536, 1024}, MaxFrames: 16}
@@ -349,8 +310,9 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 	reference := filepath.Join(dir, "reference.webp")
 	unconverted := filepath.Join(dir, "unconverted.webp")
 	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
-		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), reference)...)
-	magick(t, env, stillArgs(input, unconverted, 128, "", destination, "", false, testQuality)...)
+		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), reference)...)
+	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient",
+		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), unconverted)...)
 
 	if diff := meanAbsoluteDifference(t, env, actual, reference); diff > 0.004 {
 		t.Fatalf("corrected WebP differs from explicit sRGB reference by %.6f, want <= 0.004", diff)
@@ -390,7 +352,7 @@ func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
 	defer cleanup()
 	reference := filepath.Join(dir, "reference.webp")
 	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
-		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), reference)...)
+		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), reference)...)
 	if diff := meanAbsoluteDifference(t, env, actual, reference); diff > 0.004 {
 		t.Fatalf("corrected WebP differs from explicit sRGB reference by %.6f, want <= 0.004", diff)
 	}
@@ -512,32 +474,9 @@ func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
 	defer cleanup()
 	unconverted := filepath.Join(t.TempDir(), "unconverted.webp")
 	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient",
-		"-thumbnail", "128x128>", "-quality", strconv.Itoa(testQuality), unconverted)...)
+		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), unconverted)...)
 	if diff := meanAbsoluteDifference(t, env, actual, unconverted); diff > 0.004 {
 		t.Fatalf("unprofiled WebP differs from plain pipeline by %.6f, want <= 0.004", diff)
-	}
-}
-
-func assertProfileBetween(t *testing.T, name string, args []string, profile, before, after string) {
-	t.Helper()
-	beforeAt := slices.Index(args, before)
-	profileAt := slices.Index(args, "-profile")
-	afterAt := slices.Index(args, after)
-	if beforeAt < 0 || profileAt < 0 || afterAt < 0 {
-		t.Fatalf("%s args = %q; need %q, -profile, and %q", name, args, before, after)
-	}
-	if profileAt+1 >= len(args) || args[profileAt+1] != profile {
-		t.Fatalf("%s profile argument = %q, want -profile %q", name, args, profile)
-	}
-	if beforeAt >= profileAt || profileAt >= afterAt {
-		t.Fatalf("%s color stage has indexes %s=%d, -profile=%d, %s=%d; want orientation < profile < thumbnail; args=%q", name, before, beforeAt, profileAt, after, afterAt, args)
-	}
-}
-
-func assertNoProfile(t *testing.T, name string, args []string) {
-	t.Helper()
-	if at := slices.Index(args, "-profile"); at >= 0 {
-		t.Fatalf("%s unexpectedly has -profile at %d: %q", name, at, args)
 	}
 }
 

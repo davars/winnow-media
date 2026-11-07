@@ -23,8 +23,8 @@ var videoSpec = spec{
 		{typeMKV, decoder{"ffmpeg", "matroska"}},
 	},
 	tools:  []string{"ffprobe", "ffmpeg", "magick"},
-	reads:  append([]string{"png"}, outputCoders...),
-	writes: outputCoders,
+	reads:  []string{"png"},
+	writes: append([]string{"info"}, outputCoders...),
 }
 
 // hdrToneMap linearizes HDR video, converts its primaries to BT.709,
@@ -324,18 +324,18 @@ func (e Env) encodeVideoSamples(ctx context.Context, enc encoding, dir string, p
 	if len(samples) == 0 {
 		return nil, errors.New("no frame could be sampled")
 	}
-	paths := make([]string, len(samples))
+	frames := make([]encodeFrame, len(samples))
 	for i, s := range samples {
-		paths[i] = s.path
+		frames[i] = encodeFrame{input: "png:" + s.path}
 	}
 	var images []Image
 	encoder := sampleEncoder{
-		env: e, coder: "png", middle: []string{"-strip"}, enc: enc, dir: dir, framePixels: plan.tw * plan.th,
+		env: e, src: encodeSource{width: plan.tw, height: plan.th}, enc: enc, dir: dir, framePixels: plan.tw * plan.th,
 		keep: func(i, n, w, h int) {
 			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, TimeMS: samples[i].timeMS})
 		},
 	}
-	if err := encoder.encodeSamples(ctx, paths); err != nil {
+	if err := encoder.encodeSamples(ctx, frames); err != nil {
 		return nil, err
 	}
 	return images, nil
@@ -447,85 +447,68 @@ func frameName(n int, ext string) string {
 // 16 bytes per pixel, 256 MiB, a quarter of the policy's memory ceiling.
 var encodeBatchPixels = 16_000_000
 
-// sampleEncoder encodes lossless samples to output frames in dir, one
-// ImageMagick run per batch of samples, and drops a sample whose pixels equal
-// those of the one before it, also across batches. Kept frames are numbered
-// consecutively from 0.
+// sampleEncoder encodes frames to output files in dir, one ImageMagick run per
+// batch of frames, and drops a frame whose pixels equal those of the one
+// before it, also across batches. Kept frames are numbered consecutively from
+// 0.
 type sampleEncoder struct {
-	env    Env
-	coder  string // ImageMagick coder of the samples
-	middle []string
-	enc    encoding
-	dir    string
-	// framePixels is the pixel count of each sample; it sets the batch size.
+	env Env
+	src encodeSource
+	enc encoding
+	dir string
+	// framePixels is the pixel count of each frame as read; it sets the batch
+	// size.
 	framePixels int
-	// keep is called for each kept sample with its index among all the
-	// samples given, its output number and its size.
+	// keep is called for each kept frame with its index among all the frames
+	// given, its output number and its size.
 	keep func(i, n, w, h int)
 
 	lastSig string
 	seen, n int
 }
 
-// batchSize is the number of samples one run reads: at least one, at most
+// batchSize is the number of frames one run reads: at least one, at most
 // what encodeBatchPixels allows.
 func (s *sampleEncoder) batchSize() int {
 	return max(1, encodeBatchPixels/max(1, s.framePixels))
 }
 
-// encode encodes batch, the next samples in order.
-func (s *sampleEncoder) encode(ctx context.Context, batch []string) error {
+// encode encodes batch, the next frames in order.
+func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	args := append([]string{}, LimitArgs()...)
-	for _, p := range batch {
-		args = append(args, s.coder+":"+p)
-	}
-	args = append(args, s.middle...)
 	pattern := strings.ReplaceAll(filepath.Join(s.dir, ".enc-"), "%", "%%") + "%d" + s.enc.ext
-	args = append(args, "-quality", strconv.Itoa(s.enc.quality), "+adjoin", "-scene", "0",
-		"-write", pattern, "-format", "%#|%w|%h\n", "info:")
-	res, err := s.env.Run(ctx, "magick", args...)
+	encoded, err := s.env.runEncode(ctx, encodeArgs(batch, s.src, s.enc, encodeOutput{kind: outputFiles, path: pattern}))
 	if err != nil {
 		return fmt.Errorf("encoding frames %d to %d: %w", s.seen, s.seen+len(batch)-1, err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
-	if len(lines) != len(batch) {
-		return fmt.Errorf("encoding frames %d to %d: %d results", s.seen, s.seen+len(batch)-1, len(lines))
+	if len(encoded) != len(batch) {
+		return fmt.Errorf("encoding frames %d to %d: %d results", s.seen, s.seen+len(batch)-1, len(encoded))
 	}
-	for j, line := range lines {
+	for j, f := range encoded {
 		tmp := filepath.Join(s.dir, ".enc-"+strconv.Itoa(j)+s.enc.ext)
-		f := strings.Split(line, "|")
-		if len(f) != 3 {
-			return fmt.Errorf("encoding frame %d: unexpected output %q", s.seen+j, line)
-		}
-		if s.seen+j > 0 && f[0] == s.lastSig {
+		if s.seen+j > 0 && f.signature == s.lastSig {
 			if err := os.Remove(tmp); err != nil {
 				return err
 			}
 			continue
 		}
-		w, err1 := strconv.Atoi(f[1])
-		h, err2 := strconv.Atoi(f[2])
-		if err1 != nil || err2 != nil {
-			return fmt.Errorf("encoding frame %d: unexpected size %q", s.seen+j, line)
-		}
 		if err := os.Rename(tmp, filepath.Join(s.dir, frameName(s.n, s.enc.ext))); err != nil {
 			return err
 		}
-		s.lastSig = f[0]
-		s.keep(s.seen+j, s.n, w, h)
+		s.lastSig = f.signature
+		s.keep(s.seen+j, s.n, f.width, f.height)
 		s.n++
 	}
 	s.seen += len(batch)
 	return nil
 }
 
-// encodeSamples encodes samples, all of s.framePixels pixels, in batches.
-func (s *sampleEncoder) encodeSamples(ctx context.Context, samples []string) error {
-	for batch := s.batchSize(); len(samples) > 0; samples = samples[min(batch, len(samples)):] {
-		if err := s.encode(ctx, samples[:min(batch, len(samples))]); err != nil {
+// encodeSamples encodes frames, all of s.framePixels pixels, in batches.
+func (s *sampleEncoder) encodeSamples(ctx context.Context, frames []encodeFrame) error {
+	for batch := s.batchSize(); len(frames) > 0; frames = frames[min(batch, len(frames)):] {
+		if err := s.encode(ctx, frames[:min(batch, len(frames))]); err != nil {
 			return err
 		}
 	}

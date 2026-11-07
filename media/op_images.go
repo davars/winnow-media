@@ -41,8 +41,8 @@ var stillSpec = spec{
 		{typeHEIF, decoder{"magick", "heic"}},
 	},
 	tools:  []string{"magick"},
-	reads:  append([]string{"icc"}, outputCoders...),
-	writes: outputCoders,
+	reads:  []string{"icc"},
+	writes: append([]string{"info"}, outputCoders...),
 }
 
 var animationSpec = spec{
@@ -51,7 +51,7 @@ var animationSpec = spec{
 		{typeWebP, decoder{"magick", "webp"}},
 	},
 	tools:  []string{"magick", webpFramesTool},
-	reads:  append([]string{"icc", "pam"}, outputCoders...),
+	reads:  []string{"icc", "pam"},
 	writes: append([]string{"info"}, outputCoders...),
 }
 
@@ -208,42 +208,23 @@ func fitSize(w, h, maxEdge, maxArea int) (tw, th int, resize bool) {
 	return tw, th, true
 }
 
-// imagePipeline describes the decode and pixel stages the image operations
-// share.
-type imagePipeline struct {
-	decoder     decoder
-	inputPath   string
-	selector    string // appended to the input path, "[0]" for a still
-	coalesce    bool
-	deleteExpr  string
-	profilePath string
-	profiled    bool
-	flatten     bool
-	resizeTo    *[2]int
-}
-
-// args builds the magick arguments up to, not including, the output stage.
-// Transparency is flattened before the resample so the white does not bleed
-// through the filter, and metadata is stripped last, after the profile
-// conversion that needed it.
-func (p imagePipeline) args() []string {
-	args := append([]string{}, LimitArgs()...)
-	args = append(args, p.decoder.name+":"+p.inputPath+p.selector)
-	if p.coalesce {
-		args = append(args, "-coalesce")
-		if p.deleteExpr != "" {
-			args = append(args, "-delete", p.deleteExpr)
-		}
+// placeSRGB writes the package's sRGB profile to a new file in dir and
+// returns its path. The file is left for the caller to remove with dir.
+func placeSRGB(dir string) (string, error) {
+	path := filepath.Join(dir, profileName)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
 	}
-	args = append(args, "-auto-orient")
-	args = append(args, colorArgs(p.profilePath, p.profiled)...)
-	if p.flatten {
-		args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
+	_, werr := f.Write(srgbProfile)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
 	}
-	if p.resizeTo != nil {
-		args = append(args, "-resize", fmt.Sprintf("%dx%d!", p.resizeTo[0], p.resizeTo[1]))
+	if werr != nil {
+		_ = os.Remove(path)
+		return "", werr
 	}
-	return append(args, "-strip")
+	return path, nil
 }
 
 // withProfile makes the sRGB profile available as a file for the duration of
@@ -253,45 +234,21 @@ func withProfile(outDir string, profiled bool, fn func(profilePath string) error
 	if !profiled {
 		return fn("")
 	}
-	path := filepath.Join(outDir, profileName)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	path, err := placeSRGB(outDir)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(path) }()
-	_, werr := f.Write(srgbProfile)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return werr
-	}
 	return fn(path)
 }
 
-// identifySizes reports the width and height of each of paths, which must
-// each hold exactly one scene.
-func identifySizes(ctx context.Context, env Env, paths []string) ([][2]int, error) {
-	args := append([]string{"identify"}, LimitArgs()...)
-	args = append(args, "-ping", "-format", "%w %h\n")
-	args = append(args, paths...)
-	res, err := env.Run(ctx, "magick", args...)
+// runEncode runs one encode and returns what it reported, one entry per frame.
+func (e Env) runEncode(ctx context.Context, args []string) ([]encodedFrame, error) {
+	res, err := e.Run(ctx, "magick", args...)
 	if err != nil {
-		return nil, fmt.Errorf("identifying outputs: %w", err)
+		return nil, err
 	}
-	lines := strings.Split(strings.TrimRight(string(res.Stdout), "\n"), "\n")
-	if len(lines) != len(paths) {
-		return nil, fmt.Errorf("outputs hold %d scenes, want %d", len(lines), len(paths))
-	}
-	sizes := make([][2]int, len(lines))
-	for i, line := range lines {
-		var w, h int
-		if _, err := fmt.Sscanf(line, "%d %d", &w, &h); err != nil {
-			return nil, fmt.Errorf("parsing %q: %w", line, err)
-		}
-		sizes[i] = [2]int{w, h}
-	}
-	return sizes, nil
+	return parseEncoded(res.Stdout)
 }
 
 func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, dir string) (Image, error) {
@@ -304,30 +261,24 @@ func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, 
 	if w < 1 || h < 1 {
 		return Image{}, fmt.Errorf("input reports size %dx%d", w, h)
 	}
-	tw, th, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
 
 	name := "still" + enc.ext
+	var encoded []encodedFrame
 	err = withProfile(dir, head.hasICC, func(profilePath string) error {
-		p := imagePipeline{
-			decoder: dec, inputPath: path, selector: "[0]",
-			profilePath: profilePath, profiled: head.hasICC,
-			flatten: enc.format == JPEG,
-		}
-		if resize {
-			p.resizeTo = &[2]int{tw, th}
-		}
-		args := append(p.args(), "-quality", strconv.Itoa(enc.quality), filepath.Join(dir, name))
-		_, err := e.Run(ctx, "magick", args...)
+		var err error
+		encoded, err = e.runEncode(ctx, encodeArgs(
+			[]encodeFrame{{input: dec.name + ":" + path + "[0]", convertTo: profilePath}},
+			encodeSource{orientation: head.orientation, width: w, height: h}, enc,
+			encodeOutput{kind: outputStill, path: filepath.Join(dir, name)}))
 		return err
 	})
 	if err != nil {
 		return Image{}, fmt.Errorf("encoding still: %w", err)
 	}
-	sizes, err := identifySizes(ctx, e, []string{filepath.Join(dir, name)})
-	if err != nil {
-		return Image{}, err
+	if len(encoded) != 1 {
+		return Image{}, fmt.Errorf("encoding still: %d results", len(encoded))
 	}
-	return Image{Name: name, Width: sizes[0][0], Height: sizes[0][1]}, nil
+	return Image{Name: name, Width: encoded[0].width, Height: encoded[0].height}, nil
 }
 
 // animationLayout is what the header read of an animation decided: the
@@ -346,6 +297,11 @@ func (e Env) readAnimation(ctx context.Context, dec decoder, path string) (anima
 	if err != nil {
 		return animationLayout{}, err
 	}
+	return layoutOf(scenes)
+}
+
+// layoutOf is the layout of the scenes a header read found.
+func layoutOf(scenes []sceneHeader) (animationLayout, error) {
 	l := animationLayout{infos: make([]FrameInfo, len(scenes)), orientation: scenes[0].orientation}
 	for i, s := range scenes {
 		l.infos[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
@@ -367,8 +323,6 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 		return nil, err
 	}
 	infos, cw, ch := layout.infos, layout.cw, layout.ch
-	orientation := layout.orientation
-	tw, th, resize := fitSize(layout.uw, layout.uh, enc.maxEdge, enc.maxArea)
 
 	sourceFrames := len(infos)
 	selected, err := pick(sourceFrames)
@@ -384,81 +338,40 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 			own[i] = f.hasICC
 		}
 		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
-			sourceFrames: len(infos), cw: cw, ch: ch, tw: tw, th: th, resize: resize, own: own,
+			sourceFrames: len(infos), cw: cw, ch: ch, uw: layout.uw, uh: layout.uh,
+			own: own, orientation: layout.orientation,
 		})
 	}
 	if dec.name == "webp" && len(infos) > 1 {
 		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
-			sourceFrames: len(infos), cw: cw, ch: ch, tw: tw, th: th, resize: resize,
-			external: webpFramesTool, orientation: orientation,
+			sourceFrames: len(infos), cw: cw, ch: ch, uw: layout.uw, uh: layout.uh,
+			external: webpFramesTool, orientation: layout.orientation,
 		})
 	}
 	profiled, err := selectedProfiled(infos, selected)
 	if err != nil {
 		return nil, err
 	}
+	if len(selected) != 1 {
+		return nil, fmt.Errorf("selected %d frames of a one-frame file", len(selected))
+	}
 
-	var kept []int
+	// ImageMagick reads the one frame whole and composes it onto its canvas.
+	var images []Image
 	err = withProfile(dir, profiled, func(profilePath string) error {
-		p := imagePipeline{
-			decoder: dec, inputPath: path, coalesce: true,
-			deleteExpr:  DeleteExpr(selected, sourceFrames),
-			profilePath: profilePath, profiled: profiled,
-			flatten: enc.format == JPEG,
+		encoder := &sampleEncoder{
+			env: e, src: encodeSource{orientation: layout.orientation, width: layout.uw, height: layout.uh},
+			enc: enc, dir: dir, framePixels: cw * ch,
+			keep: func(i, n, w, h int) {
+				images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})
+			},
 		}
-		if resize {
-			p.resizeTo = &[2]int{tw, th}
-		}
-		probeOut, err := e.Run(ctx, "magick", append(p.args(), "-format", "%s %#\n", "info:")...)
-		if err != nil {
-			return fmt.Errorf("probing selected frames: %w", err)
-		}
-		probed, err := parseProbe(probeOut.Stdout)
-		if err != nil {
-			return err
-		}
-		if len(probed) == 0 {
-			return fmt.Errorf("frame selection probe returned no frames")
-		}
-		lastSig := ""
-		for i, f := range probed {
-			if i > 0 && f.signature == lastSig {
-				continue
-			}
-			kept = append(kept, f.sourceFrame)
-			lastSig = f.signature
-		}
-
-		p.deleteExpr = DeleteExpr(kept, sourceFrames)
-		pattern := strings.ReplaceAll(filepath.Join(dir, "frame-"), "%", "%%") + "%03d" + enc.ext
-		args := append(p.args(), "-scene", "0", "+adjoin", "-quality", strconv.Itoa(enc.quality), pattern)
-		if _, err := e.Run(ctx, "magick", args...); err != nil {
-			return fmt.Errorf("encoding frames: %w", err)
-		}
-		return nil
+		return encoder.encode(ctx, []encodeFrame{{
+			input: dec.name + ":" + path, prelude: []string{"-coalesce"}, convertTo: profilePath,
+		}})
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	names, err := frameFileNames(dir, enc.ext)
-	if err != nil {
-		return nil, err
-	}
-	if len(names) != len(kept) {
-		return nil, fmt.Errorf("wrote %d files, kept %d frames", len(names), len(kept))
-	}
-	paths := make([]string, len(names))
-	for i, n := range names {
-		paths[i] = filepath.Join(dir, n)
-	}
-	sizes, err := identifySizes(ctx, e, paths)
-	if err != nil {
-		return nil, err
-	}
-	images := make([]Image, len(names))
-	for i, n := range names {
-		images[i] = Image{Name: n, Width: sizes[i][0], Height: sizes[i][1], Frame: kept[i]}
 	}
 	return images, nil
 }
@@ -467,13 +380,12 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 // WebP.
 const webpFramesTool = "webp-frames"
 
-// compositeGeometry is what the header read and the sizing decided about an
-// animation composited outside ImageMagick.
+// compositeGeometry is what the header read decided about an animation
+// composited outside ImageMagick.
 type compositeGeometry struct {
 	sourceFrames int
 	cw, ch       int // canvas as stored, before any rotation
-	tw, th       int // output size
-	resize       bool
+	uw, uh       int // canvas after rotation
 	// own[i] is set when the header read found an ICC profile on frame i. It
 	// is nil for a WebP, whose tool reports the profile with each frame.
 	own []bool
@@ -492,17 +404,8 @@ type compositeGeometry struct {
 //
 // The compositor says which ICC profile, if any, each frame carries, as the
 // frames do after -coalesce. A frame is assigned its profile and converted to
-// sRGB; one without is left as it is. A batch holds frames of one profile.
+// sRGB; one without is left as it is.
 func (e Env) compositedFrames(ctx context.Context, path string, enc encoding, dir string, selected []int, g compositeGeometry) ([]Image, error) {
-	tail := []string{}
-	if enc.format == JPEG {
-		tail = append(tail, "-background", "white", "-alpha", "remove", "-alpha", "off")
-	}
-	if g.resize {
-		tail = append(tail, "-resize", fmt.Sprintf("%dx%d!", g.tw, g.th))
-	}
-	tail = append(tail, "-strip")
-
 	var images []Image
 	err := withProfile(dir, slices.Contains(g.own, true) || g.external != "", func(srgbPath string) error {
 		usedProfiles := map[int]bool{}
@@ -512,27 +415,18 @@ func (e Env) compositedFrames(ctx context.Context, path string, enc encoding, di
 			}
 		}()
 		encoder := &sampleEncoder{
-			env: e, coder: "pam", enc: enc, dir: dir, framePixels: g.cw * g.ch,
+			env: e, src: encodeSource{orientation: g.orientation, width: g.uw, height: g.uh},
+			enc: enc, dir: dir, framePixels: g.cw * g.ch,
 			keep: func(i, n, w, h int) {
 				images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})
 			},
 		}
-		var pending []string
-		pendingProfile := 0
+		var pending []encodeFrame
+		var pendingPaths []string
 		flush := func() error {
-			defer removeFiles(pending)
-			encoder.middle = nil
-			if g.orientation != "" && g.orientation != "Undefined" {
-				encoder.middle = append(encoder.middle, "-orient", g.orientation)
-			}
-			encoder.middle = append(encoder.middle, "-auto-orient")
-			if pendingProfile > 0 {
-				encoder.middle = append(encoder.middle, colorArgs(filepath.Join(dir, composedProfileName(pendingProfile)), true)...)
-				encoder.middle = append(encoder.middle, colorArgs(srgbPath, true)...)
-			}
-			encoder.middle = append(encoder.middle, tail...)
+			defer removeFiles(pendingPaths)
 			err := encoder.encode(ctx, pending)
-			pending = nil
+			pending, pendingPaths = nil, nil
 			return err
 		}
 		ordinal := 0
@@ -545,23 +439,21 @@ func (e Env) compositedFrames(ctx context.Context, path string, enc encoding, di
 				return errors.New("the compositor wrote more frames than selected")
 			}
 			ordinal++
-			if len(pending) > 0 && profile != pendingProfile {
-				if err := flush(); err != nil {
-					return err
-				}
-			}
-			pendingProfile = profile
+			f := encodeFrame{input: "pam:" + p}
 			if profile > 0 {
 				usedProfiles[profile] = true
+				f.convertTo = srgbPath
+				f.assign = filepath.Join(dir, composedProfileName(profile))
 			}
-			pending = append(pending, p)
+			pending = append(pending, f)
+			pendingPaths = append(pendingPaths, p)
 			if len(pending) >= encoder.batchSize() {
 				return flush()
 			}
 			return nil
 		})
 		if err != nil {
-			removeFiles(pending)
+			removeFiles(pendingPaths)
 			return err
 		}
 		if err := flush(); err != nil {
@@ -583,25 +475,4 @@ func removeFiles(paths []string) {
 	for _, p := range paths {
 		_ = os.Remove(p)
 	}
-}
-
-// frameFileNames lists the numbered frame files in dir, in order, and
-// requires the numbering to be consecutive from zero.
-func frameFileNames(dir, ext string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "frame-") {
-			names = append(names, e.Name())
-		}
-	}
-	for i, n := range names {
-		if want := fmt.Sprintf("frame-%03d%s", i, ext); n != want {
-			return nil, fmt.Errorf("frame file %q found where %q was expected", n, want)
-		}
-	}
-	return names, nil
 }

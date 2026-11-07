@@ -377,7 +377,7 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 				refArgs := []string{"gif:" + path, "-coalesce", "-auto-orient", "-profile", srgb}
 				if resize {
 					enc.MaxEdge = 16
-					refArgs = append(refArgs, "-resize", "16x13!")
+					refArgs = append(refArgs, "-filter", resizeFilter, "-resize", "16x13!")
 				}
 				ref := t.TempDir()
 				magick(t, env, append(refArgs, "-strip", "-depth", "8", "+adjoin", filepath.Join(ref, "%03d.png"))...)
@@ -421,10 +421,10 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 	t.Logf("%d runs, largest difference %d", total, worst)
 }
 
-// TestProfilesThatChangeOnEveryFrameCostOneRunPerFrame checks that a GIF
-// whose frames each carry a different profile gives magick no more runs than
-// there are frames, each with one profile.
-func TestProfilesThatChangeOnEveryFrameCostOneRunPerFrame(t *testing.T) {
+// TestProfilesThatChangeOnEveryFrameShareOneRun checks that a GIF whose
+// frames each carry a different profile is encoded in one run, every frame
+// converted by its own profile.
+func TestProfilesThatChangeOnEveryFrameShareOneRun(t *testing.T) {
 	requireMagick(t)
 	p := requireProcessor(t)
 	adobe := mustAdobeProfile(t)
@@ -453,12 +453,12 @@ func TestProfilesThatChangeOnEveryFrameCostOneRunPerFrame(t *testing.T) {
 				profiles++
 			}
 		}
-		if inputs != 1 || profiles != 1 {
-			t.Errorf("a run names %d frames and %d profiles, want 1 and 1: %q", inputs, profiles, call)
+		if inputs != 6 || profiles != 6 {
+			t.Errorf("a run names %d frames and %d profiles, want 6 and 6: %q", inputs, profiles, call)
 		}
 	}
-	if runs != 6 {
-		t.Errorf("%d magick runs, want 6", runs)
+	if runs != 1 {
+		t.Errorf("%d magick runs, want 1", runs)
 	}
 	if got := dirNames(t, out); len(got) != 6 {
 		t.Errorf("output dir holds %v (profile files must be removed)", got)

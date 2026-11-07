@@ -174,6 +174,13 @@ func TestFitSize(t *testing.T) {
 		{480, 640, 640, 307200, 480, 640, false},
 		{6000, 4000, 2576, 3750000, 2371, 1581, true},
 		{1, 4000, 100, 100000, 1, 100, true},
+		// A rung is an edge bound and the area of its square. ImageMagick's
+		// -thumbnail rounds 1536.5 up to 1537; the size is the floor.
+		{4000, 3001, 2048, 2048 * 2048, 2048, 1536, true},
+		{3001, 4000, 2048, 2048 * 2048, 1536, 2048, true},
+		{4000, 3000, 2048, 2048 * 2048, 2048, 1536, true},
+		{2048, 1537, 2048, 2048 * 2048, 2048, 1537, false},
+		{800, 601, 512, 512 * 512, 512, 384, true},
 	}
 	for _, c := range cases {
 		tw, th, resize := fitSize(c.w, c.h, c.edge, c.area)
@@ -527,7 +534,6 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 	}{
 		{"still after encode", true, func() string { return writeHEIC(t) }, 2},
 		{"still with profile after encode", true, wide, 2},
-		{"still at encode", true, func() string { return writeHEIC(t) }, 3},
 		{"frames after header read", false, func() string { return writeGIF(t, real, solid, 6) }, 1},
 		{"frames after encode", false, func() string { return writeGIF(t, real, solid, 6) }, 2},
 	}
@@ -672,26 +678,5 @@ func checkGolden(t *testing.T, name, got string) {
 	}
 	if string(want) != got {
 		t.Errorf("argv differs from %s:\n--- got\n%s\n--- want\n%s", path, got, want)
-	}
-}
-
-// identifySizes reads back the size of each output, which its headers state.
-// Without -ping identify decodes the file: every Still pays a decode of its
-// own JPEG output, and animationFrames one per frame file.
-func TestIdentifySizesReadsHeadersOnly(t *testing.T) {
-	real := requireMagick(t)
-	env, calls := countingEnv(real)
-	dir := t.TempDir()
-	paths := []string{filepath.Join(dir, "a.jpg"), filepath.Join(dir, "b.png")}
-	magick(t, real, "-size", "12x8", "xc:red", paths[0])
-	magick(t, real, "-size", "6x4", "xc:blue", paths[1])
-	sizes, err := identifySizes(context.Background(), env, paths)
-	if err != nil || !slices.Equal(sizes, [][2]int{{12, 8}, {6, 4}}) {
-		t.Fatalf("sizes %v, err %v", sizes, err)
-	}
-	for _, call := range calls() {
-		if !slices.Contains(call, "-ping") {
-			t.Errorf("the outputs were decoded to read their sizes: %q", call)
-		}
 	}
 }
