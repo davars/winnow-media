@@ -30,9 +30,13 @@ func CoderForMIME(mimeType string) (coder string, ok bool) {
 // with an empty coder, retrying once with the coder CoderForMIME names for
 // mimeType when the bare attempt fails and one exists. Without a mapped
 // coder the original output and error are returned unchanged. Both attempts
-// failing yields an error naming both.
+// failing yields an error naming both. The Env adds its memory profile's
+// limit flags, after a leading "identify" if there is one; buildArgs must not
+// include them, and must produce identify or convert-style arguments. Other
+// magick subcommands (compare, composite, montage, mogrify, stream) are not
+// supported.
 func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, buildArgs func(coder string) []string) ([]byte, error) {
-	first, err := e.Run(ctx, "magick", buildArgs("")...)
+	first, err := e.runMagick(ctx, buildArgs("")...)
 	if err == nil {
 		return first.Stdout, nil
 	}
@@ -40,28 +44,61 @@ func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, bu
 	if !ok {
 		return first.Stdout, err
 	}
-	retried, retryErr := e.Run(ctx, "magick", buildArgs(coder)...)
+	retried, retryErr := e.runMagick(ctx, buildArgs(coder)...)
 	if retryErr != nil {
 		return retried.Stdout, fmt.Errorf("magick: sniffed decode failed (%w); retried with coder %q, which also failed: %v", err, coder, retryErr)
 	}
 	return retried.Stdout, nil
 }
 
-// LimitArgs returns the resource-limit flags for one magick process: memory,
-// map, area and list length bound the process, and time bounds each image
-// (its clock starts when the image is created, and ImageMagick stops work on
-// an image that has run past it, exiting 0 in most cases; see ErrTimeLimit).
-// It does not bound the process's total time. Every magick invocation the
-// package builds starts with them, and callers building their own invocations
-// over the package's artifacts should too. The slice is fresh on every call.
-func LimitArgs() []string {
-	return []string{
-		"-limit", "memory", "1GiB",
-		"-limit", "map", "2GiB",
-		"-limit", "area", "512MP",
-		"-limit", "list-length", policyListLength,
-		"-limit", "time", "300",
+// LimitArgs returns the resource-limit flags that bound one magick process
+// under HighMemory; it is HighMemory.LimitArgs().
+func LimitArgs() []string { return HighMemory.LimitArgs() }
+
+// LimitArgs returns the resource-limit flags for one magick process under the
+// profile: memory, map, area and list length bound the process, and time
+// bounds each image (its clock starts when the image is created, and
+// ImageMagick stops work on an image that has run past it, exiting 0 in most
+// cases; see ErrTimeLimit). It does not bound the process's total time.
+// Callers building their own magick invocations over the package's artifacts
+// should start them with these (after a leading "identify"). The slice is
+// fresh on every call. It panics on an undefined profile; check Valid first
+// when the value comes from outside the program.
+func (p MemoryProfile) LimitArgs() []string {
+	s, err := p.settings()
+	if err != nil {
+		panic(err)
 	}
+	return []string{
+		"-limit", "memory", s.memory,
+		"-limit", "map", s.mapLimit,
+		"-limit", "area", policyArea,
+		"-limit", "list-length", policyListLength,
+		"-limit", "time", strconv.Itoa(policyTimeSeconds),
+	}
+}
+
+// Valid reports whether p is a defined profile.
+func (p MemoryProfile) Valid() bool {
+	_, ok := memoryProfiles[p]
+	return ok
+}
+
+// runMagick runs magick with args under the Env's memory profile: the limit
+// flags follow a leading "identify" subcommand, which must stay first, and
+// otherwise start the arguments. Every magick run of the package goes through
+// it.
+func (e Env) runMagick(ctx context.Context, args ...string) (Result, error) {
+	if !e.Memory.Valid() {
+		return Result{}, fmt.Errorf("unknown memory profile %d", int(e.Memory))
+	}
+	limit := e.Memory.LimitArgs()
+	full := make([]string, 0, len(limit)+len(args))
+	if len(args) > 0 && args[0] == "identify" {
+		full, args = append(full, "identify"), args[1:]
+	}
+	full = append(append(full, limit...), args...)
+	return e.Run(ctx, "magick", full...)
 }
 
 // DeleteExpr renders the magick -delete argument dropping every one of
@@ -86,9 +123,8 @@ func DeleteExpr(keep []int, sourceFrames int) string {
 // returns its scene count and the first scene's canvas width and height. It
 // is the post-encode check: a still must hold exactly one scene.
 func (e Env) IdentifyArtifact(ctx context.Context, path string) (scenes, width, height int, err error) {
-	args := append([]string{"identify"}, LimitArgs()...)
-	args = append(args, "-ping", "-format", "%s %w %h\n", path)
-	res, err := e.Run(ctx, "magick", args...)
+	args := []string{"identify", "-ping", "-format", "%s %w %h\n", path}
+	res, err := e.runMagick(ctx, args...)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("identifying artifact: %w", err)
 	}

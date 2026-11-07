@@ -83,6 +83,9 @@ type Env struct {
 	Run     Runner
 	Stage   Stager
 	Scratch Scratcher
+	// Memory selects ImageMagick's memory limits; the zero value is
+	// HighMemory. A Processor sets it from its own profile.
+	Memory MemoryProfile
 
 	// compose runs the frame compositor; it is set only by a Processor.
 	compose composer

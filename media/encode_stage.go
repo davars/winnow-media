@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -217,10 +218,11 @@ func (c encodeCheck) removeOutputs() {
 // whatever the depth of the source. The run prints one encodedFrame line per frame,
 // which parseEncoded reads.
 //
-// The result starts with LimitArgs. outputFiles requires out.path to be a
-// magick filename pattern containing %d.
+// The result carries no resource limits; Env.runMagick adds them.
+// outputFiles requires out.path to be a magick filename pattern containing
+// %d.
 func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encodeOutput) []string {
-	args := LimitArgs()
+	var args []string
 	grouped := len(frames) > 1
 	for _, f := range frames {
 		if grouped {
@@ -309,11 +311,12 @@ func (t fusedTarget) source(src encodeSource) encodeSource {
 // once and writes every target, each from its own clone of the decoded image,
 // and reports one encodedFrame line per target in order. readOps are applied
 // to the read, before any target (a decode size hint). Each target's frame
-// input is the decode reference, and the result starts with LimitArgs.
+// input is the decode reference. The result carries no resource limits;
+// Env.runMagick adds them.
 //
 // A single target needs no clone.
 func fusedArgs(readOps []string, src encodeSource, targets []fusedTarget) []string {
-	args := append(LimitArgs(), readOps...)
+	args := slices.Clone(readOps)
 	args = append(args, targets[0].frame.input)
 	for _, t := range targets {
 		ops := append(frameOps(t.frame, t.source(src), t.enc), encodeTail(t.enc)...)

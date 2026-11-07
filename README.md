@@ -88,10 +88,10 @@ are resolved, limited and cancelled, and where scratch files live.
   so a still of any size is accepted. The profile of a single-frame WebP is
   found in its RIFF chunk list when the layout settles it and by one decode
   otherwise, and a single-frame JXL is always decoded once for it (libjxl
-  gives every JXL a profile); those decodes are bounded by `LimitArgs` only,
-  not by the frame caps. A GIF or WebP animation is refused with `ErrTooLarge`
-  over the frame-size, frame-count and decoded-pixel caps above. `Ladder`
-  lists the fallback rungs (frames are spent before resolution).
+  gives every JXL a profile); those decodes are bounded by the resource limits
+  only, not by the frame caps. A GIF or WebP animation is refused with
+  `ErrTooLarge` over the frame-size, frame-count and decoded-pixel caps above.
+  `Ladder` lists the fallback rungs (frames are spent before resolution).
   `Env.EncodeRung` is `Open`, `Encode` of one rung as a WebP, still or
   animation, and `Close`, and returns the frame mapping the artifact holds.
   `animated` false makes the file a still (`Hints.Still`). The caller's `orient`
@@ -116,10 +116,15 @@ are resolved, limited and cancelled, and where scratch files live.
   `matroska`, `avi`, `mpegts`, `mpeg`, `mpegvideo`, `flv`, `asf`), so a concat
   or HLS list that names other files is refused.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
-  their own invocations over these artifacts. `LimitArgs` bounds memory, map,
-  area and list length (2048 scenes) for the process and time for each image
-  (not for the process as a whole); a header read that reaches the list
-  length fails with `ErrTooLarge`.
+  their own invocations over these artifacts. `MemoryProfile.LimitArgs()`
+  bounds memory, map, area and list length (2048 scenes) for the process and
+  time for each image (not for the process as a whole), with the profile's
+  values, and `LimitArgs()` is `HighMemory.LimitArgs()`. A header read that
+  reaches the list length fails with `ErrTooLarge`.
+- `MemoryProfile` chooses ImageMagick's memory and map limits; see
+  [Memory profiles](#memory-profiles). `Env.Memory` sets it for the `Env`
+  methods, which add the profile's flags to every magick run, and its zero
+  value is `HighMemory`.
 
 ### Operations
 
@@ -129,15 +134,17 @@ tools itself because the input is untrusted:
 
 - `Init()` must be the first call in `main` and in `TestMain` of any program
   that creates a `Processor`; see [the sandbox](#the-sandbox).
-- `NewProcessor(ctx) (*Processor, error)` resolves `magick`, `ffmpeg`,
-  `ffprobe` and `webp-frames` with the `tool` package, creates a private
-  directory with `os.MkdirTemp`, installs a generated ImageMagick policy there
-  and reads it back with `magick -list policy` and `-list resource`. It
-  returns an error, removing the directory, unless the first policy file
-  listed is the installed one with exactly the rules written, no other file
-  contributes a rule and no resource limit reads back above the ceiling
-  written (ImageMagick may lower one, such as threads to the host's CPUs).
-  `Close` removes the directory.
+- `NewProcessor(ctx, profile MemoryProfile) (*Processor, error)` resolves
+  `magick`, `ffmpeg`, `ffprobe` and `webp-frames` with the `tool` package,
+  creates a private directory with `os.MkdirTemp`, installs a generated
+  ImageMagick policy there and reads it back with `magick -list policy` and
+  `-list resource`. It returns an error, removing the directory, unless the
+  first policy file listed is the installed one with exactly the rules
+  written, no other file contributes a rule and no resource limit reads back
+  above the ceiling written (ImageMagick may lower one, such as threads to
+  the host's CPUs). The profile sets the policy's memory and map ceilings and
+  the flags of every run; an undefined one is an error. `Close` removes the
+  directory.
 - `Processor.Still(ctx, path, Encoding, dir) (Image, Usage, error)` accepts
   HEIC and HEIF (ImageMagick coder `heic`) and writes `still.<ext>`.
 - `Processor.AnimationFrames(ctx, path, Encoding, maxFrames, dir) ([]Image, Usage, error)`
@@ -325,7 +332,8 @@ animations set the frame and pixel caps: it holds every composited frame
 beside the decoded ones, and a GIF of full-canvas frames read by ImageMagick
 completed up to 185 MP in all and failed at 194 MP, while a single 81 MP frame
 completed and a 90 MP one did not. The pixel caps sit below those points.
-ImageMagick's memory, map and disk ceilings (1, 2 and 4 GiB) are unchanged.
+ImageMagick's memory and map ceilings are those of the memory profile (1 and
+2 GiB for `HighMemory`) and its disk ceiling is 4 GiB whatever the profile.
 The time ceiling is at least four times the longest ImageMagick run measured
 (36 s), and the ffmpeg allocation limit four times what an 8K frame needs. A
 Raspberry Pi 5 measured at worst about 4 times that host: 4.1 times the CPU
@@ -443,7 +451,8 @@ all capabilities dropped, `allowPrivilegeEscalation: false`, no secrets in
 the container, a memory limit, scratch on a size-limited volume, and a
 network policy denying egress. The measured model is one request per pod:
 
-- a memory limit of 1536Mi per request in flight;
+- a memory limit of 1536Mi per request in flight, with the `LowMemory`
+  profile (see [Memory profiles](#memory-profiles));
 - scratch on a disk-backed `emptyDir` (never `medium: Memory`) with a
   `sizeLimit` of about 8Gi, holding ImageMagick's temporary directory and the
   processor's scratch. ImageMagick's pixel cache is memory-mapped there, so
@@ -468,6 +477,27 @@ count). `RLIMIT_NPROC` counts every task of the real user, so it is set
 relative to the count when the helper starts and bounds forks only where the
 user has nothing else running, such as a container with its own uid; it is
 not enforced for root.
+
+## Memory profiles
+
+A `MemoryProfile` sets ImageMagick's memory and map limits, the two between
+which the pixel cache spills (memory, then map, then disk). The same profile
+produces the Processor's `policy.xml` and the `-limit` flags of every magick
+run the `Env` methods make, so a value means the same on both paths. Set it
+with `NewProcessor(ctx, profile)` and `Env.Memory`; callers that build their
+own magick runs start them with `profile.LimitArgs()`.
+
+| Profile | memory | map | use |
+| --- | --- | --- | --- |
+| `HighMemory` (zero value) | 1 GiB | 2 GiB | a host with plenty of RAM |
+| `LowMemory` | 512 MiB | 1 GiB | a container with a memory limit |
+
+`LowMemory` was measured on 1536Mi Raspberry Pi 5 pods. At the `HighMemory`
+limits an 80 MP image thrashed or was OOMKilled in most runs (the png8 and
+lossy WebP outputs each passed once); at the `LowMemory` limits it completed,
+with every lossy format taking 20 to 27 s. Caveats: the measurement is of one
+request per pod, for a 2048 WebP output; avif stays near 1400 MiB of
+anonymous memory whatever the profile; and PNG and lossless WebP inputs took 30 to 35 s.
 
 ## Flake outputs
 

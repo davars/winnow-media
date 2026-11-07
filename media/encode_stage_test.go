@@ -277,8 +277,8 @@ func TestEncodeArgsStages(t *testing.T) {
 			if !argsContainInOrder(args, want...) {
 				t.Errorf("args %q lack the stages %q", args, want)
 			}
-			if !slices.Equal(args[:len(LimitArgs())], LimitArgs()) {
-				t.Errorf("args %q do not start with the limits", args)
+			if slices.Contains(args, "-limit") {
+				t.Errorf("args %q carry limits, which Env.runMagick adds", args)
 			}
 			if (c.enc.format == JPEG) != slices.Contains(args, "-alpha") {
 				t.Errorf("args %q flatten by something other than the output format", args)

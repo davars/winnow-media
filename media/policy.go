@@ -68,10 +68,10 @@ func policyCoders(specs ...spec) map[string]coderRights {
 // processorPolicy returns the rules of the policy the Processor installs, in
 // the order they are written: resource ceilings, delegates denied, every
 // coder denied and then the used ones allowed, indirect reads denied.
-func processorPolicy() []policyRule {
+func processorPolicy(s profileSettings) []policyRule {
 	rules := []policyRule{
-		{domain: "resource", name: "memory", value: policyMemory},
-		{domain: "resource", name: "map", value: policyMap},
+		{domain: "resource", name: "memory", value: s.memory},
+		{domain: "resource", name: "map", value: s.mapLimit},
 		{domain: "resource", name: "disk", value: policyDisk},
 		{domain: "resource", name: "area", value: policyArea},
 		{domain: "resource", name: "width", value: policyDimension},

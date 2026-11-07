@@ -142,16 +142,16 @@ func fullSoft(ctx context.Context, env Env, ref string) (bool, error) {
 // identifyHeaders runs one identify over inputRef, a path optionally prefixed
 // by a coder and suffixed by a scene selector, and parses each scene's
 // header. ping reads headers only. A file with more scenes than the list
-// length ceiling of LimitArgs is refused with an error wrapping ErrTooLarge,
+// length ceiling is refused with an error wrapping ErrTooLarge,
 // before any frame is held, and a read that reaches the time limit with one
 // wrapping ErrTimeLimit.
 func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) ([]sceneHeader, error) {
-	args := append([]string{"identify"}, LimitArgs()...)
+	args := []string{"identify"}
 	if ping {
 		args = append(args, "-ping")
 	}
 	args = append(args, "-format", sceneHeaderFormat, inputRef)
-	res, err := env.Run(ctx, "magick", args...)
+	res, err := env.runMagick(ctx, args...)
 	if terr := timeLimitError(res.Stderr, err); errors.Is(terr, ErrTimeLimit) {
 		return nil, fmt.Errorf("reading headers: %w", terr)
 	}
@@ -268,7 +268,7 @@ func placeSRGB(dir string) (string, error) {
 // a frame count or size outside chk is an error, and removes the outputs chk
 // names.
 func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]encodedFrame, error) {
-	res, err := e.Run(ctx, "magick", args...)
+	res, err := e.runMagick(ctx, args...)
 	err = timeLimitError(res.Stderr, err)
 	var frames []encodedFrame
 	if err == nil {
