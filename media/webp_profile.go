@@ -22,11 +22,13 @@ const (
 // find out.
 //
 // An answer is given for a simple file (a single VP8 or VP8L chunk) and for
-// an extended file whose first chunk is VP8X, whose chunks end exactly at the
-// size the RIFF header states, and that holds at most one ICCP chunk. ICC
-// profile means the VP8X ICC flag is set and an ICCP chunk exists; in an
-// animation the profile applies to its frames. Only chunk headers are read, at
-// most maxWebPChunks of them, never chunk data.
+// an extended file whose first chunk is VP8X and either has the ICC flag
+// clear or has chunks that end exactly at the size the RIFF header states,
+// one ICCP chunk at most (with data), and an image the animation flag
+// describes: one VP8 or VP8L chunk and no ANMF chunk, or ANMF chunks and no
+// bare image chunk. ICC profile means the VP8X ICC flag is set and an ICCP
+// chunk exists; in an animation the profile applies to its frames. Only chunk
+// headers are read, at most maxWebPChunks of them, never chunk data.
 func webpICC(path string) (hasICC, known bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -43,7 +45,8 @@ func webpICC(path string) (hasICC, known bool) {
 	}
 	end := 8 + int64(binary.LittleEndian.Uint32(riff[4:]))
 	pos := int64(12)
-	extended, iccp := false, 0
+	extended, animated := false, false
+	iccp, images, frames := 0, 0, 0
 	for n := 0; pos != end; n++ {
 		if n == maxWebPChunks || pos+8 > end {
 			return false, false
@@ -66,19 +69,27 @@ func webpICC(path string) (hasICC, known bool) {
 			if flags[0]&webpICCFlag == 0 {
 				return false, true
 			}
-			extended = true
+			extended, animated = true, flags[0]&webpAnimFlag != 0
 		case n == 0 && (kind == "VP8 " || kind == "VP8L"):
+			images++
 		case !extended || kind == "VP8X":
 			return false, false
 		case kind == "ICCP":
-			if iccp++; iccp > 1 {
+			if iccp++; iccp > 1 || size == 0 {
 				return false, false
 			}
+		case kind == "VP8 " || kind == "VP8L":
+			images++
+		case kind == "ANMF":
+			frames++
 		}
 		if _, err := f.Seek(next, io.SeekStart); err != nil {
 			return false, false
 		}
 		pos = next
+	}
+	if extended && (animated && (frames == 0 || images > 0) || !animated && (frames > 0 || images != 1)) {
+		return false, false
 	}
 	return iccp == 1, true
 }

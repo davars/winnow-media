@@ -36,12 +36,12 @@ are resolved, limited and cancelled, and where scratch files live.
   `Stage` is a `Stager` that creates an empty scratch file whose name ends in
   an extension (`".webp"`) and returns its path and a cleanup function.
 - Bounded WebP encodes: `Env.ProbeFrames` reads each scene's delay and
-  ICC flag from the headers, without decoding, so a still of any size is
-  accepted (the profile of a single-frame WebP is found in its RIFF chunk
-  list when the layout settles it and by one decode otherwise; a
-  single-frame JXL is always decoded once for it, and always reports a
-  profile, which libjxl supplies); a GIF or
-  WebP of more than one frame is refused with `ErrTooLarge` over the
+  ICC flag from the headers, so a still of any size is accepted. The profile
+  of a single-frame WebP is found in its RIFF chunk list when the layout
+  settles it and by one decode otherwise, and a single-frame JXL is always
+  decoded once for it (libjxl gives every JXL a profile); those decodes are
+  bounded by `LimitArgs` only, not by the frame caps. A GIF or WebP of more
+  than one frame is refused with `ErrTooLarge` over the
   frame-size, frame-count and decoded-pixel caps above. `Ladder` lists the
   fallback rungs (frames are spent before resolution). `Env.EncodeRung`
   encodes one rung as a WebP, still or animation, and returns the frame

@@ -63,13 +63,6 @@ func onlyPinged(calls [][]string) bool {
 	return true
 }
 
-// profiledByMagick reports whether a full read of path finds an ICC profile,
-// which is what the encode would convert from.
-func profiledByMagick(t *testing.T, env Env, path string) bool {
-	t.Helper()
-	return profileListHasICC(string(magick(t, env, "identify", "-format", "%[profiles]", path)))
-}
-
 // padChunks returns n empty JUNK chunks.
 func padChunks(n int) []byte {
 	var out []byte
@@ -119,6 +112,14 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 		{"bytes after the RIFF", trailing, true, false},
 		{"chunk beyond the RIFF size", shortRIFF, true, false},
 		{"one-frame animation with a chunk", oneFrameAnimation, true, true},
+		{"two image chunks", riffWebP(vp8xChunk(icc), iccp, image, image), false, false},
+		{"two image chunks after a simple image", riffWebP(image, iccp, image), false, false},
+		{"empty chunk", riffWebP(vp8xChunk(icc), riffChunk("ICCP", nil), image), false, false},
+		{"animation flag over an image chunk", riffWebP(vp8xChunk(icc|anim), iccp, image), false, false},
+		{"frames without the animation flag", riffWebP(vp8xChunk(icc), iccp, riffChunk("ANIM", make([]byte, 6)), riffChunk("ANMF", frame)), false, false},
+		{"frames and an image without the animation flag", riffWebP(vp8xChunk(icc), iccp, image, riffChunk("ANIM", make([]byte, 6)), riffChunk("ANMF", frame)), false, false},
+		{"frames and an image with the animation flag", riffWebP(vp8xChunk(icc|anim), iccp, image, riffChunk("ANIM", make([]byte, 6)), riffChunk("ANMF", frame)), false, false},
+		{"animation flag without frames", riffWebP(vp8xChunk(icc|anim), iccp, riffChunk("ANIM", make([]byte, 6))), false, false},
 		{"VP8X after the image", riffWebP(image, vp8xChunk(icc), iccp), false, false},
 		{"second VP8X", riffWebP(vp8xChunk(icc), vp8xChunk(icc), iccp, image), false, false},
 		{"two chunks", riffWebP(vp8xChunk(icc), iccp, iccp, image), false, false},
@@ -126,10 +127,19 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 		{"one chunk more", pastLimit, false, false},
 	} {
 		path := writeBytes(t, c.file)
-		want := profiledByMagick(t, real, path) || c.animated
-		if has, known := webpICC(path); known != c.known || known && has != want {
+		read, err := real.Run(context.Background(), "magick", "identify", "-format", "%[profiles]", path)
+		if has, known := webpICC(path); err != nil {
+			// ImageMagick refuses the file, so there is no profile to agree
+			// with; the scan must still leave it to the decode.
+			t.Logf("%s: refused by ImageMagick", c.name)
+			if known != c.known {
+				t.Errorf("%s: webpICC = %t, known %t; want known %t", c.name, has, known, c.known)
+			}
+			continue
+		} else if want := profileListHasICC(string(read.Stdout)) || c.animated; known != c.known || known && has != want {
 			t.Errorf("%s: webpICC = %t, known %t; want %t, known %t", c.name, has, known, want, c.known)
 		}
+		want := profileListHasICC(string(read.Stdout)) || c.animated
 		t.Run("ProbeFrames/"+c.name, func(t *testing.T) {
 			env, calls := countingEnv(real)
 			frames, err := env.ProbeFrames(context.Background(), path, "image/webp")
