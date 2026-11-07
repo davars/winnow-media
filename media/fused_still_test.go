@@ -141,7 +141,7 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 				for _, edge := range []int{40, 400} {
 					enc := enc
 					enc.maxEdge, enc.maxArea = edge, edge*edge
-					src := encodeSource{orientation: head.orientation, width: w, height: h}
+					fusedSrc, materialisedSrc := encodeSource{}, encodeSource{orientation: head.orientation}
 					fusedOut := filepath.Join(dir, "fused"+enc.ext)
 					matOut := filepath.Join(dir, "materialised"+enc.ext)
 
@@ -151,10 +151,10 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 						fused.convertTo = destination
 						materialised.convertTo, materialised.assign = destination, sidecar
 					}
-					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{fused}, src, enc, encodeOutput{kind: outputStill, path: fusedOut})); err != nil {
+					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{fused}, fusedSrc, enc, encodeOutput{kind: outputStill, path: fusedOut})); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{materialised}, src, enc, encodeOutput{kind: outputStill, path: matOut})); err != nil {
+					if _, err := env.runEncode(ctx, encodeArgs([]encodeFrame{materialised}, materialisedSrc, enc, encodeOutput{kind: outputStill, path: matOut})); err != nil {
 						t.Fatal(err)
 					}
 					a, b := mustReadFile(t, fusedOut), mustReadFile(t, matOut)

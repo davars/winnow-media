@@ -330,7 +330,7 @@ func (e Env) encodeVideoSamples(ctx context.Context, enc encoding, dir string, p
 	}
 	var images []Image
 	encoder := sampleEncoder{
-		env: e, src: encodeSource{width: plan.tw, height: plan.th}, enc: enc, dir: dir, framePixels: plan.tw * plan.th,
+		env: e, src: encodeSource{}, enc: enc, dir: dir, framePixels: plan.tw * plan.th,
 		keep: func(i, n, w, h int) {
 			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, TimeMS: samples[i].timeMS})
 		},

@@ -88,24 +88,21 @@ func readHeaders(ctx context.Context, env Env, dec decoder, path, selector strin
 	return scenes, nil
 }
 
-// completeProfile fills in what the header read of the one scene of a file
-// cannot report under -ping: hasICC for a WebP or JXL, and the orientation of
-// a WebP, whose EXIF chunk -ping does not read. ref is the identify input the
+// completeProfile fills in hasICC for the one scene of a file whose coder
+// does not report its profile under -ping. ref is the identify input the
 // headers were read from, path the file it names. A WebP is answered by its
-// chunk list when the layout allows (see webpICC and webpOrientation) and
-// decoded otherwise; a JXL is always decoded, as libjxl gives every JXL a
-// profile. The decode is bounded only by whatever caps the caller applied to
-// the headers first. A file of more than one scene is left as read.
+// chunk list when the layout allows (see webpICC) and decoded otherwise; a
+// JXL is always decoded, as libjxl gives every JXL a profile. The decode is
+// bounded only by whatever caps the caller applied to the headers first. A
+// file of more than one scene is left as read.
 func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sceneHeader) error {
 	if len(scenes) != 1 {
 		return nil
 	}
 	switch scenes[0].format {
 	case "WEBP":
-		hasICC, iccKnown := webpICC(path)
-		orientation, orientationKnown := webpOrientation(path)
-		if iccKnown && orientationKnown {
-			scenes[0].hasICC, scenes[0].orientation = hasICC, orientation
+		if hasICC, known := webpICC(path); known {
+			scenes[0].hasICC = hasICC
 			return nil
 		}
 	case "JXL":
@@ -120,9 +117,6 @@ func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sc
 		return fmt.Errorf("reading headers: 1 scene, then %d", len(full))
 	}
 	scenes[0].hasICC = full[0].hasICC
-	if scenes[0].format == "WEBP" {
-		scenes[0].orientation = full[0].orientation
-	}
 	return nil
 }
 
@@ -193,24 +187,23 @@ func uprightSize(w, h int, orientation string) (int, int) {
 
 // fitSize returns the largest size at most w x h, with the same aspect
 // ratio, whose longest side is at most maxEdge and whose pixel count is at
-// most maxArea. resize is false when w x h already satisfies both, so the
-// image is never upscaled.
+// most maxArea, each side rounded down. resize is false when w x h already
+// satisfies both, so the image is never upscaled.
+//
+// It is the specification of fitExpr, which does the same arithmetic in
+// ImageMagick. A side of at most one pixel is raised to 1, and the other then
+// limited to what the area allows; for any other shape the rounding down
+// already satisfies the area.
 func fitSize(w, h, maxEdge, maxArea int) (tw, th int, resize bool) {
-	scale := math.Min(1, float64(maxEdge)/float64(max(w, h)))
-	scale = math.Min(scale, math.Sqrt(float64(maxArea)/(float64(w)*float64(h))))
+	scale := math.Min(1, math.Min(float64(maxEdge)/float64(max(w, h)), math.Sqrt(float64(maxArea)/(float64(w)*float64(h)))))
 	if scale >= 1 {
 		return w, h, false
 	}
 	const eps = 1e-9
 	tw = max(1, int(math.Floor(float64(w)*scale+eps)))
 	th = max(1, int(math.Floor(float64(h)*scale+eps)))
-	for tw*th > maxArea && (tw > 1 || th > 1) {
-		if tw >= th && tw > 1 {
-			tw--
-		} else {
-			th--
-		}
-	}
+	tw = max(1, min(tw, maxArea/th))
+	th = max(1, min(th, maxArea/tw))
 	return tw, th, true
 }
 
@@ -262,20 +255,17 @@ func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, 
 	if err != nil {
 		return Image{}, err
 	}
-	head := scenes[0]
-	w, h := uprightSize(head.width, head.height, head.orientation)
-	if w < 1 || h < 1 {
-		return Image{}, fmt.Errorf("input reports size %dx%d", w, h)
+	if head := scenes[0]; head.width < 1 || head.height < 1 {
+		return Image{}, fmt.Errorf("input reports size %dx%d", head.width, head.height)
 	}
 
 	name := "still" + enc.ext
 	var encoded []encodedFrame
-	err = withProfile(dir, head.hasICC, func(profilePath string) error {
+	err = withProfile(dir, scenes[0].hasICC, func(profilePath string) error {
 		var err error
 		encoded, err = e.runEncode(ctx, encodeArgs(
 			[]encodeFrame{{input: dec.name + ":" + path + "[0]", convertTo: profilePath}},
-			encodeSource{orientation: head.orientation, width: w, height: h}, enc,
-			encodeOutput{kind: outputStill, path: filepath.Join(dir, name)}))
+			encodeSource{}, enc, encodeOutput{kind: outputStill, path: filepath.Join(dir, name)}))
 		return err
 	})
 	if err != nil {
@@ -344,13 +334,13 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 			own[i] = f.hasICC
 		}
 		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
-			sourceFrames: len(infos), cw: cw, ch: ch, uw: layout.uw, uh: layout.uh,
+			sourceFrames: len(infos), cw: cw, ch: ch,
 			own: own, orientation: layout.orientation,
 		})
 	}
 	if dec.name == "webp" && len(infos) > 1 {
 		return e.compositedFrames(ctx, path, enc, dir, selected, compositeGeometry{
-			sourceFrames: len(infos), cw: cw, ch: ch, uw: layout.uw, uh: layout.uh,
+			sourceFrames: len(infos), cw: cw, ch: ch,
 			external: webpFramesTool, orientation: layout.orientation,
 		})
 	}
@@ -366,7 +356,7 @@ func (e Env) animationFrames(ctx context.Context, dec decoder, path string, enc 
 	var images []Image
 	err = withProfile(dir, profiled, func(profilePath string) error {
 		encoder := &sampleEncoder{
-			env: e, src: encodeSource{orientation: layout.orientation, width: layout.uw, height: layout.uh},
+			env: e, src: encodeSource{},
 			enc: enc, dir: dir, framePixels: cw * ch,
 			keep: func(i, n, w, h int) {
 				images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})
@@ -391,7 +381,6 @@ const webpFramesTool = "webp-frames"
 type compositeGeometry struct {
 	sourceFrames int
 	cw, ch       int // canvas as stored, before any rotation
-	uw, uh       int // canvas after rotation
 	// own[i] is set when the header read found an ICC profile on frame i. It
 	// is nil for a WebP, whose tool reports the profile with each frame.
 	own []bool
@@ -421,7 +410,7 @@ func (e Env) compositedFrames(ctx context.Context, path string, enc encoding, di
 			}
 		}()
 		encoder := &sampleEncoder{
-			env: e, src: encodeSource{orientation: g.orientation, width: g.uw, height: g.uh},
+			env: e, src: encodeSource{orientation: g.orientation},
 			enc: enc, dir: dir, framePixels: g.cw * g.ch,
 			keep: func(i, n, w, h int) {
 				images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: selected[i]})

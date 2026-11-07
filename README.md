@@ -40,10 +40,7 @@ are resolved, limited and cancelled, and where scratch files live.
   of a single-frame WebP is found in its RIFF chunk list when the layout
   settles it and by one decode otherwise, and a single-frame JXL is always
   decoded once for it (libjxl gives every JXL a profile); those decodes are
-  bounded by `LimitArgs` only, not by the frame caps. The EXIF orientation of
-  a single-frame WebP, which `-ping` does not report, is read the same way,
-  from the first directory of a well-formed EXIF chunk, and by a decode when
-  the chunk cannot be read with certainty. A GIF or WebP of more
+  bounded by `LimitArgs` only, not by the frame caps. A GIF or WebP of more
   than one frame is refused with `ErrTooLarge` over the
   frame-size, frame-count and decoded-pixel caps above. `Ladder` lists the
   fallback rungs (frames are spent before resolution). `Env.EncodeRung`
@@ -282,8 +279,10 @@ Every image output, from a still, an animation, a video sample or `EncodeRung`,
 is made by one ImageMagick argument list, so the choices below do not depend
 on how the pixels reached the encode. The size is the largest one within both
 bounds with the source's aspect ratio, each side rounded down (a 4000x3001
-image at `MaxEdge` 2048 is 2048x1536), and is asked of ImageMagick exactly
-(`-resize WxH!`) so that nothing it rounds can change it. The filter is
+image at `MaxEdge` 2048 is 2048x1536). ImageMagick works it out, from `%[fx:]`
+expressions of the size of the frame after `-auto-orient`, and is asked for it
+exactly (`-resize WxH!`), so it is the size of the picture actually produced
+whatever orientation the file's header does or does not report. The filter is
 Lanczos, set explicitly because ImageMagick's default is Mitchell for an image
 that has a palette or alpha channel. Each frame is oriented and converted
 inside its own parentheses, so frames of one run may carry different profiles.

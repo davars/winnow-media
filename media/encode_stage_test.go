@@ -7,9 +7,12 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -27,38 +30,197 @@ func webpEncoding(edge int) encoding {
 	return encoding{format: WebP, ext: ".webp", quality: testQuality, maxEdge: edge, maxArea: edge * edge}
 }
 
-// The one sizing rule: fitSize in Go, emitted as an exact geometry, and no
-// geometry when the frame already fits.
-func TestEncodeArgsSizing(t *testing.T) {
+// The size is asked of ImageMagick as fx expressions, evaluated on the frame
+// after it has been oriented, for the encoding's bounds, and never as a size
+// computed from the header.
+func TestEncodeArgsAskForTheSizeOfTheOrientedFrame(t *testing.T) {
+	enc := webpEncoding(100)
+	args := encodeArgs([]encodeFrame{{input: "pam:/in"}}, encodeSource{}, enc, encodeOutput{kind: outputStill, path: "/out.webp"})
+	w, h := fitExpr(enc.maxEdge, enc.maxArea)
+	if !argsContainInOrder(args, "-auto-orient", "-filter", "Lanczos", "-resize", w+"x"+h+"!", "-strip") {
+		t.Errorf("args %q do not resize to the fx size after -auto-orient", args)
+	}
+	if slices.Contains(args, "-thumbnail") {
+		t.Errorf("args %q use -thumbnail", args)
+	}
+	t.Logf("fitExpr(100, 10000) = %s x %s", w, h)
+}
+
+// fxSizes evaluates fitExpr(maxEdge, maxArea) in ImageMagick for each of
+// sizes, with the size substituted for w and h, and returns what it gives.
+func fxSizes(t *testing.T, env Env, maxEdge, maxArea int, sizes [][2]int) [][2]int {
+	t.Helper()
+	w, h := fitExpr(maxEdge, maxArea)
+	w, h = strings.TrimSuffix(strings.TrimPrefix(w, "%[fx:"), "]"), strings.TrimSuffix(strings.TrimPrefix(h, "%[fx:"), "]")
+	literal := func(expr string, sw, sh int) string {
+		var b strings.Builder
+		for _, r := range expr {
+			switch r {
+			case 'w':
+				fmt.Fprint(&b, sw)
+			case 'h':
+				fmt.Fprint(&b, sh)
+			default:
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	args := []string{"-size", "1x1", "xc:"}
+	for _, sz := range sizes {
+		args = append(args, "-print", "%[fx:"+literal(w, sz[0], sz[1])+"] %[fx:"+literal(h, sz[0], sz[1])+"]\n")
+	}
+	lines := strings.Split(strings.TrimSpace(string(magick(t, env, append(args, "null:")...))), "\n")
+	if len(lines) != len(sizes) {
+		t.Fatalf("%d results for %d sizes", len(lines), len(sizes))
+	}
+	out := make([][2]int, len(lines))
+	for i, line := range lines {
+		if _, err := fmt.Sscanf(line, "%d %d", &out[i][0], &out[i][1]); err != nil {
+			t.Fatalf("parsing %q: %v", line, err)
+		}
+	}
+	return out
+}
+
+// fitSizeWithTheLoop is fitSize as it was written before its area loop was
+// replaced by a closed form, to show that the two agree.
+func fitSizeWithTheLoop(w, h, maxEdge, maxArea int) (tw, th int, resize bool) {
+	scale := math.Min(1, float64(maxEdge)/float64(max(w, h)))
+	scale = math.Min(scale, math.Sqrt(float64(maxArea)/(float64(w)*float64(h))))
+	if scale >= 1 {
+		return w, h, false
+	}
+	const eps = 1e-9
+	tw = max(1, int(math.Floor(float64(w)*scale+eps)))
+	th = max(1, int(math.Floor(float64(h)*scale+eps)))
+	for tw*th > maxArea && (tw > 1 || th > 1) {
+		if tw >= th && tw > 1 {
+			tw--
+		} else {
+			th--
+		}
+	}
+	return tw, th, true
+}
+
+// sweepSizes returns sizes up to 16384 on a side: the corners and edges, the
+// rows of the sizing table, shapes on the bounds of the areas under test, and
+// random sizes spread over the magnitudes.
+func sweepSizes(areas []int) [][2]int {
+	sizes := [][2]int{
+		{1, 1},
+		{1, 16384},
+		{16384, 1},
+		{16384, 16384},
+		{2, 3},
+		{3, 2},
+		{255, 255},
+		{256, 1},
+		{1, 256},
+		{257, 1},
+		{4000, 3001},
+		{3001, 4000},
+		{4000, 3000},
+		{2048, 1537},
+		{2048, 1536},
+		{800, 601},
+		{1537, 2048},
+		{6000, 4000},
+		{4000, 1},
+		{4000, 2},
+		{1, 4000},
+		{16383, 16384},
+		{16384, 16383},
+		{8192, 8192},
+		{5000, 5000},
+	}
+	for _, a := range areas {
+		r := int(math.Sqrt(float64(a)))
+		for _, d := range []int{-1, 0, 1} {
+			if x := r + d; x >= 1 && x <= 16384 {
+				sizes = append(sizes, [2]int{x, x})
+			}
+		}
+		for _, h := range []int{1, 2, 3, 7, 16, 100, 1000} {
+			for _, d := range []int{-1, 0, 1} {
+				if w := a/h + d; w >= 1 && w <= 16384 {
+					sizes = append(sizes, [2]int{w, h}, [2]int{h, w})
+				}
+			}
+		}
+	}
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 700 {
+		sizes = append(sizes, [2]int{1 + int(math.Exp(rng.Float64()*math.Log(16384))) - 1, 1 + int(math.Exp(rng.Float64()*math.Log(16384))) - 1})
+	}
+	for range 300 {
+		sizes = append(sizes, [2]int{1 + rng.IntN(16384), 1 + rng.IntN(16384)})
+	}
+	for i, s := range sizes {
+		sizes[i] = [2]int{min(max(s[0], 1), 16384), min(max(s[1], 1), 16384)}
+	}
+	return sizes
+}
+
+// The fx expressions give fitSize's size, to the pixel, for every bound the
+// encodings allow, and fitSize gives what its earlier loop form gave.
+func TestFitExprEqualsFitSize(t *testing.T) {
+	env := requireMagick(t)
+	edges := []int{16, 24, 100, 1024, 2048, 2576, 16384}
+	areas := []int{256, 768, 100000, 1048576, 3_750_000, 4194304, 100_000_000}
+	var combos [][2]int
+	for _, e := range edges {
+		combos = append(combos, [2]int{e, e * e}) // a rung: no bound beyond the edge
+		for _, a := range areas {
+			combos = append(combos, [2]int{e, a})
+		}
+	}
+	sizes := sweepSizes(areas)
+	var checked, resized, mismatches int
+	for _, c := range combos {
+		got := fxSizes(t, env, c[0], c[1], sizes)
+		for i, sz := range sizes {
+			tw, th, resize := fitSize(sz[0], sz[1], c[0], c[1])
+			if lw, lh, _ := fitSizeWithTheLoop(sz[0], sz[1], c[0], c[1]); lw != tw || lh != th {
+				t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d, the loop form gave %dx%d", sz, c[0], c[1], tw, th, lw, lh)
+			}
+			if got[i] != [2]int{tw, th} {
+				if mismatches++; mismatches < 20 {
+					t.Errorf("fx size of %v at edge %d, area %d is %v, fitSize gives %dx%d", sz, c[0], c[1], got[i], tw, th)
+				}
+			}
+			if tw*th > c[1] && (tw > 1 && th > 1) || max(tw, th) > max(c[0], max(sz[0], sz[1])) {
+				t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d exceeds a bound", sz, c[0], c[1], tw, th)
+			}
+			checked++
+			if resize {
+				resized++
+			}
+		}
+	}
+	t.Logf("%d (size, bounds) pairs checked, %d of them resized, %d mismatches", checked, resized, mismatches)
+}
+
+// The sizing rows the plan names, through ImageMagick: 4000x3001 at 2048 is
+// 2048x1536 where -thumbnail gave 1537.
+func TestFitExprRoundsDown(t *testing.T) {
+	env := requireMagick(t)
 	for _, c := range []struct {
-		name             string
 		w, h, edge, area int
-		want             string // "" for no -resize
+		tw, th           int
 	}{
-		// ImageMagick's -thumbnail gives 1537 here; fitSize floors.
-		{"1536 not 1537", 4000, 3001, 2048, 2048 * 2048, "2048x1536!"},
-		{"rounds down", 800, 601, 512, 512 * 512, "512x384!"},
-		{"portrait", 3001, 4000, 2048, 2048 * 2048, "1536x2048!"},
-		{"fits", 40, 20, 640, 640 * 640, ""},
-		{"exactly the edge", 640, 480, 640, 640 * 640, ""},
-		{"area bound", 4000, 3000, 16384, 3_750_000, "2236x1677!"},
-		{"sliver", 4000, 1, 100, 100 * 100, "100x1!"},
+		{4000, 3001, 2048, 2048 * 2048, 2048, 1536},
+		{3001, 4000, 2048, 2048 * 2048, 1536, 2048},
+		{800, 601, 512, 512 * 512, 512, 384},
+		{40, 20, 640, 640 * 640, 40, 20},
+		{4000, 3000, 16384, 3_750_000, 2236, 1677},
+		{4000, 1, 100, 100 * 100, 100, 1},
+		{4000, 1, 16384, 256, 256, 1},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			enc := encoding{format: WebP, ext: ".webp", quality: testQuality, maxEdge: c.edge, maxArea: c.area}
-			args := encodeArgs([]encodeFrame{{input: "pam:/in"}}, encodeSource{width: c.w, height: c.h}, enc,
-				encodeOutput{kind: outputStill, path: "/out.webp"})
-			i := slices.Index(args, "-resize")
-			switch {
-			case c.want == "" && i >= 0:
-				t.Errorf("args %q resize a frame that fits", args)
-			case c.want != "" && (i < 0 || args[i+1] != c.want):
-				t.Errorf("args %q, want -resize %s", args, c.want)
-			}
-			if slices.Contains(args, "-thumbnail") {
-				t.Errorf("args %q use -thumbnail", args)
-			}
-		})
+		if got := fxSizes(t, env, c.edge, c.area, [][2]int{{c.w, c.h}})[0]; got != [2]int{c.tw, c.th} {
+			t.Errorf("%dx%d at edge %d, area %d is %v, want %dx%d", c.w, c.h, c.edge, c.area, got, c.tw, c.th)
+		}
 	}
 }
 
@@ -89,7 +251,7 @@ func TestEncodeRungSizesWithFitSize(t *testing.T) {
 // The order of the stages: orient, then convert, then flatten (JPEG only),
 // then resize, and strip last, for every kind of output.
 func TestEncodeArgsStages(t *testing.T) {
-	src := encodeSource{orientation: "RightTop", width: 400, height: 300}
+	src := encodeSource{orientation: "RightTop"}
 	frame := encodeFrame{input: "pam:/f", convertTo: "/srgb.icc", assign: "/own.icc", delayCS: 7}
 	for _, c := range []struct {
 		name string
@@ -103,6 +265,7 @@ func TestEncodeArgsStages(t *testing.T) {
 		{"jpeg", encoding{format: JPEG, ext: ".jpg", quality: 90, maxEdge: 100, maxArea: 10000}, encodeOutput{kind: outputStill, path: "/o.jpg"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			fitW, fitH := fitExpr(c.enc.maxEdge, c.enc.maxArea)
 			args := encodeArgs([]encodeFrame{frame}, src, c.enc, c.out)
 			want := []string{
 				"-orient", "RightTop", "-auto-orient", "-profile", "/own.icc", "-profile", "/srgb.icc",
@@ -110,7 +273,7 @@ func TestEncodeArgsStages(t *testing.T) {
 			if c.enc.format == JPEG {
 				want = append(want, "-background", "white", "-alpha", "remove", "-alpha", "off")
 			}
-			want = append(want, "-filter", "Lanczos", "-resize", "100x75!", "-strip", "-quality", fmt.Sprint(c.enc.quality))
+			want = append(want, "-filter", "Lanczos", "-resize", fitW+"x"+fitH+"!", "-strip", "-quality", fmt.Sprint(c.enc.quality))
 			if !argsContainInOrder(args, want...) {
 				t.Errorf("args %q lack the stages %q", args, want)
 			}
@@ -145,11 +308,11 @@ func TestEncodeArgsPerFrameProfiles(t *testing.T) {
 		{input: "pam:/b"},
 		{input: "pam:/c", convertTo: "/srgb.icc", assign: "/c.icc"},
 	}
-	args := encodeArgs(frames, encodeSource{width: 10, height: 10}, webpEncoding(100), encodeOutput{kind: outputFiles, path: "/o-%d.webp"})
+	args := encodeArgs(frames, encodeSource{}, webpEncoding(100), encodeOutput{kind: outputFiles, path: "/o-%d.webp"})
 	for _, want := range [][]string{
-		{"(", "pam:/a", "-orient", "TopLeft", "-auto-orient", "-profile", "/a.icc", "-profile", "/srgb.icc", ")"},
-		{"(", "pam:/b", "-orient", "TopLeft", "-auto-orient", ")"},
-		{"(", "pam:/c", "-orient", "TopLeft", "-auto-orient", "-profile", "/c.icc", "-profile", "/srgb.icc", ")"},
+		{"(", "pam:/a", "-auto-orient", "-profile", "/a.icc", "-profile", "/srgb.icc", "-filter"},
+		{"(", "pam:/b", "-auto-orient", "-filter"},
+		{"(", "pam:/c", "-auto-orient", "-profile", "/c.icc", "-profile", "/srgb.icc", "-filter"},
 	} {
 		if !argsContainInOrder(args, want...) {
 			t.Errorf("args %q lack %q", args, want)
@@ -162,7 +325,7 @@ func TestEncodeArgsPerFrameProfiles(t *testing.T) {
 
 // An unprofiled frame is never given a profile, however many are available.
 func TestEncodeArgsDoNotAssignAProfile(t *testing.T) {
-	args := encodeArgs([]encodeFrame{{input: "pam:/a", assign: "/a.icc"}}, encodeSource{width: 10, height: 10},
+	args := encodeArgs([]encodeFrame{{input: "pam:/a", assign: "/a.icc"}}, encodeSource{},
 		webpEncoding(100), encodeOutput{kind: outputStill, path: "/o.webp"})
 	if slices.Contains(args, "-profile") {
 		t.Errorf("args %q have a profile for a frame that converts to none", args)
@@ -171,9 +334,9 @@ func TestEncodeArgsDoNotAssignAProfile(t *testing.T) {
 
 func TestEncodeArgsAnimationDelays(t *testing.T) {
 	args := encodeArgs([]encodeFrame{{input: "pam:/a", delayCS: 0}, {input: "pam:/b", delayCS: 33}, {input: "pam:/c", delayCS: -1}},
-		encodeSource{width: 10, height: 10}, webpEncoding(100), encodeOutput{kind: outputAnimation, path: "/o.webp"})
+		encodeSource{}, webpEncoding(100), encodeOutput{kind: outputAnimation, path: "/o.webp"})
 	for _, want := range [][]string{
-		{"(", "pam:/a", "-set", "delay", "0", "-orient"}, {"(", "pam:/b", "-set", "delay", "33", "-orient"}, {"(", "pam:/c", "-orient"},
+		{"(", "pam:/a", "-set", "delay", "0", "-auto-orient"}, {"(", "pam:/b", "-set", "delay", "33", "-auto-orient"}, {"(", "pam:/c", "-auto-orient"},
 	} {
 		if !argsContainInOrder(args, want...) {
 			t.Errorf("args %q lack %q", args, want)
@@ -193,7 +356,7 @@ func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
 		{input: "png:" + a, delayCS: 33},
 		{input: "gif:" + d7, prelude: []string{"-coalesce"}, delayCS: -1},
 	}
-	_, err := env.runEncode(context.Background(), encodeArgs(frames, encodeSource{width: 8, height: 8}, webpEncoding(8),
+	_, err := env.runEncode(context.Background(), encodeArgs(frames, encodeSource{}, webpEncoding(8),
 		encodeOutput{kind: outputAnimation, path: out}))
 	if err != nil {
 		t.Fatal(err)
@@ -602,4 +765,89 @@ func TestEveryOutputIsStripped(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A file whose orientation -ping cannot see, because it sits after the image
+// data, in a text chunk or in an XMP packet, is oriented by what the decode
+// finds, and sized for the picture that results, not for the header.
+func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
+	env := requireMagick(t)
+	ctx := context.Background()
+	const edge = 32
+	enc := Encoding{Format: PNG, MaxEdge: edge}
+	for _, c := range []struct{ file, mime string }{
+		{"exif-after-idat.png", "image/png"},
+		{"ztxt-exif.png", "image/png"},
+		{"ztxt-after-idat.png", "image/png"},
+		{"xmp.webp", "image/webp"},
+		{"exif.webp", "image/webp"},
+	} {
+		t.Run(c.file, func(t *testing.T) {
+			path := writeFile(t, "content", mustRead(t, filepath.Join("testdata", "orient", c.file)))
+			var storedW, storedH int
+			var decoded string
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(magick(t, env, path+"[0]", "-format", "%[orientation] %w %h", "info:"))), "%s %d %d", &decoded, &storedW, &storedH); err != nil {
+				t.Fatal(err)
+			}
+			var uw, uh int
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(magick(t, env, path+"[0]", "-auto-orient", "-format", "%w %h", "info:"))), "%d %d", &uw, &uh); err != nil {
+				t.Fatal(err)
+			}
+			if uw == storedW {
+				t.Fatalf("the fixture is not rotated by its decode (%s, %dx%d)", decoded, storedW, storedH)
+			}
+			heads, err := identifyHeaders(ctx, env, path, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("decode: %s %dx%d, upright %dx%d; -ping says %q", decoded, storedW, storedH, uw, uh, heads[0].orientation)
+			tw, th, _ := fitSize(uw, uh, edge, edge*edge)
+			reference := filepath.Join(t.TempDir(), "reference.png")
+			size := fmt.Sprintf("%dx%d!", tw, th)
+			magick(t, env, path+"[0]", "-auto-orient", "-filter", "Lanczos", "-resize", size, "-strip", reference)
+
+			t.Run("rung", func(t *testing.T) {
+				stagedRung := stagedEnv(env, t.TempDir())
+				frames, err := stagedRung.ProbeFrames(ctx, path, c.mime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, cleanup, w, h, _, err := stagedRung.EncodeRung(ctx, path, c.mime, false, Rung{CeilingPx: edge, MaxFrames: 1}, frames, "", "", testQuality)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer cleanup()
+				if w != tw || h != th {
+					t.Fatalf("reported %dx%d, want %dx%d", w, h, tw, th)
+				}
+				lossy := filepath.Join(t.TempDir(), "reference.webp")
+				magick(t, env, path+"[0]", "-auto-orient", "-filter", "Lanczos", "-resize", size, "-strip", "-quality", strconv.Itoa(testQuality), lossy)
+				if d := meanAbsoluteDifference(t, env, out, lossy); d > 0.004 {
+					t.Errorf("output differs from magick -auto-orient and the same resize by %.6f", d)
+				}
+			})
+			t.Run("operation", func(t *testing.T) {
+				var img Image
+				var dir string
+				if strings.HasSuffix(c.file, ".png") {
+					ec, _ := enc.resolve()
+					dir = t.TempDir()
+					var err error
+					if img, err = env.still(ctx, decoder{"magick", "png"}, path, ec, dir); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					p := requireProcessor(t)
+					images, d := framesInto(t, p, stage(t, writeFile(t, "copy", mustRead(t, path))), enc, 1)
+					img, dir = images[0], d
+				}
+				if img.Width != tw || img.Height != th {
+					t.Fatalf("reported %dx%d, want %dx%d", img.Width, img.Height, tw, th)
+				}
+				if d := meanAbsoluteDifference(t, env, filepath.Join(dir, img.Name), reference); d != 0 {
+					t.Errorf("output differs from magick -auto-orient and the same resize by %.6f", d)
+				}
+			})
+		})
+	}
 }
