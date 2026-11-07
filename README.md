@@ -182,7 +182,10 @@ tools itself because the input is untrusted:
 - `Processor.ProbeAnimation(ctx, path) (AnimationInfo, Usage, error)` reads
   the frame count, upright canvas size and the display delay of each frame
   (ms; a stored delay below 20 ms is 100, as browsers show it) from the
-  header read `AnimationFrames` makes, under the same gate and caps.
+  header read `AnimationFrames` makes, under the same gate and caps. The
+  canvas is upright by the orientation the header reports, which a one-frame
+  file can carry where only a decode sees it; `AnimationFrames` sizes its
+  output from the decoded frame.
 - `Processor.VideoFramesAt(ctx, path, Encoding, timesMS []int64, dir)
   ([]Image, Usage, error)` samples the given times, one seeked ffmpeg run
   each, exactly as `VideoFrames` does; `VideoFrames` is this with evenly

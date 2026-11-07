@@ -70,6 +70,8 @@ const resizeFilter = "Lanczos"
 // maxArea: the same operations in the same order, on doubles. Used in a
 // -resize argument, they are evaluated on the frame after -auto-orient.
 func fitExpr(maxEdge, maxArea int) (width, height string) {
+	// eps keeps a product such as (E/m)*m that lands a hair below the
+	// integer E from flooring to E-1; it matches fitSize's.
 	const eps = "0.000000001"
 	scale := fmt.Sprintf("min(1,min(%d/max(w,h),sqrt(%d/(w*h))))", maxEdge, maxArea)
 	tw := fmt.Sprintf("max(1,floor(w*%s+%s))", scale, eps)
