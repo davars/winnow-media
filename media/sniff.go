@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/bits"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -167,4 +168,75 @@ func sniffEBML(b []byte) (string, error) {
 		}
 	}
 	return "", unrecognized("EBML header without a document type")
+}
+
+// mpegTSPacket is the size of a transport stream packet, each of which starts
+// with the sync byte 0x47.
+const mpegTSPacket = 188
+
+// quickTimeAtoms are the top-level atoms a QuickTime file may open with when
+// it has no ftyp.
+var quickTimeAtoms = [...]string{"moov", "mdat", "wide", "free", "skip", "pnot"}
+
+// videoContainerOf returns the decoder of the video container the leading
+// bytes of a file open, when sniff names no type for them: a QuickTime file
+// without an ftyp, which is pinned to mov, and AVI, ASF, FLV, an MPEG program
+// or elementary video stream or an MPEG transport stream, which are left to
+// ffmpeg's detection among detectedFormats. It is a routing hint for Env.Open,
+// not a verdict; the probe decides whether the file is a video.
+func videoContainerOf(b []byte) (decoder, bool) {
+	switch {
+	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "AVI ":
+		return unnamedVideoDecoder, true
+	case bytes.HasPrefix(b, []byte{0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11}):
+		return unnamedVideoDecoder, true
+	case bytes.HasPrefix(b, []byte("FLV\x01")):
+		return unnamedVideoDecoder, true
+	case bytes.HasPrefix(b, []byte{0, 0, 1, 0xBA}), bytes.HasPrefix(b, []byte{0, 0, 1, 0xB3}):
+		return unnamedVideoDecoder, true
+	case len(b) >= 8 && slices.Contains(quickTimeAtoms[:], string(b[4:8])):
+		return decoder{"ffmpeg", "mov"}, true
+	}
+	if len(b) > 2*mpegTSPacket && b[0] == 0x47 && b[mpegTSPacket] == 0x47 && b[2*mpegTSPacket] == 0x47 {
+		return unnamedVideoDecoder, true
+	}
+	return decoder{}, false
+}
+
+// videoRoute says how Env.Open treats a file's leading bytes.
+type videoRoute int
+
+const (
+	// routeNotVideo: the bytes name an image type, or nothing that looks like
+	// a video.
+	routeNotVideo videoRoute = iota
+	// routeSniffed: sniff names a video type.
+	routeSniffed
+	// routeLooksLike: sniff names no type and the bytes open a video container.
+	routeLooksLike
+)
+
+// videoRouteOf returns the route of the file at path and, for a video route,
+// its decoder. A file sniff names an image type is never looked at further.
+func videoRouteOf(path string) (videoRoute, decoder) {
+	f, err := os.Open(path)
+	if err != nil {
+		return routeNotVideo, decoder{}
+	}
+	defer func() { _ = f.Close() }()
+	buf, err := io.ReadAll(io.LimitReader(f, sniffBytes))
+	if err != nil {
+		return routeNotVideo, decoder{}
+	}
+	mediaType, err := sniff(buf)
+	if err == nil {
+		if dec, err := videoSpec.decoderFor(mediaType); err == nil {
+			return routeSniffed, dec
+		}
+		return routeNotVideo, decoder{}
+	}
+	if dec, ok := videoContainerOf(buf); ok {
+		return routeLooksLike, dec
+	}
+	return routeNotVideo, decoder{}
 }

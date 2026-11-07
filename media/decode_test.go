@@ -95,8 +95,9 @@ func TestOpenRoutesByTypeAndStructureNotFrameCount(t *testing.T) {
 	t.Run("video", func(t *testing.T) {
 		e := stagedEnv(env, t.TempDir())
 		path := writeFile(t, "v.mp4", append(ftypBox("isom"), make([]byte, 64)...))
-		if _, err := e.Open(context.Background(), path, Hints{}); !errors.Is(err, ErrUnsupportedType) {
-			t.Fatalf("err = %v, want ErrUnsupportedType", err)
+		_, err := e.Open(context.Background(), path, Hints{})
+		if err == nil || !strings.Contains(err.Error(), "probing video") {
+			t.Fatalf("err = %v, want the video probe to refuse it", err)
 		}
 	})
 }

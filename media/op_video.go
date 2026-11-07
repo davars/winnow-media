@@ -163,17 +163,30 @@ func inputArgs(dec decoder, path string) []string {
 	return append(args, "-f", dec.name, "-i", path)
 }
 
-// sniffedVideoDecoder returns the decoder of the video type path's leading
-// bytes name, or the unnamed decoder, which leaves the demuxer to ffmpeg, for
-// any other content. It serves the Env, which has no gate on types.
-func sniffedVideoDecoder(path string) decoder {
-	if mediaType, err := sniffFile(path); err == nil {
-		if dec, err := videoSpec.decoderFor(mediaType); err == nil {
-			return dec
-		}
+// videoDecoderOf returns the decoder of the video type path's leading bytes
+// name, and false for any other content.
+func videoDecoderOf(path string) (decoder, bool) {
+	mediaType, err := sniffFile(path)
+	if err != nil {
+		return decoder{}, false
 	}
-	return decoder{"ffmpeg", ""}
+	dec, err := videoSpec.decoderFor(mediaType)
+	return dec, err == nil
 }
+
+// sniffedVideoDecoder returns videoDecoderOf path, or the unnamed decoder,
+// which leaves the demuxer to ffmpeg, for any other content. It serves the
+// Env, which has no gate on types.
+func sniffedVideoDecoder(path string) decoder {
+	if dec, ok := videoDecoderOf(path); ok {
+		return dec
+	}
+	return unnamedVideoDecoder
+}
+
+// unnamedVideoDecoder leaves the demuxer to ffmpeg's detection, limited to
+// detectedFormats.
+var unnamedVideoDecoder = decoder{"ffmpeg", ""}
 
 // probeEntries is what ffprobe is asked to show for the sampling operations;
 // probeEntriesWithCodec also asks for each stream's codec name.
@@ -361,19 +374,21 @@ type videoPlan struct {
 	selectFrames bool
 }
 
-// planVideo probes the video, refuses it if it exceeds a cap and decides how
-// its frames are sized. It is the first step of every video sampling. The
-// frames are delivered at the size decode needs, which is the largest of the
-// encodings that will be made from them, with videoReductionMargin to spare
-// for SDR and none for HDR.
-func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, decode encoding) (videoPlan, error) {
+// probeChecked probes the video and refuses it if it exceeds a cap. It is the
+// first step of every video sampling.
+func (e Env) probeChecked(ctx context.Context, dec decoder, inputPath string) (videoInfo, error) {
 	info, err := probeVideo(ctx, e, dec, inputPath)
 	if err != nil {
-		return videoPlan{}, err
+		return videoInfo{}, err
 	}
-	if err := checkVideoInfo(info); err != nil {
-		return videoPlan{}, err
-	}
+	return info, checkVideoInfo(info)
+}
+
+// newVideoPlan decides how the frames of a probed video are sized. They are
+// delivered at the size decode needs, which is the largest of the encodings
+// that will be made from them, with videoReductionMargin to spare for SDR and
+// none for HDR.
+func newVideoPlan(info videoInfo, decode encoding) videoPlan {
 	w, h := info.upright()
 	tw, th, resize := fitSize(w, h, decode.maxEdge, decode.maxArea)
 	hdr := isHDRTransfer(info.transfer)
@@ -389,7 +404,17 @@ func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, decod
 		reduced:      reduced,
 		threads:      ffmpegThreadsFor(info.width, info.height),
 		selectFrames: info.frames > 0 && int64(info.frames)*int64(info.width)*int64(info.height) <= selectLimit,
-	}, nil
+	}
+}
+
+// covers reports whether frames delivered under p serve an encode that
+// planned for q: the same frames, or for SDR frames at least as large, whose
+// margin is then at least q's.
+func (p videoPlan) covers(q videoPlan) bool {
+	if p.fw == q.fw && p.fh == q.fh && p.reduced == q.reduced {
+		return true
+	}
+	return !isHDRTransfer(p.info.transfer) && p.fw >= q.fw && p.fh >= q.fh
 }
 
 // source returns what the encode of enc needs to know about the frames. A
@@ -403,14 +428,6 @@ func (v videoPlan) source(enc encoding) encodeSource {
 	w, h := v.info.upright()
 	tw, th, _ := fitSize(w, h, enc.maxEdge, enc.maxArea)
 	return encodeSource{width: tw, height: th}
-}
-
-// fits reports whether a frame as delivered already is within the bounds of
-// enc, so that it is not resampled.
-func (v videoPlan) fits(enc encoding) bool {
-	w, h := v.info.upright()
-	_, _, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
-	return !v.reduced && !resize
 }
 
 // selectArgs returns the arguments of one ffmpeg run that keeps the frames
@@ -493,28 +510,6 @@ type sampledFrame struct {
 	timeMS int64
 }
 
-// encodeVideoSamples encodes the samples to output frames in dir.
-func (e Env) encodeVideoSamples(ctx context.Context, enc encoding, dir string, plan videoPlan, samples []sampledFrame) ([]Image, error) {
-	if len(samples) == 0 {
-		return nil, errors.New("no frame could be sampled")
-	}
-	frames := make([]encodeFrame, len(samples))
-	for i, s := range samples {
-		frames[i] = encodeFrame{input: "pam:" + s.path, fits: plan.fits(enc)}
-	}
-	var images []Image
-	encoder := sampleEncoder{
-		env: e, src: plan.source(enc), enc: enc, dir: dir, framePixels: plan.fw * plan.fh,
-		keep: func(i, n, w, h int) {
-			images = append(images, Image{Name: frameName(n, enc.ext), Width: w, Height: h, TimeMS: samples[i].timeMS})
-		},
-	}
-	if err := encoder.encodeSamples(ctx, frames); err != nil {
-		return nil, err
-	}
-	return images, nil
-}
-
 // videoFrames samples up to maxFrames frames evenly.
 func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
 	return e.videoFramesPicked(ctx, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
@@ -526,24 +521,29 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 // probe, which must be in ascending order without repeats; sampleVideo reads
 // them.
 func (e Env) videoFramesPicked(ctx context.Context, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
-	plan, err := e.planVideo(ctx, dec, inputPath, enc)
+	return e.encodeVideoFiles(ctx, openRequest{
+		path: inputPath, dec: dec, pinned: true, scratch: dir, video: &videoRequest{times: pick},
+	}, enc, dir)
+}
+
+// videoFrameRun samples count consecutive frames from startMS in one ffmpeg
+// run.
+func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
+	return e.encodeVideoFiles(ctx, openRequest{
+		path: inputPath, dec: dec, pinned: true, scratch: dir,
+		video: &videoRequest{run: &frameRun{startMS: startMS, count: count}},
+	}, enc, dir)
+}
+
+// encodeVideoFiles opens the video req describes and writes its samples to
+// dir.
+func (e Env) encodeVideoFiles(ctx context.Context, req openRequest, enc encoding, dir string) ([]Image, error) {
+	src, err := e.open(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	times, err := pick(plan.info)
-	if err != nil {
-		return nil, err
-	}
-	var samples []sampledFrame
-	defer func() {
-		for _, s := range samples {
-			_ = os.Remove(s.path)
-		}
-	}()
-	if samples, err = e.sampleVideo(ctx, dec, inputPath, dir, plan, times); err != nil {
-		return nil, err
-	}
-	return e.encodeVideoSamples(ctx, enc, dir, plan, samples)
+	defer src.Close()
+	return src.encodeFiles(ctx, enc, dir)
 }
 
 // sampleVideo writes the frame at or after each of times, which must be
@@ -691,29 +691,6 @@ func (e Env) selectSamples(ctx context.Context, dec decoder, inputPath, dir stri
 // runSampleRE matches the scratch files of a sampling, which ffmpeg names by
 // the frame's presentation time in microseconds, as it keeps it.
 var runSampleRE = regexp.MustCompile(`^` + regexp.QuoteMeta(samplePrefix) + `(\d+)\.pam$`)
-
-// videoFrameRun samples count consecutive frames from startMS in one ffmpeg
-// run.
-func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
-	plan, err := e.planVideo(ctx, dec, inputPath, enc)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkSeekTime(plan.info, startMS); err != nil {
-		return nil, err
-	}
-	var samples []sampledFrame
-	defer func() {
-		for _, s := range samples {
-			_ = os.Remove(s.path)
-		}
-	}()
-	samples, err = e.runFrames(ctx, dec, inputPath, dir, plan, startMS, count, !plan.selectFrames)
-	if err != nil {
-		return nil, fmt.Errorf("sampling frames from %d ms: %w", startMS, err)
-	}
-	return e.encodeVideoSamples(ctx, enc, dir, plan, samples)
-}
 
 // runFrames reads count frames from the first at or after startMS, by one
 // run that starts at the beginning of the stream or, if seek, a margin before
