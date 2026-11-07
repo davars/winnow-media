@@ -32,7 +32,7 @@ type encodeFrame struct {
 // encode.
 type encodeSource struct {
 	// orientation is the magick orientation name applied to every frame; ""
-	// and "Undefined" apply the orientation the input carries, if any.
+	// and "Undefined" mean none, whatever tag the input carries.
 	orientation string
 	// width and height are the size of the frames after orientation. They
 	// set the output size.
@@ -93,19 +93,24 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 	args := LimitArgs()
 	tw, th, resize := fitSize(src.width, src.height, enc.maxEdge, enc.maxArea)
 	grouped := len(frames) > 1
+	// The orientation is always stated, so that the rotation applied is the one
+	// the size was computed for, whatever tag the decoded frame carries.
+	orientation := src.orientation
+	if orientation == "" || orientation == "Undefined" {
+		orientation = "TopLeft"
+	}
 	for _, f := range frames {
 		if grouped {
 			args = append(args, "(")
 		}
-		if out.kind == outputAnimation && f.delayCS >= 0 {
-			args = append(args, "-delay", strconv.Itoa(f.delayCS))
-		}
 		args = append(args, f.input)
 		args = append(args, f.prelude...)
-		if src.orientation != "" && src.orientation != "Undefined" {
-			args = append(args, "-orient", src.orientation)
+		if out.kind == outputAnimation && f.delayCS >= 0 {
+			// Set on the frame once read: the -delay setting would outlive the
+			// parentheses and override the delay of a frame read after it.
+			args = append(args, "-set", "delay", strconv.Itoa(f.delayCS))
 		}
-		args = append(args, "-auto-orient")
+		args = append(args, "-orient", orientation, "-auto-orient")
 		if f.convertTo != "" {
 			if f.assign != "" {
 				args = append(args, "-profile", f.assign)

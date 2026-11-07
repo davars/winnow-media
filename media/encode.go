@@ -466,9 +466,15 @@ func (e Env) composeSelected(ctx context.Context, kind, inputPath, dir string, l
 // The caller owns the returned staging file via cleanupFn; on error the
 // staging file is already removed.
 func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, enc encoding, profilePath string, profiled bool, orient string) (outputPath string, cleanupFn func(), width, height int, err error) {
-	scenes, _, err := identifyWithFallback(ctx, e, inputPath, "[0]", mimeType)
+	scenes, ref, err := identifyWithFallback(ctx, e, inputPath, "[0]", mimeType)
 	if err != nil {
 		return "", nil, 0, 0, err
+	}
+	if scenes[0].format == "WEBP" {
+		// -ping does not report the orientation of a WebP.
+		if err := completeProfile(ctx, e, ref, inputPath, scenes); err != nil {
+			return "", nil, 0, 0, err
+		}
 	}
 	head := scenes[0]
 	orientation := cmp.Or(orient, head.orientation)

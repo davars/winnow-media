@@ -377,7 +377,7 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 				refArgs := []string{"gif:" + path, "-coalesce", "-auto-orient", "-profile", srgb}
 				if resize {
 					enc.MaxEdge = 16
-					refArgs = append(refArgs, "-filter", resizeFilter, "-resize", "16x13!")
+					refArgs = append(refArgs, "-filter", "Lanczos", "-resize", "16x13!")
 				}
 				ref := t.TempDir()
 				magick(t, env, append(refArgs, "-strip", "-depth", "8", "+adjoin", filepath.Join(ref, "%03d.png"))...)
