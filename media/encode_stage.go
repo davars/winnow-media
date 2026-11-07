@@ -26,6 +26,12 @@ type encodeFrame struct {
 	// when the profile is embedded in the input. It is ignored when convertTo
 	// is empty.
 	assign string
+	// filter is the resize filter; the zero value is filterLanczos.
+	filter resizeFilter
+	// fits says the frame is already within the bounds of the encoding, so it
+	// is not resampled: a filter other than Lanczos blurs even at the same
+	// size.
+	fits bool
 }
 
 // encodeSource is what the header read decided about the frames of an
@@ -35,6 +41,11 @@ type encodeSource struct {
 	// frames carry; "" and "Undefined" leave a frame's own tag to
 	// -auto-orient.
 	orientation string
+	// width and height, when both are set, are the exact output size. A
+	// decode stage that delivers frames below the source's size sets them from
+	// the source's header, since the size computed from a reduced frame can
+	// differ from the one computed from the source by a pixel.
+	width, height int
 }
 
 type outputKind int
@@ -58,11 +69,29 @@ type encodeOutput struct {
 	path string
 }
 
-// resizeFilter is the resampling filter of every resize. ImageMagick's own
-// default depends on the image it is handed (Lanczos, but Mitchell for one
-// with a palette or an alpha channel), which would make the output depend on
-// the route the pixels took to the encode.
-const resizeFilter = "Lanczos"
+// resizeFilter is the resampling filter of a resize.
+type resizeFilter string
+
+const (
+	// filterLanczos is the filter of a frame whose source is opaque
+	// truecolour, including video. It is the zero filter of encodeFrame.
+	filterLanczos resizeFilter = "Lanczos"
+	// filterMitchell is the filter of a frame whose source is palette-based
+	// or declares alpha: Lanczos rings beside hard alpha edges and makes
+	// such graphics larger.
+	filterMitchell resizeFilter = "Mitchell"
+)
+
+// filterFor returns the filter for a source frame that is palette-based or
+// declares alpha when soft is set. It is ImageMagick's own default rule, read
+// from what the source file declares rather than from the intermediate a path
+// hands ImageMagick, so every route a file can take picks the same filter.
+func filterFor(soft bool) resizeFilter {
+	if soft {
+		return filterMitchell
+	}
+	return filterLanczos
+}
 
 // fitExpr returns the width and height of the output as ImageMagick fx
 // expressions of the size of the image they are evaluated on, which are
@@ -108,7 +137,6 @@ type encodedFrame struct {
 // magick filename pattern containing %d.
 func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encodeOutput) []string {
 	args := LimitArgs()
-	width, height := fitExpr(enc.maxEdge, enc.maxArea)
 	grouped := len(frames) > 1
 	for _, f := range frames {
 		if grouped {
@@ -121,29 +149,12 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 			// parentheses and override the delay of a frame read after it.
 			args = append(args, "-set", "delay", strconv.Itoa(f.delayCS))
 		}
-		if src.orientation != "" && src.orientation != "Undefined" {
-			args = append(args, "-orient", src.orientation, "-auto-orient",
-				// -orient also sets the orientation the writers record, which
-				// a PNG would carry on pixels already turned upright.
-				"-orient", "TopLeft")
-		} else {
-			args = append(args, "-auto-orient")
-		}
-		if f.convertTo != "" {
-			if f.assign != "" {
-				args = append(args, "-profile", f.assign)
-			}
-			args = append(args, "-profile", f.convertTo)
-		}
-		if enc.format == JPEG {
-			args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
-		}
-		args = append(args, "-filter", resizeFilter, "-resize", width+"x"+height+"!")
+		args = append(args, frameOps(f, src, enc)...)
 		if grouped {
 			args = append(args, ")")
 		}
 	}
-	args = append(args, "-strip", "-depth", "8", "-quality", strconv.Itoa(enc.quality))
+	args = append(args, encodeTail(enc)...)
 	switch out.kind {
 	case outputStill, outputAnimation:
 		args = append(args, "-write", out.path)
@@ -151,6 +162,85 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 		args = append(args, "+adjoin", "-scene", "0", "-write", out.path)
 	}
 	return append(args, "-format", encodeFormat, "info:")
+}
+
+// frameOps are the operators applied to a frame once it is read: orientation,
+// conversion to sRGB, flattening for JPEG and the resize.
+func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
+	var args []string
+	if src.orientation != "" && src.orientation != "Undefined" {
+		args = append(args, "-orient", src.orientation, "-auto-orient",
+			// -orient also sets the orientation the writers record, which
+			// a PNG would carry on pixels already turned upright.
+			"-orient", "TopLeft")
+	} else {
+		args = append(args, "-auto-orient")
+	}
+	if f.convertTo != "" {
+		if f.assign != "" {
+			args = append(args, "-profile", f.assign)
+		}
+		args = append(args, "-profile", f.convertTo)
+	}
+	if enc.format == JPEG {
+		args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
+	}
+	if f.fits {
+		return args
+	}
+	width, height := fitExpr(enc.maxEdge, enc.maxArea)
+	if src.width > 0 && src.height > 0 {
+		width, height = strconv.Itoa(src.width), strconv.Itoa(src.height)
+	}
+	filter := f.filter
+	if filter == "" {
+		filter = filterLanczos
+	}
+	return append(args, "-filter", string(filter), "-resize", width+"x"+height+"!")
+}
+
+// encodeTail are the operators that follow the last frame: metadata is
+// stripped after the conversion that needed it, and the output is written at
+// 8 bits per channel whatever the depth of the source.
+func encodeTail(enc encoding) []string {
+	return []string{"-strip", "-depth", "8", "-quality", strconv.Itoa(enc.quality)}
+}
+
+// fusedTarget is one output of a fusedArgs run.
+type fusedTarget struct {
+	frame encodeFrame
+	enc   encoding
+	path  string
+	// width and height, when both are set, are the exact output size.
+	width, height int
+}
+
+// source is src with the exact size of the target.
+func (t fusedTarget) source(src encodeSource) encodeSource {
+	src.width, src.height = t.width, t.height
+	return src
+}
+
+// fusedArgs returns the arguments of the one magick run that decodes a still
+// once and writes every target, each from its own clone of the decoded image,
+// and reports one encodedFrame line per target in order. readOps are applied
+// to the read, before any target (a decode size hint). Each target's frame
+// input is the decode reference, and the result starts with LimitArgs.
+//
+// A single target needs no clone.
+func fusedArgs(readOps []string, src encodeSource, targets []fusedTarget) []string {
+	args := append(LimitArgs(), readOps...)
+	args = append(args, targets[0].frame.input)
+	for _, t := range targets {
+		ops := append(frameOps(t.frame, t.source(src), t.enc), encodeTail(t.enc)...)
+		ops = append(ops, "-write", t.path, "-format", encodeFormat)
+		if len(targets) == 1 {
+			return append(append(args, ops...), "info:")
+		}
+		args = append(args, "(", "+clone")
+		args = append(append(args, ops...), "-write", "info:", "+delete", ")")
+	}
+	return append(args, "null:")
 }
 
 // parseEncoded reads the report of an encode run.

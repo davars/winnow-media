@@ -1,13 +1,9 @@
 package media
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -146,356 +142,54 @@ func displayDelayCS(delay int) int {
 
 // EncodeRung encodes inputPath as a WebP at rung and returns the staged
 // artifact, its canvas size and the frame mapping the artifact actually
-// holds. sourceFrames is ProbeFrames' result for inputPath; mimeType keys the
-// coder fallback ("" disables it); quality is the WebP quality; profilePath
-// is the sRGB destination profile, with "" meaning the package's own, and is
-// read only when a frame carries an ICC profile; orient, when set, is a
-// magick orientation name that replaces the orientation the file carries, in
-// a still or an animation alike.
+// holds. It is Open, Source.Encode of the rung's frames and Close.
+// sourceFrames is ProbeFrames' result for inputPath, used only to check an
+// animation's frame count; mimeType keys the coder fallback ("" disables it);
+// quality is the WebP quality; profilePath, when not empty, is the sRGB
+// destination profile in place of the package's own; orient, when set, is a
+// magick orientation name that replaces the orientation the file carries.
 //
-// The output is upright, sized by fitSize to the rung's ceiling on its longest
-// side and never upscaled, converted to sRGB when its source carries an ICC
-// profile, and free of metadata.
+// animated says what the caller treats the file as. A still (animated false)
+// is the first image of the file, as Hints.Still; an animation of more than
+// one frame must be a GIF or a WebP, else the error wraps ErrUnsupportedType.
+// Everything else, the sizing, the caps and the staging, is as Open and
+// Source.Encode say. Env.Scratch is required.
 //
-// An animation is read from its headers first, as AnimationFrames reads one,
-// and refused with an error wrapping ErrTooLarge, before anything is decoded,
-// when its frame count, a frame's size or the pixels to decode exceed the
-// caps; sourceFrames must describe those headers. An animation of more than
-// one frame must be a GIF or a WebP, and its selected frames are composited
-// outside ImageMagick, which receives only those frames, one full canvas
-// each: the scratch space is about four bytes per pixel of the canvas for each
-// selected frame, in the directory of the staged artifact, and the compositing
-// of a GIF runs in this process. A frame's embedded ICC profile is honoured, a
-// WebP is composited by the webp-frames tool, which Env.Run must be able to
-// run, and the encode keeps each frame's stored delay. A still, or a one-frame
-// file that is neither a GIF nor a WebP, is not refused for its size.
-//
-// The artifact is created through Env.Stage. The caller owns it via
-// cleanupFn and decides, from its size, whether to publish it or drop it and
-// try the next rung. On error the staged file is already removed.
+// The caller owns the artifact via cleanupFn and decides, from its size,
+// whether to publish it or drop it and try the next rung. On error the staged
+// file is already removed.
 func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 	animated bool, rung Rung, sourceFrames []FrameInfo, profilePath, orient string, quality int,
 ) (outputPath string, cleanupFn func(), width, height int, frames []Frame, err error) {
+	orientation, err := orientationNumber(orient)
+	if err != nil {
+		return "", nil, 0, 0, nil, err
+	}
+	budget := max(1, rung.MaxFrames)
+	hints := Hints{MediaType: mimeType, Orientation: orientation, Still: !animated}
+	if animated {
+		hints.Frames = budget
+	}
+	src, err := e.Open(ctx, inputPath, hints)
+	if err != nil {
+		return "", nil, 0, 0, nil, err
+	}
+	defer src.Close()
+	if n := len(src.layout.infos); animated && len(sourceFrames) != n {
+		return "", nil, 0, 0, nil, fmt.Errorf("source frames (%d) differ from the headers of the file (%d); they must come from ProbeFrames of the same file",
+			len(sourceFrames), n)
+	}
+	src.destination = profilePath
 	enc := encoding{
 		format: WebP, ext: ".webp", quality: quality,
 		maxEdge: rung.CeilingPx, maxArea: rung.CeilingPx * rung.CeilingPx,
 	}
-	if !animated {
-		profiled := len(sourceFrames) > 0 && sourceFrames[0].hasICC
-		outputPath, cleanupFn, width, height, err = e.encodeStill(
-			ctx, inputPath, mimeType, enc, profilePath, profiled, orient)
-		if err != nil {
-			return "", nil, 0, 0, nil, fmt.Errorf("encoding still: %w", err)
-		}
-		return outputPath, cleanupFn, width, height, []Frame{{SourceFrame: 0, SourceTimeMS: 0}}, nil
-	}
-	kind, _ := sniffFile(inputPath)
-	var layout animationLayout
-	switch kind {
-	case typeGIF, typeWebP:
-		dec := decoder{"magick", "gif"}
-		if kind == typeWebP {
-			dec.name = "webp"
-		}
-		if layout, err = e.readAnimation(ctx, dec, inputPath); err != nil {
-			return "", nil, 0, 0, nil, err
-		}
-		if err := checkFramesAgree(sourceFrames, layout.infos); err != nil {
-			return "", nil, 0, 0, nil, err
-		}
-	}
-	return e.encodeAnimation(ctx, inputPath, mimeType, kind, layout, rung, enc, sourceFrames, profilePath, orient)
-}
-
-// checkFramesAgree requires the frames the caller passed to be those the
-// header read found.
-func checkFramesAgree(given, read []FrameInfo) error {
-	if !slices.Equal(given, read) {
-		return fmt.Errorf("source frames (%d) differ from the headers of the file (%d); they must come from ProbeFrames of the same file",
-			len(given), len(read))
-	}
-	return nil
-}
-
-// encodeAnimation samples, deduplicates and encodes one animation rung.
-//
-// Two magick passes over the same frames. The first reports, per selected
-// frame, the signature of the pixels that will actually be encoded (taken
-// after the resize, since two frames differing only in fine detail can become
-// identical once downscaled). The second encodes. A one-frame selection has
-// nothing to deduplicate and skips the first.
-//
-// The dedup between them exists because magick's WebP writer collapses runs
-// of identical consecutive frames and no -define prevents it: a four-frame
-// GIF of one repeated image encodes to a one-scene WebP. Left alone that
-// yields a mapping promising four frames against an artifact holding one, so
-// an index into the artifact would resolve to a source frame the artifact
-// does not hold. Non-consecutive duplicates survive the writer, so dropping
-// only consecutive repeats is both sufficient and minimal.
-//
-// The scene-count check after the encode, not the dedup, is the guarantee —
-// an unmodelled encoder behavior must never reach a persisted mapping. The
-// dedup is what keeps the check from firing on the common case.
-//
-// The mapping is read off the probe's rows, one per selected frame in order,
-// rather than recomputed from the selection, so it records the frames the
-// encode keeps rather than the frames the selection meant it to keep.
-//
-// A one-frame animation is read whole by ImageMagick, which holds that one
-// frame either way. Any other is composited by composeSelected.
-func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType, kind string, layout animationLayout,
-	rung Rung, enc encoding, sourceFrames []FrameInfo, profilePath, orient string,
-) (outputPath string, cleanupFn func(), width, height int, frames []Frame, err error) {
-	sourceFrameCount := len(sourceFrames)
-	n := frameCount(rung.MaxFrames, sourceFrameCount, true)
-	selected := selectFrames(n, sourceFrameCount)
-	profiled, err := selectedProfiled(sourceFrames, selected)
+	out, err := src.encode(ctx, budget, []encoding{enc})
 	if err != nil {
 		return "", nil, 0, 0, nil, err
 	}
-	outputPath, cleanupFn, err = e.Stage(".webp")
-	if err != nil {
-		return "", nil, 0, 0, nil, err
-	}
-	fail := func(err error) (string, func(), int, int, []Frame, error) {
-		cleanupFn()
-		return "", nil, 0, 0, nil, err
-	}
-	scratch, err := os.MkdirTemp(filepath.Dir(outputPath), ".rung-frames-*")
-	if err != nil {
-		return fail(err)
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-
-	// The compositors write frames without a tag, so a composited animation
-	// carries the header's orientation; a frame read whole keeps its own tag.
-	src := encodeSource{orientation: orient}
-	if sourceFrameCount > 1 {
-		src.orientation = cmp.Or(orient, layout.orientation)
-	}
-
-	// destination is the sRGB profile the frames that carry one convert to.
-	var destination string
-	needsDestination := profiled
-	var composed []composedFrame
-	runMIME := mimeType
-	if sourceFrameCount > 1 {
-		composed, err = e.composeSelected(ctx, kind, inputPath, scratch, layout, selected)
-		if err != nil {
-			return fail(fmt.Errorf("compositing selected frames: %w", err))
-		}
-		needsDestination = slices.ContainsFunc(composed, func(f composedFrame) bool { return f.profile > 0 })
-		// The frames are read by an explicit coder, so there is no sniffing to
-		// fall back from.
-		runMIME = ""
-	}
-	if destination, err = rungDestination(scratch, profilePath, needsDestination); err != nil {
-		return fail(err)
-	}
-
-	// framesAt returns the frames at positions of the selection.
-	framesAt := func(coder string, positions []int) []encodeFrame {
-		if composed == nil {
-			input := inputPath
-			if coder != "" {
-				input = coder + ":" + input
-			}
-			f := encodeFrame{input: input, prelude: []string{"-coalesce"}, delayCS: -1}
-			if profiled {
-				f.convertTo = destination
-			}
-			return []encodeFrame{f}
-		}
-		fs := make([]encodeFrame, len(positions))
-		for i, position := range positions {
-			c := composed[position]
-			fs[i] = encodeFrame{input: "pam:" + c.path, delayCS: sourceFrames[selected[position]].delayCS}
-			if c.profile > 0 {
-				fs[i].convertTo = destination
-				fs[i].assign = filepath.Join(scratch, composedProfileName(c.profile))
-			}
-		}
-		return fs
-	}
-
-	kept := []int{0}
-	if len(selected) > 1 {
-		all := make([]int, len(selected))
-		for i := range all {
-			all[i] = i
-		}
-		out, err := e.RunMagickWithCoderFallback(ctx, runMIME, func(coder string) []string {
-			return encodeArgs(framesAt(coder, all), src, enc, encodeOutput{kind: outputProbe})
-		})
-		if err != nil {
-			return fail(fmt.Errorf("probing selected frames: %w", err))
-		}
-		probed, err := parseEncoded(out)
-		if err != nil {
-			return fail(err)
-		}
-		if len(probed) != len(selected) {
-			return fail(fmt.Errorf("frame selection probe returned %d frames, want %d", len(probed), len(selected)))
-		}
-		kept = make([]int, 0, len(probed))
-		lastSig := ""
-		for i, frame := range probed {
-			if i > 0 && frame.signature == lastSig {
-				continue
-			}
-			kept = append(kept, i)
-			lastSig = frame.signature
-		}
-	}
-
-	if _, err := e.RunMagickWithCoderFallback(ctx, runMIME, func(coder string) []string {
-		return encodeArgs(framesAt(coder, kept), src, enc, encodeOutput{kind: outputAnimation, path: outputPath})
-	}); err != nil {
-		return fail(fmt.Errorf("encoding animation: %w", err))
-	}
-
-	scenes, w, h, err := e.IdentifyArtifact(ctx, outputPath)
-	if err != nil {
-		return fail(err)
-	}
-	if scenes != len(kept) {
-		return fail(fmt.Errorf("encoded artifact holds %d scenes, mapping describes %d", scenes, len(kept)))
-	}
-
-	timestamps := timestamps(frameDelays(sourceFrames))
-	frames = make([]Frame, 0, len(kept))
-	for _, position := range kept {
-		sourceFrame := selected[position]
-		if sourceFrame < 0 || sourceFrame >= len(timestamps) {
-			return fail(fmt.Errorf("probe reported source frame %d outside the %d-frame source", sourceFrame, len(timestamps)))
-		}
-		frames = append(frames, Frame{SourceFrame: sourceFrame, SourceTimeMS: timestamps[sourceFrame]})
-	}
-	return outputPath, cleanupFn, w, h, frames, nil
-}
-
-// rungDestination returns the sRGB profile a rung converts to: profilePath
-// when given, otherwise the package's own, written into scratch. It returns
-// "" when no frame needs one.
-func rungDestination(scratch, profilePath string, needed bool) (string, error) {
-	if !needed {
-		return "", nil
-	}
-	if profilePath != "" {
-		return profilePath, nil
-	}
-	return placeSRGB(scratch)
-}
-
-// composedFrame is a selected frame written as a full-canvas PAM file, and
-// the id of the ICC profile it carries, 0 for none.
-type composedFrame struct {
-	path    string
-	profile int
-}
-
-// composeSelected composites the selected frames of the GIF or WebP at
-// inputPath, as -coalesce would, and writes each as a PAM file in dir. The
-// compositing of a GIF is done in this process, which a failure in cannot
-// bring down; that of a WebP by the webp-frames tool. Both refuse a file whose
-// frames or canvas differ from layout, the header read.
-func (e Env) composeSelected(ctx context.Context, kind, inputPath, dir string, layout animationLayout, selected []int) (composed []composedFrame, err error) {
-	cw, ch := layout.cw, layout.ch
-	own := make([]bool, len(layout.infos))
-	for i, f := range layout.infos {
-		own[i] = f.hasICC
-	}
-	sourceFrames := layout.infos
-	switch kind {
-	case typeGIF:
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("gif compositor panic: %v", r)
-			}
-		}()
-		job := gifJob{
-			path: inputPath, dir: dir, frames: len(sourceFrames), width: cw, height: ch,
-			mask: ownMask(own), selected: selected,
-		}
-		err = job.run(ctx, nil, func(ordinal, profile int) error {
-			composed = append(composed, composedFrame{path: filepath.Join(dir, gifSampleName(ordinal)), profile: profile})
-			return nil
-		})
-	case typeWebP:
-		req := composeRequest{
-			path: inputPath, dir: dir, selected: selected, inFlight: len(selected),
-			frames: len(sourceFrames), width: cw, height: ch, external: webpFramesTool, consumeTimeout: composeTimeout,
-		}
-		var res Result
-		if res, err = e.Run(ctx, webpFramesTool, req.externalArgs()...); err != nil {
-			return nil, err
-		}
-		lines := &frameLines{dir: dir, onFrame: func(path string, profile int) error {
-			composed = append(composed, composedFrame{path: path, profile: profile})
-			return nil
-		}}
-		_, err = lines.Write(res.Stdout)
-	default:
-		return nil, fmt.Errorf("cannot composite an animation of type %q", kind)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if len(composed) != len(selected) {
-		return nil, fmt.Errorf("composited %d of %d frames", len(composed), len(selected))
-	}
-	return composed, nil
-}
-
-// encodeStill encodes the first frame of inputPath as one WebP at enc in one
-// magick run that decodes, orients, converts, resizes and writes it and
-// reports the size it wrote. The decode falls back to the coder CoderForMIME
-// names for mimeType when the bare read fails.
-//
-// The caller owns the returned staging file via cleanupFn; on error the
-// staging file is already removed.
-func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, enc encoding, profilePath string, profiled bool, orient string) (outputPath string, cleanupFn func(), width, height int, err error) {
-	outputPath, cleanupFn, err = e.Stage(".webp")
-	if err != nil {
-		return "", nil, 0, 0, err
-	}
-	fail := func(err error) (string, func(), int, int, error) {
-		cleanupFn()
-		return "", nil, 0, 0, err
-	}
-	destination := ""
-	if profiled {
-		if destination = profilePath; destination == "" {
-			scratch, err := os.MkdirTemp(filepath.Dir(outputPath), ".rung-still-*")
-			if err != nil {
-				return fail(err)
-			}
-			defer func() { _ = os.RemoveAll(scratch) }()
-			if destination, err = placeSRGB(scratch); err != nil {
-				return fail(err)
-			}
-		}
-	}
-
-	out, err := e.RunMagickWithCoderFallback(ctx, mimeType, func(coder string) []string {
-		input := inputPath + "[0]"
-		if coder != "" {
-			input = coder + ":" + input
-		}
-		return encodeArgs([]encodeFrame{{input: input, convertTo: destination}},
-			encodeSource{orientation: orient}, enc, encodeOutput{kind: outputStill, path: outputPath})
-	})
-	if err != nil {
-		return fail(err)
-	}
-	encoded, err := parseEncoded(out)
-	if err != nil {
-		return fail(err)
-	}
-	if len(encoded) != 1 {
-		return fail(fmt.Errorf("still encode produced %d scenes, want 1", len(encoded)))
-	}
-	return outputPath, cleanupFn, encoded[0].width, encoded[0].height, nil
+	a := out[0]
+	return a.Path, a.Cleanup, a.Width, a.Height, a.Frames, nil
 }
 
 // FrameInfo is the header-only metadata needed before a rung decodes
@@ -576,8 +270,7 @@ func frameDelays(frames []FrameInfo) []int {
 	return delays
 }
 
-// AnyProfiled reports whether any frame carries an ICC profile, which is when
-// EncodeRung may read profilePath.
+// AnyProfiled reports whether any frame carries an ICC profile.
 func AnyProfiled(frames []FrameInfo) bool {
 	for _, frame := range frames {
 		if frame.hasICC {
@@ -585,26 +278,4 @@ func AnyProfiled(frames []FrameInfo) bool {
 		}
 	}
 	return false
-}
-
-// selectedProfiled returns the one color policy shared by every
-// selected animation scene. A mixed selection cannot safely use one list-wide
-// ImageMagick -profile operator: it would convert tagged scenes but assign the
-// RGB destination profile to untagged scenes.
-func selectedProfiled(frames []FrameInfo, selected []int) (bool, error) {
-	profiled, unprofiled := false, false
-	for _, sourceFrame := range selected {
-		if sourceFrame < 0 || sourceFrame >= len(frames) {
-			return false, fmt.Errorf("selected source frame %d outside the %d-frame source", sourceFrame, len(frames))
-		}
-		if frames[sourceFrame].hasICC {
-			profiled = true
-		} else {
-			unprofiled = true
-		}
-	}
-	if profiled && unprofiled {
-		return false, fmt.Errorf("selected animation frames mix embedded ICC profiles with unprofiled pixels")
-	}
-	return profiled, nil
 }

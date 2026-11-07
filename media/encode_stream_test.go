@@ -16,6 +16,7 @@ import (
 
 // stagedEnv is real with a Stage that creates files in dir.
 func stagedEnv(real Env, dir string) Env {
+	real.Scratch = testScratch
 	real.Stage = func(ext string) (string, func(), error) {
 		f, err := os.CreateTemp(dir, "*"+ext)
 		if err != nil {
@@ -100,23 +101,26 @@ func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
 	}
 }
 
-// A one-frame animation is read whole: ImageMagick holds one frame either way.
-func TestEncodeRungReadsAOneFrameAnimationWhole(t *testing.T) {
+// A one-frame GIF is composited like any other: the type decides the decoder,
+// not the frame count.
+func TestEncodeRungCompositesAOneFrameGIF(t *testing.T) {
 	real := requireMagick(t)
 	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
 	if _, mapping, err := rungArgs(t, env, path, "image/gif", 16); err != nil || len(mapping) != 1 {
 		t.Fatalf("mapping %v, err %v", mapping, err)
 	}
+	composited := false
 	for _, call := range calls() {
-		if slices.Contains(call, "-coalesce") && !slices.Contains(call, path) {
-			t.Errorf("a whole-file run does not name the file: %q", call)
+		if slices.Contains(call, "-coalesce") {
+			t.Errorf("a one-frame GIF was read whole: %q", call)
 		}
 		for _, a := range call {
-			if strings.HasPrefix(a, "pam:") {
-				t.Errorf("a one-frame animation was composited: %q", call)
-			}
+			composited = composited || strings.HasPrefix(a, "pam:")
 		}
+	}
+	if !composited {
+		t.Error("the one-frame GIF was not composited")
 	}
 }
 
@@ -474,29 +478,6 @@ func TestEncodeRungRefusesFramesThatDifferFromTheHeaders(t *testing.T) {
 	}
 }
 
-// Only a GIF or a WebP is composited; any other animation is an error and not
-// a whole-file read.
-func TestEncodeRungRefusesToCompositeOtherFormats(t *testing.T) {
-	real := requireMagick(t)
-	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
-	tiff := filepath.Join(t.TempDir(), "multi.tif")
-	magick(t, real, "-size", "8x8", "xc:red", "-size", "8x8", "xc:blue", tiff)
-	frames, err := env.ProbeFrames(context.Background(), tiff, "image/tiff")
-	if err != nil || len(frames) != 2 {
-		t.Fatalf("%d frames, err %v", len(frames), err)
-	}
-	before := len(calls())
-	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), tiff, "image/tiff",
-		true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
-	if err == nil {
-		cleanup()
-		t.Fatal("a TIFF was encoded as an animation")
-	}
-	if n := len(calls()) - before; n != 0 {
-		t.Errorf("%d tool runs: %q", n, calls()[before:])
-	}
-}
-
 // A compositor that reports fewer frames than were selected, or a probe that
 // reports fewer rows, is an error and not a short mapping.
 func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
@@ -626,5 +607,137 @@ func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
 		if d := meanAbsoluteDifference(t, real, filepath.Join(got, name), filepath.Join(want, name)); d > 0.004 {
 			t.Errorf("frame %d differs from the whole-file conversion by %.6f", i, d)
 		}
+	}
+}
+
+// A GIF whose ICC extension precedes only its first frame is profiled on
+// every coalesced frame, which the compositors handle per frame. The
+// operation accepts it; EncodeRung, which composites the same way, must too.
+func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
+	real := requireMagick(t)
+	p := requireProcessor(t)
+	dir := t.TempDir()
+	profiled := filepath.Join(dir, "profiled.png")
+	magick(t, real, "-size", "8x8", "xc:red", "-profile", writeSRGBProfile(t), profiled)
+	gifPath := filepath.Join(dir, "anim.gif")
+	magick(t, real, "-delay", "7", profiled, "-size", "8x8", "xc:blue", "-size", "8x8", "xc:green", gifPath)
+	path := renameToContent(t, gifPath)
+
+	if _, _, err := p.AnimationFrames(context.Background(), path, Encoding{}, 3, t.TempDir()); err != nil {
+		t.Fatalf("AnimationFrames refused the file: %v", err)
+	}
+
+	env := stagedEnv(real, t.TempDir())
+	frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 3 || !frames[0].hasICC || frames[1].hasICC {
+		t.Fatalf("ProbeFrames = %+v, want a profile on the first frame only", frames)
+	}
+	_, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), path, "image/gif",
+		true, Rung{CeilingPx: 64, MaxFrames: 3}, frames, writeSRGBProfile(t), "", testQuality)
+	if err != nil {
+		t.Fatalf("EncodeRung refused the file the operation accepts: %v", err)
+	}
+	defer cleanup()
+	if len(mapping) != 3 {
+		t.Errorf("mapping %v, want 3 frames", mapping)
+	}
+}
+
+// A one-frame animation has nothing to deduplicate: the selection probe exists
+// to drop consecutive duplicate frames, and one frame has no neighbour. The
+// encode is the only pixel pass such a file needs.
+func TestEncodeRungDoesNotProbeAOneFrameAnimation(t *testing.T) {
+	real := requireMagick(t)
+	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
+	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
+	if _, mapping, err := rungArgs(t, env, path, "image/gif", 16); err != nil || len(mapping) != 1 {
+		t.Fatalf("mapping %v, err %v", mapping, err)
+	}
+	var pixelRuns [][]string
+	for _, call := range calls() {
+		if call[0] == "magick" && !slices.Contains(call, "identify") {
+			pixelRuns = append(pixelRuns, call)
+		}
+	}
+	if len(pixelRuns) != 1 {
+		t.Errorf("a one-frame animation was decoded %d times, want once (the encode): %q", len(pixelRuns), pixelRuns)
+	}
+}
+
+// A multi-frame file the pipeline cannot composite is refused, as
+// AnimationFrames refuses it, with ErrUnsupportedType naming the type found
+// and before any pixel is decoded.
+func TestEncodeRungRefusesOtherFormatsAsAnimationFramesDoes(t *testing.T) {
+	real := requireMagick(t)
+	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
+	tiff := filepath.Join(t.TempDir(), "multi.tif")
+	magick(t, real, "-size", "8x8", "xc:red", "-size", "8x8", "xc:blue", tiff)
+	frames, err := env.ProbeFrames(context.Background(), tiff, "image/tiff")
+	if err != nil || len(frames) != 2 {
+		t.Fatalf("%d frames, err %v", len(frames), err)
+	}
+	before := len(calls())
+	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), tiff, "image/tiff",
+		true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
+	if err == nil {
+		cleanup()
+		t.Fatal("a TIFF was encoded as an animation")
+	}
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("err = %v, want ErrUnsupportedType", err)
+	}
+	if strings.Contains(err.Error(), `""`) {
+		t.Errorf("err = %v, names no type", err)
+	}
+	for _, call := range calls()[before:] {
+		if !slices.Contains(call, "identify") {
+			t.Errorf("a pixel run before the refusal: %q", call)
+		}
+	}
+	// The same file as a still is its first page.
+	_, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), tiff, "image/tiff",
+		false, Rung{CeilingPx: 64, MaxFrames: 1}, frames, "", "", testQuality)
+	if err != nil || len(mapping) != 1 {
+		t.Fatalf("still of a multi-page TIFF: mapping %v, err %v", mapping, err)
+	}
+	cleanup()
+}
+
+// A profiled still gets its sRGB destination from the profile the package
+// embeds when the caller supplies no file, as a composited animation does.
+func TestEncodeRungStillWithoutProfilePathUsesTheEmbeddedProfile(t *testing.T) {
+	var encodes [][]string
+	env := stagedEnv(Env{Run: func(_ context.Context, _ string, args ...string) (Result, error) {
+		if slices.Contains(args, "identify") {
+			return Result{Stdout: []byte("0|icc|64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
+		}
+		encodes = append(encodes, args)
+		return Result{Stdout: []byte("sig|64|64\n")}, nil
+	}}, t.TempDir())
+	path := writeFile(t, "content", []byte("not a recognised type"))
+	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "", false,
+		Rung{CeilingPx: 64, MaxFrames: 1}, []FrameInfo{{hasICC: true}}, "", "", testQuality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if len(encodes) != 1 {
+		t.Fatalf("encodes = %q, want one", encodes)
+	}
+	profiles := 0
+	for i, a := range encodes[0] {
+		if a != "-profile" {
+			continue
+		}
+		profiles++
+		if i+1 >= len(encodes[0]) || encodes[0][i+1] == "" {
+			t.Fatalf("encode passes -profile without a destination: %q", encodes[0])
+		}
+	}
+	if profiles != 1 {
+		t.Fatalf("encode = %q, want one -profile conversion", encodes[0])
 	}
 }

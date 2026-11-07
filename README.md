@@ -28,33 +28,69 @@ lines and interprets their output. Apart from the operations below, it does
 not run programs itself: the caller supplies an `Env`, so it decides how tools
 are resolved, limited and cancelled, and where scratch files live.
 
-- `Env{Run, Stage}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
+- `Env{Run, Stage, Scratch}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
   (Result, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
   A `Result` holds the tool's `Stdout` and a `*Usage` (CPU time, peak RSS in
   bytes) that is nil when the runner cannot measure it; `UsageOf` builds one
   from an exited `*os.ProcessState`.
   `Stage` is a `Stager` that creates an empty scratch file whose name ends in
   an extension (`".webp"`) and returns its path and a cleanup function.
-- Bounded WebP encodes: `Env.ProbeFrames` reads each scene's delay and
-  ICC flag from the headers, so a still of any size is accepted. The profile
-  of a single-frame WebP is found in its RIFF chunk list when the layout
-  settles it and by one decode otherwise, and a single-frame JXL is always
-  decoded once for it (libjxl gives every JXL a profile); those decodes are
-  bounded by `LimitArgs` only, not by the frame caps. A GIF or WebP of more
-  than one frame is refused with `ErrTooLarge` over the
-  frame-size, frame-count and decoded-pixel caps above. `Ladder` lists the
-  fallback rungs (frames are spent before resolution). `Env.EncodeRung`
-  encodes one rung as a WebP, still or animation, and returns the frame
-  mapping the artifact holds. The output is upright (the caller's `orient`
-  replaces the file's orientation, in an animation as in a still), sized by
-  the one rule of the next section with the rung's ceiling as the longest side,
-  converted to sRGB when the source carries an ICC profile, free of metadata
-  and made under the resource limits. It composites an animation's selected
-  frames itself (a GIF in process, a WebP with `webp-frames`, which `Env.Run`
-  must be able to run) and gives ImageMagick only those frames, at about four
-  bytes of scratch space per pixel of canvas for each, so what ImageMagick
-  holds does not grow with the length of the animation; it applies the
-  animation caps to the frames it is given.
+  `Scratch` is a `Scratcher` that creates a new empty directory for decoded
+  frames and returns it with a cleanup function; `Open` and `EncodeRung`
+  require it.
+- Decode once, encode many: `Env.Open(ctx, path, Hints)` reads a file's
+  headers, applies the caps and selects its frames; `Source.Encode(ctx,
+  maxFrames, targets...)` writes one WebP, PNG or JPEG per `Encoding` through
+  `Env.Stage` and returns an `Artifact` for each (path, cleanup, measured size
+  and the frame mapping that artifact holds); `Source.EncodeFrames` writes one
+  file per frame into a directory; `Source.Frames` and
+  `Source.Close` complete it. `Hints` carry the coder-fallback key for an
+  extensionless TGA, ICO, CUR or G3, an orientation (EXIF 1-8) that replaces
+  the file's own, the number of frames to select from an animation (0 for
+  every frame) and `Still`, which selects the first image of an image file
+  and excludes `Frames`.
+  The decoder is chosen by the file's type and structure, never by its frame
+  count:
+
+  | Source | Decoder |
+  |---|---|
+  | GIF, any number of frames | the Go compositor, in this process |
+  | WebP with the VP8X animation flag, any number of frames | `webp-frames`, which `Env.Run` must be able to run |
+  | any other image | ImageMagick, in the same run as the encode (`[0]`) |
+
+  A still is never written out: one ImageMagick run decodes it and writes
+  every target, each from a clone of the decoded image, so a source costs one
+  decode however many targets it has. The frames of a GIF or animated WebP
+  are composited onto their canvas into `Env.Scratch` by `Open`, where every
+  `Encode` reads them (about four bytes per pixel of the canvas for each
+  selected frame); the GIF compositor stops after the last selected frame.
+  `maxFrames` of `Encode` selects, evenly spaced from the first, that many of
+  the frames `Open` selected (all of them for 0); when each rung's
+  count divides the count `Open` selected (a halving ladder from 12, 16, 20,
+  24 or 32 does; one from 14 or 18 does not), that is the source frames the
+  rung selects of the whole file.
+  Each `Encode` drops the consecutive frames that are equal at its own size
+  and returns its own mapping. A file of several images that is neither a GIF
+  nor a WebP is refused with `ErrUnsupportedType` unless `Hints.Still` is set;
+  a video file is always refused.
+  A JPEG is decoded at a reduced size (`-define jpeg:size`) when the largest
+  target is far smaller: the smallest eighth of the stored size that covers
+  twice every target in both dimensions. The output size is then computed in
+  Go from the headers' size and orientation (`fitSize`), because
+  ImageMagick would round each side of the reduced frame separately.
+- `Env.ProbeFrames` reads each scene's delay and ICC flag from the headers,
+  so a still of any size is accepted. The profile of a single-frame WebP is
+  found in its RIFF chunk list when the layout settles it and by one decode
+  otherwise, and a single-frame JXL is always decoded once for it (libjxl
+  gives every JXL a profile); those decodes are bounded by `LimitArgs` only,
+  not by the frame caps. A GIF or WebP animation is refused with `ErrTooLarge`
+  over the frame-size, frame-count and decoded-pixel caps above. `Ladder`
+  lists the fallback rungs (frames are spent before resolution).
+  `Env.EncodeRung` is `Open`, `Encode` of one rung as a WebP, still or
+  animation, and `Close`, and returns the frame mapping the artifact holds.
+  `animated` false makes the file a still (`Hints.Still`). The caller's `orient`
+  replaces the file's orientation, in an animation as in a still, and a
+  `profilePath` replaces the package's own sRGB profile.
   `Env.IdentifyArtifact` is the post-encode scene and size check, read from
   headers.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
@@ -97,8 +133,9 @@ tools itself because the input is untrusted:
     tool: the executable started again like `Init`'s helper, under the same
     limits and filter. It checks the block structure first (frame count, every
     frame inside the logical screen), decodes the frames, composites
-    them one canvas at a time as ImageMagick's `-coalesce` does, and writes each
-    selected frame as an uncompressed PAM file. It waits for the files to be
+    them one canvas at a time as ImageMagick's `-coalesce` does, stops after the
+    last selected frame, and writes each selected frame as an uncompressed PAM
+    file. It waits for the files to be
     encoded before writing more, so the output directory holds about one batch.
     ImageMagick encodes the frames a batch per run (at most 16 million input
     pixels, about 256 MiB), resizing, flattening on white for JPEG and
@@ -123,9 +160,9 @@ tools itself because the input is untrusted:
     does not grow with the number of frames. The file's ICC profile, if it has
     one, is written like a GIF's, assigned to the frames and converted to sRGB;
     ImageMagick's own decode of an animated WebP ignores it, as it ignores the
-    EXIF orientation, so an oriented animation is output as stored. A still
-    WebP, and an animated one ImageMagick reads as a single image, are read by
-    ImageMagick as before. Against `-coalesce` the pixels are identical except
+    EXIF orientation, so an oriented animation is output as stored; this is why a
+    WebP with the animation flag always goes through it, even with one frame.
+    A WebP without the flag is a still, read by ImageMagick. Against `-coalesce` the pixels are identical except
     where frames are blended over earlier content (blending without disposal),
     which differs by at most 1 level of alpha, 1 or 2 of colour where the
     result is opaque and 2 where it is partly transparent; and canvas no frame
@@ -288,9 +325,19 @@ bounds with the source's aspect ratio, each side rounded down (a 4000x3001
 image at `MaxEdge` 2048 is 2048x1536). ImageMagick works it out, from `%[fx:]`
 expressions of the size of the frame after `-auto-orient`, and is asked for it
 exactly (`-resize WxH!`), so it is the size of the picture actually produced
-whatever orientation the file's header does or does not report. The filter is
-Lanczos, set explicitly because ImageMagick's default is Mitchell for an image
-that has a palette or alpha channel. Each frame is oriented and converted
+whatever orientation the file's header does or does not report. The filter follows
+what the source frame declares: Mitchell when it is palette-based (GIF, PNG8)
+or declares alpha (a PNG colour type with alpha or a `tRNS` chunk, WebP alpha,
+a HEIC or AVIF alpha plane), Lanczos for opaque truecolour and video. It is
+ImageMagick's own default rule read from the source file rather than from
+the intermediate a path hands ImageMagick, so a still read directly and the
+same image composited choose alike. The header read reports it for
+ImageMagick stills (a grayscale JPEG or PSD is no palette whatever
+ImageMagick's image class says; TIFF, JPEG 2000, OpenEXR and PCX, whose
+`-ping` read omits alpha or the palette, are read once in full for it when
+an encode resizes), the
+GIF compositor reports it for every frame and `webp-frames` reports the
+file's declared alpha. Each frame is oriented and converted
 inside its own parentheses, so frames of one run may carry different profiles.
 The size of an output is read from the run that wrote it. Every output is
 written at 8 bits per channel, whatever the depth of the source.

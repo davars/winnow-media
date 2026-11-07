@@ -17,7 +17,7 @@
 "300"
 "-ping"
 "-format"
-"%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|END\n"
+"%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|END\n"
 "heic:$IN/input[0]"
 
 "magick"

@@ -23,7 +23,7 @@ type Processor struct {
 	run   Runner
 	// compose runs the frame compositor of a GIF or animated WebP; tests
 	// replace it.
-	compose func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) (*Usage, error)
+	compose func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
 }
 
 // NewProcessor resolves ImageMagick and FFmpeg, checks that the sandbox every
@@ -135,7 +135,7 @@ func (p *Processor) env(m *meter) Env {
 			m.add(res.Usage)
 			return res, err
 		},
-		compose: func(ctx context.Context, req composeRequest, onFrame func(path string, profile int) error) error {
+		compose: func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) error {
 			usage, err := p.compose(ctx, req, onFrame)
 			m.add(usage)
 			return err
@@ -154,6 +154,26 @@ func (m *meter) add(u *Usage) {
 type admitted struct {
 	path, dir string
 	decoder   decoder
+}
+
+// request is the open request of an operation on the admitted input, which
+// decodes into its output directory.
+func (in admitted) request(h Hints, pick func(int) ([]int, error), stream bool) openRequest {
+	return openRequest{
+		path: in.path, hints: h, dec: in.decoder, pinned: true, caps: true,
+		pick: pick, scratch: in.dir, stream: stream,
+	}
+}
+
+// encodeAnimationFrames opens the admitted animation with the frames pick
+// chooses and writes them to its output directory.
+func (e Env) encodeAnimationFrames(ctx context.Context, in admitted, enc encoding, pick func(int) ([]int, error)) ([]Image, error) {
+	src, err := e.open(ctx, in.request(Hints{}, pick, true))
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+	return src.encodeFiles(ctx, enc, in.dir)
 }
 
 // admit checks everything about an operation's input and output directory
@@ -226,7 +246,12 @@ func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir st
 	var m meter
 	env := p.env(&m)
 	images, err := inDir(in.dir, func() ([]Image, error) {
-		img, err := env.still(ctx, in.decoder, in.path, ec, in.dir)
+		src, err := env.open(ctx, in.request(Hints{Still: true}, nil, false))
+		if err != nil {
+			return nil, err
+		}
+		defer src.Close()
+		img, err := src.stillImage(ctx, ec, in.dir)
 		return []Image{img}, err
 	})
 	if err != nil {
@@ -261,9 +286,9 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 	var m meter
 	env := p.env(&m)
 	images, err := inDir(in.dir, func() ([]Image, error) {
-		return env.animationFrames(ctx, in.decoder, in.path, ec, func(sourceFrames int) ([]int, error) {
+		return env.encodeAnimationFrames(ctx, in, ec, func(sourceFrames int) ([]int, error) {
 			return selectFrames(frameCount(frames, sourceFrames, true), sourceFrames), nil
-		}, in.dir)
+		})
 	})
 	if err != nil {
 		return nil, m.usage, fmt.Errorf("animation frames: %w", err)
