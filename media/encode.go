@@ -203,19 +203,6 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 		if err := checkFramesAgree(sourceFrames, layout.infos); err != nil {
 			return "", nil, 0, 0, nil, err
 		}
-	default:
-		// Only a one-frame file is read whole; any other is refused when the
-		// frames are composited.
-		if len(sourceFrames) > 1 {
-			break
-		}
-		scenes, _, err := identifyWithFallback(ctx, e, inputPath, "", mimeType)
-		if err != nil {
-			return "", nil, 0, 0, nil, err
-		}
-		if layout, err = layoutOf(scenes); err != nil {
-			return "", nil, 0, 0, nil, err
-		}
 	}
 	return e.encodeAnimation(ctx, inputPath, mimeType, kind, layout, rung, enc, sourceFrames, profilePath, orient)
 }
@@ -280,9 +267,12 @@ func (e Env) encodeAnimation(ctx context.Context, inputPath, mimeType, kind stri
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
 
-	orientation := cmp.Or(orient, layout.orientation)
-	uw, uh := uprightSize(layout.cw, layout.ch, orientation)
-	src := encodeSource{orientation: orientation, width: uw, height: uh}
+	// The compositors write frames without a tag, so a composited animation
+	// carries the header's orientation; a frame read whole keeps its own tag.
+	src := encodeSource{orientation: orient}
+	if sourceFrameCount > 1 {
+		src.orientation = cmp.Or(orient, layout.orientation)
+	}
 
 	// destination is the sRGB profile the frames that carry one convert to.
 	var destination string
@@ -457,31 +447,14 @@ func (e Env) composeSelected(ctx context.Context, kind, inputPath, dir string, l
 	return composed, nil
 }
 
-// encodeStill encodes the first frame of inputPath as one WebP at enc: the
-// header read that sizes it, then one magick run that decodes, orients,
-// converts, resizes and writes it and reports the size it wrote. The decode
-// falls back to the coder CoderForMIME names for mimeType when the bare read
-// fails.
+// encodeStill encodes the first frame of inputPath as one WebP at enc in one
+// magick run that decodes, orients, converts, resizes and writes it and
+// reports the size it wrote. The decode falls back to the coder CoderForMIME
+// names for mimeType when the bare read fails.
 //
 // The caller owns the returned staging file via cleanupFn; on error the
 // staging file is already removed.
 func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, enc encoding, profilePath string, profiled bool, orient string) (outputPath string, cleanupFn func(), width, height int, err error) {
-	scenes, ref, err := identifyWithFallback(ctx, e, inputPath, "[0]", mimeType)
-	if err != nil {
-		return "", nil, 0, 0, err
-	}
-	if scenes[0].format == "WEBP" {
-		// -ping does not report the orientation of a WebP.
-		if err := completeProfile(ctx, e, ref, inputPath, scenes); err != nil {
-			return "", nil, 0, 0, err
-		}
-	}
-	head := scenes[0]
-	orientation := cmp.Or(orient, head.orientation)
-	w, h := uprightSize(head.width, head.height, orientation)
-	if w < 1 || h < 1 {
-		return "", nil, 0, 0, fmt.Errorf("input reports size %dx%d", w, h)
-	}
 	outputPath, cleanupFn, err = e.Stage(".webp")
 	if err != nil {
 		return "", nil, 0, 0, err
@@ -510,8 +483,7 @@ func (e Env) encodeStill(ctx context.Context, inputPath, mimeType string, enc en
 			input = coder + ":" + input
 		}
 		return encodeArgs([]encodeFrame{{input: input, convertTo: destination}},
-			encodeSource{orientation: orientation, width: w, height: h}, enc,
-			encodeOutput{kind: outputStill, path: outputPath})
+			encodeSource{orientation: orient}, enc, encodeOutput{kind: outputStill, path: outputPath})
 	})
 	if err != nil {
 		return fail(err)

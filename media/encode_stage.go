@@ -31,12 +31,10 @@ type encodeFrame struct {
 // encodeSource is what the header read decided about the frames of an
 // encode.
 type encodeSource struct {
-	// orientation is the magick orientation name applied to every frame; ""
-	// and "Undefined" mean none, whatever tag the input carries.
+	// orientation is the magick orientation name that replaces the one the
+	// frames carry; "" and "Undefined" leave a frame's own tag to
+	// -auto-orient.
 	orientation string
-	// width and height are the size of the frames after orientation. They
-	// set the output size.
-	width, height int
 }
 
 type outputKind int
@@ -66,6 +64,21 @@ type encodeOutput struct {
 // the route the pixels took to the encode.
 const resizeFilter = "Lanczos"
 
+// fitExpr returns the width and height of the output as ImageMagick fx
+// expressions of the size of the image they are evaluated on, which are
+// fitSize's (see there for the arithmetic) for the bounds maxEdge and
+// maxArea: the same operations in the same order, on doubles. Used in a
+// -resize argument, they are evaluated on the frame after -auto-orient.
+func fitExpr(maxEdge, maxArea int) (width, height string) {
+	const eps = "0.000000001"
+	scale := fmt.Sprintf("min(1,min(%d/max(w,h),sqrt(%d/(w*h))))", maxEdge, maxArea)
+	tw := fmt.Sprintf("max(1,floor(w*%s+%s))", scale, eps)
+	th := fmt.Sprintf("max(1,floor(h*%s+%s))", scale, eps)
+	tw = fmt.Sprintf("max(1,min(%s,floor(%d/%s)))", tw, maxArea, th)
+	th = fmt.Sprintf("max(1,min(%s,floor(%d/%s)))", th, maxArea, tw)
+	return "%[fx:" + tw + "]", "%[fx:" + th + "]"
+}
+
 // encodeFormat is the -format of the report an encode run prints, one line
 // per frame.
 const encodeFormat = "%#|%w|%h\n"
@@ -81,24 +94,19 @@ type encodedFrame struct {
 // stage of every image output. Each frame is read inside its own parentheses
 // when there are several, oriented, converted to sRGB if it carries a
 // profile, flattened onto white for JPEG output and resized, so ImageMagick
-// never holds more than one frame at full size. The output size is the one
-// fitSize gives src and enc, asked for exactly. Metadata is stripped last,
-// after the conversion that needed it. The run prints one encodedFrame line
-// per frame, which parseEncoded reads.
+// never holds more than one frame at full size. The output size is fitSize of
+// the frame as ImageMagick has oriented it, computed by ImageMagick (see
+// fitExpr) so that it follows the rotation actually applied, whatever the
+// header said, and asked for exactly. Metadata is stripped last, after the
+// conversion that needed it. The run prints one encodedFrame line per frame,
+// which parseEncoded reads.
 //
-// The result starts with LimitArgs. It requires every frame, once oriented,
-// to have the size src states; outputFiles requires out.path to be a magick
-// filename pattern containing %d.
+// The result starts with LimitArgs. outputFiles requires out.path to be a
+// magick filename pattern containing %d.
 func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encodeOutput) []string {
 	args := LimitArgs()
-	tw, th, resize := fitSize(src.width, src.height, enc.maxEdge, enc.maxArea)
+	width, height := fitExpr(enc.maxEdge, enc.maxArea)
 	grouped := len(frames) > 1
-	// The orientation is always stated, so that the rotation applied is the one
-	// the size was computed for, whatever tag the decoded frame carries.
-	orientation := src.orientation
-	if orientation == "" || orientation == "Undefined" {
-		orientation = "TopLeft"
-	}
 	for _, f := range frames {
 		if grouped {
 			args = append(args, "(")
@@ -110,7 +118,10 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 			// parentheses and override the delay of a frame read after it.
 			args = append(args, "-set", "delay", strconv.Itoa(f.delayCS))
 		}
-		args = append(args, "-orient", orientation, "-auto-orient")
+		if src.orientation != "" && src.orientation != "Undefined" {
+			args = append(args, "-orient", src.orientation)
+		}
+		args = append(args, "-auto-orient")
 		if f.convertTo != "" {
 			if f.assign != "" {
 				args = append(args, "-profile", f.assign)
@@ -120,9 +131,7 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 		if enc.format == JPEG {
 			args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
 		}
-		if resize {
-			args = append(args, "-filter", resizeFilter, "-resize", fmt.Sprintf("%dx%d!", tw, th))
-		}
+		args = append(args, "-filter", resizeFilter, "-resize", width+"x"+height+"!")
 		if grouped {
 			args = append(args, ")")
 		}
