@@ -53,109 +53,128 @@ func writeBytes(t *testing.T, b []byte) string {
 	return path
 }
 
-func TestWebPHasICC(t *testing.T) {
-	icc := []byte("not a real profile, never read")
-	image := riffChunk("VP8 ", make([]byte, 21))
-	many := []byte{}
-	for range maxWebPChunks {
-		many = append(many, riffChunk("JUNK", nil)...)
-	}
-	full := riffWebP(vp8xChunk(webpICCFlag), riffChunk("ICCP", icc), image)
-	for _, c := range []struct {
-		name    string
-		file    []byte
-		want    bool
-		wantErr bool
-	}{
-		{"flag and chunk", full, true, false},
-		{"flag and chunk after an odd-sized chunk", riffWebP(vp8xChunk(webpICCFlag), riffChunk("JUNK", []byte{1}), riffChunk("ICCP", icc), image), true, false},
-		{"flag and chunk after the image", riffWebP(vp8xChunk(webpICCFlag), image, riffChunk("ICCP", icc)), true, false},
-		{"flag without a chunk", riffWebP(vp8xChunk(webpICCFlag), image), false, false},
-		{"chunk without the flag", riffWebP(vp8xChunk(0), riffChunk("ICCP", icc), image), false, false},
-		{"chunk without VP8X", riffWebP(riffChunk("ICCP", icc), image), false, false},
-		{"simple file", riffWebP(image), false, false},
-		{"cut inside the chunk list", full[:30], false, false},
-		{"cut inside a header", full[:20], false, false},
-		{"empty", nil, false, false},
-		{"not RIFF", append([]byte("JUNK"), full[4:]...), false, false},
-		{"too many chunks", riffWebP(append(vp8xChunk(webpICCFlag), many...)), false, true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := webpHasICC(writeBytes(t, c.file))
-			if (err != nil) != c.wantErr || got != c.want {
-				t.Fatalf("webpHasICC = %t, %v; want %t, error %t", got, err, c.want, c.wantErr)
-			}
-		})
-	}
-}
-
-// onlyPinged fails the test for any identify that decodes pixels.
-func onlyPinged(t *testing.T, calls [][]string) {
-	t.Helper()
-	if len(calls) == 0 {
-		t.Fatal("no magick runs recorded")
-	}
+// onlyPinged reports whether every identify in calls read headers only.
+func onlyPinged(calls [][]string) bool {
 	for _, call := range calls {
 		if !slices.Contains(call, "-ping") {
-			t.Errorf("a still WebP was decoded to read its headers: %q", call)
+			return false
 		}
 	}
+	return true
 }
 
-// ImageMagick honours a WebP profile only when the VP8X chunk flags it and an
-// ICCP chunk follows, so the flag alone, which a still of any size can carry,
-// reports no profile on both header readers.
-func TestWebPStillProfileNeedsTheFlagAndTheChunk(t *testing.T) {
+// profiledByMagick reports whether a full read of path finds an ICC profile,
+// which is what the encode would convert from.
+func profiledByMagick(t *testing.T, env Env, path string) bool {
+	t.Helper()
+	return profileListHasICC(string(magick(t, env, "identify", "-format", "%[profiles]", path)))
+}
+
+// padChunks returns n empty JUNK chunks.
+func padChunks(n int) []byte {
+	var out []byte
+	for range n {
+		out = append(out, riffChunk("JUNK", nil)...)
+	}
+	return out
+}
+
+// The profile of a WebP still comes from its chunk list where the layout
+// settles it, and from a decode otherwise. Both header readers and the scan
+// must agree with a full ImageMagick read of every layout, and decode only
+// when the scan cannot answer.
+func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 	real := requireMagick(t)
-	icc := writeSRGBProfile(t)
-	profile, err := os.ReadFile(icc)
+	profile, err := os.ReadFile(writeSRGBProfile(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	image := imageChunk(t, real)
+	iccp := riffChunk("ICCP", profile)
+	const icc, anim = webpICCFlag, webpAnimFlag
+	frame := append([]byte{0, 0, 0, 0, 0, 0, 7, 0, 0, 7, 0, 0, 100, 0, 0, 0}, image...)
+	oneFrameAnimation := riffWebP(vp8xChunk(icc|anim), iccp, riffChunk("ANIM", make([]byte, 6)), riffChunk("ANMF", frame))
+	const limit = 1024 // the chunk headers the scan reads
+	atLimit := riffWebP(append(append(vp8xChunk(icc), image...), padChunks(limit-2)...))
+	pastLimit := riffWebP(append(append(vp8xChunk(icc), image...), padChunks(limit-1)...))
+	shortRIFF := riffWebP(vp8xChunk(icc), image, iccp)
+	binary.LittleEndian.PutUint32(shortRIFF[4:], uint32(len(shortRIFF)-8-len(iccp)))
+	trailing := append(riffWebP(vp8xChunk(icc), iccp, image), "trailing"...)
+
 	for _, c := range []struct {
-		name string
-		file []byte
-		want bool
+		name  string
+		file  []byte
+		known bool // the chunk list settles the answer
+		// The profile of an animation applies to its frames, though
+		// ImageMagick's own decode of one ignores it.
+		animated bool
 	}{
-		{"flag and chunk", riffWebP(vp8xChunk(webpICCFlag), riffChunk("ICCP", profile), image), true},
-		{"flag only", riffWebP(vp8xChunk(webpICCFlag), image), false},
-		{"chunk only", riffWebP(vp8xChunk(0), riffChunk("ICCP", profile), image), false},
-		{"simple", riffWebP(image), false},
+		{"flag and chunk", riffWebP(vp8xChunk(icc), iccp, image), true, false},
+		{"flag only", riffWebP(vp8xChunk(icc), image), true, false},
+		{"chunk only", riffWebP(vp8xChunk(0), iccp, image), true, false},
+		{"simple", riffWebP(image), true, false},
+		{"chunk after the image", riffWebP(vp8xChunk(icc), image, iccp), true, false},
+		{"chunk after another chunk", riffWebP(vp8xChunk(icc|0x08), riffChunk("EXIF", []byte("Exif\x00\x00")), iccp, image), true, false},
+		{"chunk after an odd-sized chunk", riffWebP(vp8xChunk(icc), riffChunk("JUNK", []byte{1}), iccp, image), true, false},
+		{"bytes after the RIFF", trailing, true, false},
+		{"chunk beyond the RIFF size", shortRIFF, true, false},
+		{"one-frame animation with a chunk", oneFrameAnimation, true, true},
+		{"VP8X after the image", riffWebP(image, vp8xChunk(icc), iccp), false, false},
+		{"second VP8X", riffWebP(vp8xChunk(icc), vp8xChunk(icc), iccp, image), false, false},
+		{"two chunks", riffWebP(vp8xChunk(icc), iccp, iccp, image), false, false},
+		{"as many chunks as the scan reads", atLimit, true, false},
+		{"one chunk more", pastLimit, false, false},
 	} {
 		path := writeBytes(t, c.file)
+		want := profiledByMagick(t, real, path) || c.animated
+		if has, known := webpICC(path); known != c.known || known && has != want {
+			t.Errorf("%s: webpICC = %t, known %t; want %t, known %t", c.name, has, known, want, c.known)
+		}
 		t.Run("ProbeFrames/"+c.name, func(t *testing.T) {
 			env, calls := countingEnv(real)
 			frames, err := env.ProbeFrames(context.Background(), path, "image/webp")
-			if err != nil || len(frames) != 1 || frames[0].hasICC != c.want {
-				t.Fatalf("frames %+v, err %v; want one frame, hasICC %t", frames, err, c.want)
+			if err != nil || len(frames) != 1 || frames[0].hasICC != want {
+				t.Fatalf("frames %+v, err %v; want one frame, hasICC %t", frames, err, want)
 			}
-			onlyPinged(t, calls())
+			if onlyPinged(calls()) != c.known {
+				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)
+			}
 		})
 		t.Run("readHeaders/"+c.name, func(t *testing.T) {
 			env, calls := countingEnv(real)
-			scenes, err := readHeaders(context.Background(), env, decoder{"magick", "webp"}, path, "[0]", false)
-			if err != nil || len(scenes) != 1 || scenes[0].hasICC != c.want {
-				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", scenes, err, c.want)
+			scenes, err := readHeaders(context.Background(), env, decoder{"magick", "webp"}, path, "", true)
+			if err != nil || len(scenes) != 1 || scenes[0].hasICC != want {
+				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", scenes, err, want)
 			}
-			onlyPinged(t, calls())
+			if onlyPinged(calls()) != c.known {
+				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)
+			}
 		})
 	}
 }
 
-// ImageMagick's JXL coder reports no profile under -ping (libjxl gives every
-// JXL one on a full read), so the operations' header reader must learn it from
-// a decode.
-func TestReadHeadersReportsTheProfileOfAJXLStill(t *testing.T) {
-	env := requireMagick(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "wide.jxl")
-	magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000", "-profile", writeSRGBProfile(t), "-profile", writeAdobeProfile(t, dir), path)
-	if !profileListHasICC(string(magick(t, env, "identify", "-format", "%[profiles]", path))) {
-		t.Skip("this ImageMagick does not write an ICC profile into JXL")
+// A file the scan cannot read to its end gives no answer, so its profile is
+// left to the decode.
+func TestWebPICCDeclinesAnUnreadableLayout(t *testing.T) {
+	image := riffChunk("VP8 ", make([]byte, 21))
+	full := riffWebP(vp8xChunk(webpICCFlag), riffChunk("ICCP", []byte("profile")), image)
+	oversized := slices.Clone(full)
+	binary.LittleEndian.PutUint32(oversized[4:], 1<<20)
+	zeroVP8X := riffWebP(append([]byte("VP8X\x00\x00\x00\x00"), riffChunk("ICCP", nil)...), image)
+	for name, file := range map[string][]byte{
+		"cut inside the chunk list": full[:30],
+		"cut inside a header":       full[:20],
+		"RIFF size past the file":   oversized,
+		"empty":                     nil,
+		"not RIFF":                  append([]byte("JUNK"), full[4:]...),
+		"unknown first chunk":       riffWebP(riffChunk("JUNK", []byte("xx")), vp8xChunk(webpICCFlag), image),
+		"empty VP8X":                zeroVP8X,
+	} {
+		if has, known := webpICC(writeBytes(t, file)); known {
+			t.Errorf("%s: webpICC = %t, known; want no answer", name, has)
+		}
 	}
-	scenes, err := readHeaders(context.Background(), env, decoder{"magick", "jxl"}, path, "[0]", false)
-	if err != nil || len(scenes) != 1 || !scenes[0].hasICC || scenes[0].format != "JXL" {
-		t.Fatalf("scenes %+v, err %v; want one profiled JXL scene", scenes, err)
+	if has, known := webpICC(filepath.Join(t.TempDir(), "missing")); known {
+		t.Errorf("missing file: webpICC = %t, known; want no answer", has)
 	}
 }

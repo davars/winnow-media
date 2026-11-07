@@ -361,9 +361,8 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 }
 
 // A JXL still stored in Adobe RGB must be reported as profiled and converted
-// like the PNG above. ImageMagick's JXL coder does not read the ICC profile
-// under -ping, which the header-only probe uses, so the still is encoded as if
-// it were untagged.
+// like the PNG above, though ImageMagick's JXL coder reports no profile under
+// -ping, which the probe's header read uses.
 func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
 	env := requireMagick(t)
 	destination := writeSRGBProfile(t)

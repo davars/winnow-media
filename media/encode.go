@@ -553,14 +553,14 @@ type FrameInfo struct {
 // ProbeFrames reads each scene's delay in centiseconds and whether it carries
 // an ICC profile. The returned length is the source frame count.
 //
-// Scenes are read from their headers, without decoding and without regard to
-// their size, except that a file of more scenes than the list-length ceiling
-// of LimitArgs is refused with ErrTooLarge; EncodeRung applies the caps. The
-// profile of a single-frame WebP comes from its chunk list, without decoding;
-// that of a single-frame JXL, which ImageMagick does not report from the
-// headers, from one decode of the file. A failed read is retried once with the coder CoderForMIME names for
-// mimeType ("" disables the retry), because magick cannot sniff some formats
-// from an extensionless path.
+// Scenes are read from their headers, without regard to their size, except
+// that a file of more scenes than the list-length ceiling of LimitArgs is
+// refused with ErrTooLarge; EncodeRung applies the caps. The profile of a single-frame WebP comes from its chunk list when that settles
+// it and otherwise from one decode of the file; that of a single-frame JXL
+// always comes from one decode, since ImageMagick does not report it from the
+// headers and libjxl gives every JXL a profile. A failed read is retried once
+// with the coder CoderForMIME names for mimeType ("" disables the retry),
+// because magick cannot sniff some formats from an extensionless path.
 func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]FrameInfo, error) {
 	ref := inputPath
 	scenes, err := identifyHeaders(ctx, e, ref, true)

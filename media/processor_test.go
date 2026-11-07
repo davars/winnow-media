@@ -325,7 +325,7 @@ func TestCheckReturnedPixels(t *testing.T) {
 	}
 }
 
-func TestWebPProfileIsReadFromTheDecodedImage(t *testing.T) {
+func TestReadHeadersReportsTheProfileOfAStillWebP(t *testing.T) {
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "icc.webp")

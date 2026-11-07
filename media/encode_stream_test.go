@@ -121,8 +121,8 @@ func TestEncodeRungReadsAOneFrameAnimationWhole(t *testing.T) {
 }
 
 // A still WebP carrying an ICC profile encodes as a one-frame animation,
-// which is how winnow passes every WebP, though the header read cannot see
-// its profile and ProbeFrames, which decodes it, can.
+// which is how winnow passes every WebP, with the profile ProbeFrames reports
+// from its chunk list.
 func TestEncodeRungEncodesAProfiledStillWebPAsAnAnimation(t *testing.T) {
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())

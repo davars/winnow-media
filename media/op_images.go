@@ -90,31 +90,33 @@ func readHeaders(ctx context.Context, env Env, dec decoder, path, selector strin
 
 // completeProfile fills in hasICC for the one scene of a file whose coder
 // does not report its profile under -ping. ref is the identify input the
-// headers were read from, path the file it names. A WebP still is answered by
-// its chunk list. A JXL still is decoded, which the callers' caps already
-// allow; a multi-scene JXL is not, since the operations refuse it. An
-// animated WebP is not examined: webp-frames reports its frames' profiles.
+// headers were read from, path the file it names. A WebP is answered by its
+// chunk list when the layout allows (see webpICC) and decoded otherwise; a
+// JXL is always decoded, as libjxl gives every JXL a profile. The decode is
+// bounded only by whatever caps the caller applied to the headers first. A
+// file of more than one scene is left as read.
 func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sceneHeader) error {
 	if len(scenes) != 1 {
 		return nil
 	}
 	switch scenes[0].format {
 	case "WEBP":
-		hasICC, err := webpHasICC(path)
-		if err != nil {
-			return fmt.Errorf("reading headers: %w", err)
+		if hasICC, known := webpICC(path); known {
+			scenes[0].hasICC = hasICC
+			return nil
 		}
-		scenes[0].hasICC = hasICC
 	case "JXL":
-		full, err := identifyHeaders(ctx, env, ref, false)
-		if err != nil {
-			return err
-		}
-		if len(full) != 1 {
-			return fmt.Errorf("reading headers: 1 scene, then %d", len(full))
-		}
-		scenes[0].hasICC = full[0].hasICC
+	default:
+		return nil
 	}
+	full, err := identifyHeaders(ctx, env, ref, false)
+	if err != nil {
+		return err
+	}
+	if len(full) != 1 {
+		return fmt.Errorf("reading headers: 1 scene, then %d", len(full))
+	}
+	scenes[0].hasICC = full[0].hasICC
 	return nil
 }
 
