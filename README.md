@@ -40,7 +40,10 @@ are resolved, limited and cancelled, and where scratch files live.
   of a single-frame WebP is found in its RIFF chunk list when the layout
   settles it and by one decode otherwise, and a single-frame JXL is always
   decoded once for it (libjxl gives every JXL a profile); those decodes are
-  bounded by `LimitArgs` only, not by the frame caps. A GIF or WebP of more
+  bounded by `LimitArgs` only, not by the frame caps. The EXIF orientation of
+  a single-frame WebP, which `-ping` does not report, is read the same way,
+  from the first directory of a well-formed EXIF chunk, and by a decode when
+  the chunk cannot be read with certainty. A GIF or WebP of more
   than one frame is refused with `ErrTooLarge` over the
   frame-size, frame-count and decoded-pixel caps above. `Ladder` lists the
   fallback rungs (frames are spent before resolution). `Env.EncodeRung`
@@ -107,9 +110,9 @@ tools itself because the input is untrusted:
     `ICCRGBG1012` extension, any number of distinct ones) are written beside
     the frames as they are first needed. Each frame carries the profile it has
     after `-coalesce`, and is assigned it and converted to sRGB, whatever the
-    profiles of the frames beside it in the batch. A GIF that ends between blocks without its trailer is decoded as
-    ImageMagick does; one truncated inside a block or with a frame outside the
-    logical screen is refused.
+    profiles of the frames beside it in the batch. A GIF that ends between
+    blocks without its trailer is decoded as ImageMagick does; one truncated
+    inside a block or with a frame outside the logical screen is refused.
   - An animated WebP is composited by `webp-frames`
     (`tools/webp-frames/webp-frames.c`), a small C program linked against the
     pinned libwebp, run as a sandbox tool. The header read, the caps and the

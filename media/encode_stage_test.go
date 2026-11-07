@@ -105,7 +105,7 @@ func TestEncodeArgsStages(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			args := encodeArgs([]encodeFrame{frame}, src, c.enc, c.out)
 			want := []string{
-				"pam:/f", "-orient", "RightTop", "-auto-orient", "-profile", "/own.icc", "-profile", "/srgb.icc",
+				"-orient", "RightTop", "-auto-orient", "-profile", "/own.icc", "-profile", "/srgb.icc",
 			}
 			if c.enc.format == JPEG {
 				want = append(want, "-background", "white", "-alpha", "remove", "-alpha", "off")
@@ -127,8 +127,8 @@ func TestEncodeArgsStages(t *testing.T) {
 			if got := slices.Contains(args, "-write"); got != (c.out.kind != outputProbe) {
 				t.Errorf("args %q: -write present is %v", args, got)
 			}
-			if got := slices.Contains(args, "-delay"); got != (c.out.kind == outputAnimation) {
-				t.Errorf("args %q: -delay present is %v", args, got)
+			if got := slices.Contains(args, "delay"); got != (c.out.kind == outputAnimation) {
+				t.Errorf("args %q: delay present is %v", args, got)
 			}
 			if got := slices.Contains(args, "+adjoin"); got != (c.out.kind == outputFiles) {
 				t.Errorf("args %q: +adjoin present is %v", args, got)
@@ -147,9 +147,9 @@ func TestEncodeArgsPerFrameProfiles(t *testing.T) {
 	}
 	args := encodeArgs(frames, encodeSource{width: 10, height: 10}, webpEncoding(100), encodeOutput{kind: outputFiles, path: "/o-%d.webp"})
 	for _, want := range [][]string{
-		{"(", "pam:/a", "-auto-orient", "-profile", "/a.icc", "-profile", "/srgb.icc", ")"},
-		{"(", "pam:/b", "-auto-orient", ")"},
-		{"(", "pam:/c", "-auto-orient", "-profile", "/c.icc", "-profile", "/srgb.icc", ")"},
+		{"(", "pam:/a", "-orient", "TopLeft", "-auto-orient", "-profile", "/a.icc", "-profile", "/srgb.icc", ")"},
+		{"(", "pam:/b", "-orient", "TopLeft", "-auto-orient", ")"},
+		{"(", "pam:/c", "-orient", "TopLeft", "-auto-orient", "-profile", "/c.icc", "-profile", "/srgb.icc", ")"},
 	} {
 		if !argsContainInOrder(args, want...) {
 			t.Errorf("args %q lack %q", args, want)
@@ -173,11 +173,33 @@ func TestEncodeArgsAnimationDelays(t *testing.T) {
 	args := encodeArgs([]encodeFrame{{input: "pam:/a", delayCS: 0}, {input: "pam:/b", delayCS: 33}, {input: "pam:/c", delayCS: -1}},
 		encodeSource{width: 10, height: 10}, webpEncoding(100), encodeOutput{kind: outputAnimation, path: "/o.webp"})
 	for _, want := range [][]string{
-		{"(", "-delay", "0", "pam:/a"}, {"(", "-delay", "33", "pam:/b"}, {"(", "pam:/c"},
+		{"(", "pam:/a", "-set", "delay", "0", "-orient"}, {"(", "pam:/b", "-set", "delay", "33", "-orient"}, {"(", "pam:/c", "-orient"},
 	} {
 		if !argsContainInOrder(args, want...) {
 			t.Errorf("args %q lack %q", args, want)
 		}
+	}
+}
+
+// A frame that keeps its own delay keeps it after a frame that set one: a
+// delay setting outlives the parentheses it was given in.
+func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
+	env := requireMagick(t)
+	dir := t.TempDir()
+	a, d7, out := filepath.Join(dir, "a.png"), filepath.Join(dir, "d7.gif"), filepath.Join(dir, "out.webp")
+	magick(t, env, "-size", "8x8", "xc:red", a)
+	magick(t, env, "-size", "8x8", "xc:blue", "-set", "delay", "7", d7)
+	frames := []encodeFrame{
+		{input: "png:" + a, delayCS: 33},
+		{input: "gif:" + d7, prelude: []string{"-coalesce"}, delayCS: -1},
+	}
+	_, err := env.runEncode(context.Background(), encodeArgs(frames, encodeSource{width: 8, height: 8}, webpEncoding(8),
+		encodeOutput{kind: outputAnimation, path: out}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(magick(t, env, "identify", "-format", "%T ", out))); got != "33 7" {
+		t.Errorf("delays %q, want \"33 7\"", got)
 	}
 }
 
@@ -446,16 +468,59 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 			}
 		})
 
-		t.Run(name+"/one-frame WebP read whole", func(t *testing.T) {
-			p := requireProcessor(t)
-			withHeaderOrientation(p, name)
-			path := filepath.Join(t.TempDir(), "q.webp")
-			magick(t, real, srcPNG, "-define", "webp:lossless=true", path)
-			images, dir := framesInto(t, p, stage(t, path), enc, 1)
-			if len(images) != 1 {
-				t.Fatalf("%d frames, want 1", len(images))
+		t.Run(name+"/WebP still with the orientation in an EXIF chunk, rung", func(t *testing.T) {
+			requireWebPBuilders(t)
+			env := stagedEnv(real, t.TempDir())
+			plain := filepath.Join(t.TempDir(), "q.webp")
+			magick(t, real, srcPNG, "-define", "webp:lossless=true", plain)
+			content := writeFile(t, "content", mustRead(t, withWebPChunk(t, plain, "exif", exifOrientation(uint16(n)))))
+			frames, err := env.ProbeFrames(context.Background(), content, "image/webp")
+			if err != nil {
+				t.Fatal(err)
 			}
+			out, cleanup, w, h, _, err := env.EncodeRung(context.Background(), content, "image/webp",
+				false, Rung{CeilingPx: edge, MaxFrames: 1}, frames, "", "", testQuality)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			if w != want.Bounds().Dx() || h != want.Bounds().Dy() {
+				t.Fatalf("reported %dx%d, want %v", w, h, want.Bounds().Size())
+			}
+			requireUpright(t, decodePNG(t, real, out), want, 40)
+		})
+
+		t.Run(name+"/WebP still with the orientation in an EXIF chunk, operation", func(t *testing.T) {
+			requireWebPBuilders(t)
+			p := requireProcessor(t)
+			plain := filepath.Join(t.TempDir(), "q.webp")
+			magick(t, real, srcPNG, "-define", "webp:lossless=true", plain)
+			path := withWebPChunk(t, plain, "exif", exifOrientation(uint16(n)))
+			images, dir := framesInto(t, p, stage(t, path), enc, 1)
 			requireUpright(t, decodePNG(t, real, filepath.Join(dir, images[0].Name)), want, 3)
+		})
+
+		// ImageMagick may or may not apply the EXIF orientation of an
+		// animation; either way the size must be that of the picture.
+		t.Run(name+"/one-frame animated WebP with an EXIF chunk", func(t *testing.T) {
+			requireWebPBuilders(t)
+			p := requireProcessor(t)
+			path := withWebPChunk(t, buildWebP(t, webpCase{codec: "lossless", frames: 1}), "exif", exifOrientation(uint16(n)))
+			images, dir := framesInto(t, p, stage(t, path), Encoding{Format: PNG, MaxEdge: 20}, 1)
+			got := decodePNG(t, real, filepath.Join(dir, images[0].Name))
+			stored := webpFrameImage(0, webpCanvasW, webpCanvasH, false)
+			for _, k := range []int{1, n} {
+				if want := upright(stored, k); want.Bounds().Dx()*got.Bounds().Dy() == want.Bounds().Dy()*got.Bounds().Dx() {
+					// Same aspect ratio: compare against the shrunk picture.
+					ref := filepath.Join(t.TempDir(), "ref.png")
+					src := writePNG(t, want, "src.png")
+					magick(t, real, src, "-filter", "Lanczos", "-resize", fmt.Sprintf("%dx%d!", got.Bounds().Dx(), got.Bounds().Dy()), ref)
+					if d := meanAbsoluteDifference(t, real, filepath.Join(dir, images[0].Name), ref); d < 0.02 {
+						return
+					}
+				}
+			}
+			t.Errorf("a %dx%d frame is neither the stored nor the upright picture", got.Bounds().Dx(), got.Bounds().Dy())
 		})
 	}
 }

@@ -88,21 +88,24 @@ func readHeaders(ctx context.Context, env Env, dec decoder, path, selector strin
 	return scenes, nil
 }
 
-// completeProfile fills in hasICC for the one scene of a file whose coder
-// does not report its profile under -ping. ref is the identify input the
+// completeProfile fills in what the header read of the one scene of a file
+// cannot report under -ping: hasICC for a WebP or JXL, and the orientation of
+// a WebP, whose EXIF chunk -ping does not read. ref is the identify input the
 // headers were read from, path the file it names. A WebP is answered by its
-// chunk list when the layout allows (see webpICC) and decoded otherwise; a
-// JXL is always decoded, as libjxl gives every JXL a profile. The decode is
-// bounded only by whatever caps the caller applied to the headers first. A
-// file of more than one scene is left as read.
+// chunk list when the layout allows (see webpICC and webpOrientation) and
+// decoded otherwise; a JXL is always decoded, as libjxl gives every JXL a
+// profile. The decode is bounded only by whatever caps the caller applied to
+// the headers first. A file of more than one scene is left as read.
 func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sceneHeader) error {
 	if len(scenes) != 1 {
 		return nil
 	}
 	switch scenes[0].format {
 	case "WEBP":
-		if hasICC, known := webpICC(path); known {
-			scenes[0].hasICC = hasICC
+		hasICC, iccKnown := webpICC(path)
+		orientation, orientationKnown := webpOrientation(path)
+		if iccKnown && orientationKnown {
+			scenes[0].hasICC, scenes[0].orientation = hasICC, orientation
 			return nil
 		}
 	case "JXL":
@@ -117,6 +120,9 @@ func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sc
 		return fmt.Errorf("reading headers: 1 scene, then %d", len(full))
 	}
 	scenes[0].hasICC = full[0].hasICC
+	if scenes[0].format == "WEBP" {
+		scenes[0].orientation = full[0].orientation
+	}
 	return nil
 }
 

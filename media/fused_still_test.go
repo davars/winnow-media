@@ -64,6 +64,27 @@ func fusedFixtures() []fusedFixture {
 			magick(t, env, append(args, "(", "+clone", "-negate", ")", "-loop", "0", path)...)
 			return path
 		}},
+		{"grayscale jpeg", "jpeg", func(t *testing.T, env Env, dir string) string {
+			path := filepath.Join(dir, "fixture.jpg")
+			magick(t, env, "-size", "64x48", "gradient:white-black", "-colorspace", "Gray", "-quality", "95", path)
+			return path
+		}},
+		{"grayscale png16", "png", func(t *testing.T, env Env, dir string) string {
+			path := filepath.Join(dir, "fixture.png")
+			magick(t, env, "-size", "64x48", "gradient:white-black", "-colorspace", "Gray", "-depth", "16", path)
+			return path
+		}},
+		{"cmyk jpeg", "jpeg", func(t *testing.T, env Env, dir string) string {
+			path := filepath.Join(dir, "fixture.jpg")
+			magick(t, env, "-size", "64x48", "gradient:#0020ff-#ffb000", "-colorspace", "CMYK", "-quality", "95", path)
+			return path
+		}},
+		{"cmyk jpeg profiled", "jpeg", func(t *testing.T, env Env, dir string) string {
+			cmyk := findCMYKProfile(t)
+			path := filepath.Join(dir, "fixture.jpg")
+			magick(t, env, "-size", "64x48", "gradient:#0020ff-#ffb000", "-colorspace", "CMYK", "-profile", cmyk, "-quality", "95", path)
+			return path
+		}},
 		{"avif 10-bit", "avif", plain(".avif", 10, false, "-quality", "95")},
 		{"heic adobe", "heic", func(t *testing.T, env Env, dir string) string {
 			return heicFixtureFile(t, "adobe-256x96")
@@ -173,4 +194,20 @@ func maxAbsoluteDifference(t *testing.T, env Env, first, second string) float64 
 		t.Fatalf("parsing image difference %q: %v", out, err)
 	}
 	return v
+}
+
+// findCMYKProfile returns a CMYK ICC profile installed on the machine, or
+// skips the test.
+func findCMYKProfile(t *testing.T) string {
+	t.Helper()
+	for _, pattern := range []string{
+		"/usr/share/color/icc/*/*CMYK*", "/usr/share/color/icc/*CMYK*", "/usr/share/ghostscript/*/iccprofiles/default_cmyk.icc",
+		"/nix/store/*-source/config/cmyk.icm",
+	} {
+		if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
+			return matches[0]
+		}
+	}
+	t.Skip("no CMYK ICC profile installed")
+	return ""
 }

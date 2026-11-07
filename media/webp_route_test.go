@@ -132,7 +132,7 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 			args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
 		}
 		if resize {
-			args = append(args, "-filter", resizeFilter, "-resize", fmt.Sprintf("%dx%d!", tw, th))
+			args = append(args, "-filter", "Lanczos", "-resize", fmt.Sprintf("%dx%d!", tw, th))
 		}
 		pattern := filepath.Join(dir, "frame-") + "%03d" + ec.ext
 		args = append(args, "-strip", "-scene", "0", "+adjoin", "-quality", strconv.Itoa(ec.quality), pattern)

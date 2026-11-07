@@ -584,3 +584,47 @@ func TestGIFJobStopsBetweenFramesWhenCancelled(t *testing.T) {
 		t.Errorf("err = %v after %d frames, want context.Canceled after 1", err, written)
 	}
 }
+
+// Each frame is converted by the profile it carries, and a frame that gets
+// another profile than the first is not given the first's.
+func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
+	real := requireMagick(t)
+	env := stagedEnv(real, t.TempDir())
+	adobe := mustAdobeProfile(t)
+	destination := writeSRGBProfile(t)
+	var specs []gifFrameSpec
+	for i := range 4 {
+		specs = append(specs, gifFrameSpec{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA, shift: i})
+	}
+	// The frames carry Adobe RGB, then the same with red and green exchanged,
+	// then each again.
+	data := withProfiles(t, buildGIF(t, 24, 20, paletteA, specs), []int{1, 2, 1, 2, 0}, adobe, swappedProfile(t, adobe))
+	path := writeFile(t, "content", data)
+	frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), path, "image/gif",
+		true, Rung{CeilingPx: 64, MaxFrames: 4}, frames, destination, "", testQuality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(mapping) != 4 {
+		t.Fatalf("%d frames, want 4", len(mapping))
+	}
+	reference := filepath.Join(t.TempDir(), "reference.webp")
+	magick(t, real, writeFile(t, "x.gif", data), "-coalesce", "-profile", destination, "-strip", "-quality", strconv.Itoa(testQuality), reference)
+	split := func(path string) string {
+		dir := t.TempDir()
+		magick(t, real, path, "-coalesce", "+adjoin", filepath.Join(dir, "%d.png"))
+		return dir
+	}
+	got, want := split(out), split(reference)
+	for i := range 4 {
+		name := fmt.Sprintf("%d.png", i)
+		if d := meanAbsoluteDifference(t, real, filepath.Join(got, name), filepath.Join(want, name)); d > 0.004 {
+			t.Errorf("frame %d differs from the whole-file conversion by %.6f", i, d)
+		}
+	}
+}

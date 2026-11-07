@@ -107,7 +107,7 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 		{"chunk only", riffWebP(vp8xChunk(0), iccp, image), true, false},
 		{"simple", riffWebP(image), true, false},
 		{"chunk after the image", riffWebP(vp8xChunk(icc), image, iccp), true, false},
-		{"chunk after another chunk", riffWebP(vp8xChunk(icc|0x08), riffChunk("EXIF", []byte("Exif\x00\x00")), iccp, image), true, false},
+		{"chunk after another chunk", riffWebP(vp8xChunk(icc|webpEXIFFlag), riffChunk("EXIF", tiffEXIF(binary.LittleEndian, [2]uint16{0x0112, 1})), iccp, image), true, false},
 		{"chunk after an odd-sized chunk", riffWebP(vp8xChunk(icc), riffChunk("JUNK", []byte{1}), iccp, image), true, false},
 		{"bytes after the RIFF", trailing, true, false},
 		{"chunk beyond the RIFF size", shortRIFF, true, false},
@@ -186,5 +186,114 @@ func TestWebPICCDeclinesAnUnreadableLayout(t *testing.T) {
 	}
 	if has, known := webpICC(filepath.Join(t.TempDir(), "missing")); known {
 		t.Errorf("missing file: webpICC = %t, known; want no answer", has)
+	}
+}
+
+// tiffEXIF returns an EXIF block of the given byte order whose first directory
+// holds one SHORT entry for each of the given tag and value pairs.
+func tiffEXIF(order binary.AppendByteOrder, pairs ...[2]uint16) []byte {
+	b := []byte("II*\x00")
+	if order == binary.BigEndian {
+		b = []byte("MM\x00*")
+	}
+	b = order.AppendUint32(b, 8)
+	b = order.AppendUint16(b, uint16(len(pairs)))
+	for _, p := range pairs {
+		b = order.AppendUint16(b, p[0])
+		b = order.AppendUint16(b, 3)
+		b = order.AppendUint32(b, 1)
+		b = order.AppendUint16(b, p[1])
+		b = append(b, 0, 0)
+	}
+	return append(b, 0, 0, 0, 0)
+}
+
+// The orientation of a WebP still comes from its EXIF chunk where that is
+// well formed, and from a decode otherwise; ImageMagick reads it from a full
+// read only, never under -ping.
+func TestWebPOrientationAgreesWithImageMagick(t *testing.T) {
+	real := requireMagick(t)
+	image := imageChunk(t, real)
+	const exif, anim = webpEXIFFlag, webpAnimFlag
+	le, be := binary.LittleEndian, binary.BigEndian
+	const tag = 0x0112
+	withEXIF := func(data ...[]byte) []byte {
+		file := vp8xChunk(exif)
+		for _, d := range data {
+			file = append(file, riffChunk("EXIF", d)...)
+		}
+		return riffWebP(append(file, image...))
+	}
+	type c struct {
+		name  string
+		file  []byte
+		known bool
+	}
+	var cases []c
+	for n := uint16(1); n <= 8; n++ {
+		cases = append(cases,
+			c{"little endian " + orientationNames[n], withEXIF(tiffEXIF(le, [2]uint16{tag, n})), true},
+			c{"big endian " + orientationNames[n], withEXIF(tiffEXIF(be, [2]uint16{tag, n})), true})
+	}
+	frame := append([]byte{0, 0, 0, 0, 0, 0, 7, 0, 0, 7, 0, 0, 100, 0, 0, 0}, image...)
+	cases = append(cases,
+		c{"other tag only", withEXIF(tiffEXIF(le, [2]uint16{0x0101, 5})), true},
+		c{"no entries", withEXIF(tiffEXIF(le)), true},
+		c{"orientation after another tag", withEXIF(tiffEXIF(le, [2]uint16{0x010f, 1}, [2]uint16{tag, 6})), true},
+		c{"flag clear, chunk present", riffWebP(append(append(vp8xChunk(0), riffChunk("EXIF", tiffEXIF(le, [2]uint16{tag, 6}))...), image...)), true},
+		c{"simple", riffWebP(image), true},
+		c{"orientation 0", withEXIF(tiffEXIF(le, [2]uint16{tag, 0})), false},
+		c{"orientation 9", withEXIF(tiffEXIF(le, [2]uint16{tag, 9})), false},
+		c{"orientation twice", withEXIF(tiffEXIF(le, [2]uint16{tag, 6}, [2]uint16{tag, 6})), false},
+		c{"two EXIF chunks", withEXIF(tiffEXIF(le, [2]uint16{tag, 6}), tiffEXIF(le, [2]uint16{tag, 3})), false},
+		c{"Exif prefix", withEXIF(append([]byte("Exif\x00\x00"), tiffEXIF(le, [2]uint16{tag, 6})...)), false},
+		c{"truncated directory", withEXIF(tiffEXIF(le, [2]uint16{tag, 6})[:12]), false},
+		c{"not TIFF", withEXIF([]byte("not a TIFF block")), false},
+		c{"flag without chunk", riffWebP(append(vp8xChunk(exif), image...)), false},
+		c{"animation with the chunk", riffWebP(append(append(append(vp8xChunk(exif|anim), riffChunk("EXIF", tiffEXIF(le, [2]uint16{tag, 6}))...), riffChunk("ANIM", make([]byte, 6))...), riffChunk("ANMF", frame)...)), false},
+		c{"animation without the chunk", riffWebP(append(append(vp8xChunk(anim), riffChunk("ANIM", make([]byte, 6))...), riffChunk("ANMF", frame)...)), true},
+		c{"bytes after the RIFF", append(withEXIF(tiffEXIF(le, [2]uint16{tag, 6})), "trailing"...), true},
+	)
+	for _, c := range cases {
+		path := writeBytes(t, c.file)
+		got, known := webpOrientation(path)
+		if known != c.known {
+			t.Errorf("%s: webpOrientation = %q, known %t; want known %t", c.name, got, known, c.known)
+		}
+		full, err := identifyHeaders(context.Background(), real, "webp:"+path, false)
+		if err != nil {
+			t.Logf("%s: refused by ImageMagick", c.name)
+			continue
+		}
+		if known && got != full[0].orientation {
+			t.Errorf("%s: webpOrientation = %q, a full read says %q", c.name, got, full[0].orientation)
+		}
+		if len(full) != 1 {
+			continue
+		}
+		t.Run("readHeaders/"+c.name, func(t *testing.T) {
+			env, calls := countingEnv(real)
+			scenes, err := readHeaders(context.Background(), env, decoder{"magick", "webp"}, path, "", true)
+			if err != nil || len(scenes) != 1 || scenes[0].orientation != full[0].orientation {
+				t.Fatalf("scenes %+v, err %v; want orientation %q", scenes, err, full[0].orientation)
+			}
+			if onlyPinged(calls()) != c.known {
+				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)
+			}
+		})
+	}
+}
+
+func TestWebPOrientationDeclinesAnUnreadableFile(t *testing.T) {
+	good := riffWebP(vp8xChunk(webpEXIFFlag), riffChunk("EXIF", tiffEXIF(binary.LittleEndian, [2]uint16{0x0112, 6})), riffChunk("VP8 ", make([]byte, 21)))
+	for name, file := range map[string][]byte{
+		"cut inside a chunk": good[:40], "empty": nil, "not RIFF": append([]byte("JUNK"), good[4:]...),
+	} {
+		if o, known := webpOrientation(writeBytes(t, file)); known {
+			t.Errorf("%s: webpOrientation = %q, known; want no answer", name, o)
+		}
+	}
+	if _, known := webpOrientation(filepath.Join(t.TempDir(), "missing")); known {
+		t.Error("missing file: known")
 	}
 }
