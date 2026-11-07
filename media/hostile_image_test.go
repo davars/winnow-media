@@ -351,8 +351,8 @@ func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
 	})
 }
 
-// meteredEnv returns env with each run's peak RSS and the wall time of the
-// whole call recorded, for the Env path, which has no Processor to meter.
+// meteredEnv returns env with the largest peak RSS of its runs recorded, for
+// the Env path, which has no Processor to meter.
 func meteredEnv(env Env) (Env, func() int64) {
 	var mu sync.Mutex
 	var peak int64
@@ -373,22 +373,17 @@ func meteredEnv(env Env) (Env, func() int64) {
 	}
 }
 
-// The Env path's header read runs identify over every scene with no list
-// length ceiling (the Processor's policy sets 2048), so the memory of the read
-// grows with the number of frames before the frame cap can be checked:
-// ImageMagick holds about 40 KiB per scene in ping mode, 827 MiB for 20000
-// one-pixel frames (300 KiB of file) and 3.9 GiB for 100000 (1.5 MiB), well
-// inside the 25 MiB the Processor admits and the 256 MiB winnow admits.
+// ImageMagick holds about 40 KiB per scene even in ping mode, so a header
+// read's memory grows with the number of frames before the frame cap can be
+// checked: 20000 one-pixel frames are 300 KiB of file and over 800 MiB of
+// identify. The list-length ceiling must stop the read first.
 func TestProbeFramesHeaderReadIsBoundedForManyFrameAnimations(t *testing.T) {
 	env, peak := meteredEnv(requireMagick(t))
 	data := manyFrameGIF(1, 1, 20_000)
 	start := time.Now()
-	frames, err := env.ProbeFrames(context.Background(), writeFile(t, "content", data), "image/gif")
-	if err != nil && !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("err = %v, want nil or ErrTooLarge", err)
-	}
-	if err == nil && len(frames) != 20_000 {
-		t.Errorf("%d frames, want 20000", len(frames))
+	_, err := env.ProbeFrames(context.Background(), writeFile(t, "content", data), "image/gif")
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
 	if wall := time.Since(start); wall > 5*time.Second {
 		t.Errorf("header read took %v, the bound is 5s", wall)
@@ -436,13 +431,12 @@ func gifWithFrames(t *testing.T, lsdW, lsdH int, rects [][4]int) []byte {
 }
 
 // The canvas an animation is composited on is the largest width by the
-// largest height over its scenes, but checkSceneHeaders bounds each scene's
-// own canvas, not that product. A GIF without a logical screen (0 x 0, which
-// ImageMagick reports as each frame's own size) holding a 16384x1 frame and
-// a 1x16384 one declares two frames within every per-frame cap and a
-// composite canvas of 268 MP, five times maxFramePixels: ProbeAnimation
-// reports it as admissible, and the GIF compositor allocates it (1 GiB, plus
-// a 1 GiB saved copy) before the standard library refuses the frame.
+// largest height over its scenes, which no single scene need reach. A GIF
+// without a logical screen (0 x 0, which ImageMagick reports as each frame's
+// own size) holding a 16384x1 frame and a 1x16384 one has two frames within
+// every per-frame cap and a composite canvas of 268 MP, which the GIF
+// compositor would allocate twice over. Both the probe and the encode must
+// refuse it before any canvas exists.
 func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
 	data := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
 	t.Run("ProbeAnimation", func(t *testing.T) {
@@ -494,6 +488,23 @@ func TestHeaderReadMapsTheListLengthCeilingToErrTooLarge(t *testing.T) {
 		_, _, err := p.ProbeAnimation(context.Background(), writeFile(t, "many.gif", data))
 		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), policyListLength) {
 			t.Errorf("err = %v, want ErrTooLarge naming %s", err, policyListLength)
+		}
+	})
+	// A file magick cannot sniff, such as a multi-image ICO, is read again
+	// with its coder, and the ceiling may be what stops that second read.
+	t.Run("ProbeFrames coder retry", func(t *testing.T) {
+		var env Env
+		calls := 0
+		env.Run = func(context.Context, string, ...string) (Result, error) {
+			calls++
+			if calls == 1 {
+				return Result{}, errors.New("no decode delegate for this image format")
+			}
+			return Result{}, errors.New("identify: " + listLengthRefusal)
+		}
+		_, err := env.ProbeFrames(context.Background(), "content", "image/vnd.microsoft.icon")
+		if calls != 2 || !errors.Is(err, ErrTooLarge) {
+			t.Errorf("%d runs, err = %v, want a retry ending in ErrTooLarge", calls, err)
 		}
 	})
 }

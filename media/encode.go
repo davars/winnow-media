@@ -572,7 +572,7 @@ func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]Fra
 		}
 		scenes, retryErr := identifyHeaders(ctx, e, coder+":"+inputPath, ping)
 		if retryErr != nil {
-			return nil, fmt.Errorf("%w; retried with coder %q, which also failed: %v", err, coder, retryErr)
+			return nil, fmt.Errorf("%w; retried with coder %q, which also failed: %w", err, coder, retryErr)
 		}
 		return scenes, nil
 	}
