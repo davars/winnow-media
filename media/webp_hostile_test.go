@@ -71,17 +71,30 @@ func hostileWebPs(t *testing.T) map[string]hostileWebP {
 	}
 	overlong := cloneBytes(good)
 	binary.LittleEndian.PutUint32(overlong[frames[1]+4:], 1<<30)
+	headers := webpOutcome{err: "reading headers"}
+	notDecodable := map[string]webpOutcome{
+		"AnimationFrames":   {err: "is not a decodable animated WebP"},
+		"AnimationFramesAt": {err: "is outside the animation's 1 frames"},
+	}
 	return map[string]hostileWebP{
-		"header only":               {data: good[:30], w: 40, h: 30, frames: 6, refusal: "decodable"},
-		"truncated in a frame":      {data: good[:frames[3]+40], w: 40, h: 30, frames: 6, refusal: "decodable"},
-		"half the file":             {data: good[:len(good)/2], w: 40, h: 30, frames: 6, refusal: "decodable"},
-		"cut between frames":        {data: good[:frames[4]], w: 40, h: 30, frames: 6, refusal: "decodable"},
-		"frame outside the canvas":  {data: patchFrame(2, 0, 500), w: 40, h: 30, frames: 6, refusal: "decodable"},
-		"canvas smaller than frame": {data: canvasSmall, w: 10, h: 10, frames: 6, refusal: "decodable"},
-		"garbage frame header":      {data: garbageFrame, w: 40, h: 30, frames: 6, refusal: "header read found"},
-		"garbage frame data":        {data: garbageData, w: 40, h: 30, frames: 6, refusal: "decodable"},
-		"corrupt frame pixels":      {data: corruptPixels, w: 40, h: 30, frames: 6, refusal: "decoding frame"},
-		"chunk size past the end":   {data: overlong, w: 40, h: 30, frames: 6, refusal: "decodable"},
+		"header only":               {data: good[:30], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
+		"truncated in a frame":      {data: good[:frames[3]+40], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
+		"half the file":             {data: good[:len(good)/2], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
+		"cut between frames":        {data: good[:frames[4]], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
+		"frame outside the canvas":  {data: patchFrame(2, 0, 500), w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
+		"canvas smaller than frame": {data: canvasSmall, w: 10, h: 10, frames: 6, refusal: "decodable", through: notDecodable},
+		// ImageMagick reads the file as five scenes and the frames it can read
+		// are written.
+		"garbage frame header": {data: garbageFrame, w: 40, h: 30, frames: 6, refusal: "header read found", through: map[string]webpOutcome{
+			"AnimationFrames": {images: 5}, "AnimationFramesAt": {images: 3},
+		}},
+		"garbage frame data": {data: garbageData, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
+		// The compositor stops after the last frame selected, so a request for
+		// the first three frames never reaches the damaged fourth.
+		"corrupt frame pixels": {data: corruptPixels, w: 40, h: 30, frames: 6, refusal: "decoding frame", through: map[string]webpOutcome{
+			"AnimationFrames": {err: "decoding frame 3 failed"}, "AnimationFramesAt": {images: 3},
+		}},
+		"chunk size past the end": {data: overlong, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
 	}
 }
 
@@ -91,44 +104,60 @@ type hostileWebP struct {
 	// refusal is what the tool's message must contain when it is told the
 	// undamaged file's canvas and frame count.
 	refusal string
+	// through is what each entry of animationImageEntries does with the file.
+	through map[string]webpOutcome
+}
+
+// webpOutcome is what an operation does with a damaged file: it writes images
+// frames, or, when err is set, fails with a message containing it and writes
+// none.
+type webpOutcome struct {
+	images int
+	err    string
+}
+
+func both(o webpOutcome) map[string]webpOutcome {
+	return map[string]webpOutcome{"AnimationFrames": o, "AnimationFramesAt": o}
 }
 
 // TestHostileAnimatedWebPsFailCleanly runs damaged animated WebPs through
-// AnimationFrames. None may hang or leave a file behind on failure, and the
-// tool must be started only for a file whose header read found several
-// frames; for one that ImageMagick reads as a single image, which it does for
-// every file here whose animation it cannot parse, the output is at most that
-// one frame.
+// every operation that writes their frames. Each gives the outcome its
+// fixture states, none hangs, and a failure leaves nothing behind.
 func TestHostileAnimatedWebPsFailCleanly(t *testing.T) {
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
-	env := requireMagick(t)
 	for name, c := range hostileWebPs(t) {
 		for _, entry := range animationImageEntries(p) {
+			want, ok := c.through[entry.name]
+			if !ok {
+				t.Fatalf("%s: no expected outcome for %s", name, entry.name)
+			}
 			t.Run(name+"/"+entry.name, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				path := writeFile(t, "x.webp", c.data)
-				scenes, headerErr := identifyHeaders(ctx, env, "webp:"+path, true)
 				out := t.TempDir()
 				images, _, err := entry.run(ctx, path, out)
 				if ctx.Err() != nil {
 					t.Fatalf("timed out: %v", err)
 				}
-				switch {
-				case headerErr != nil:
-					if err == nil {
-						t.Error("no error for a file whose header cannot be read")
+				if want.err != "" {
+					if err == nil || !strings.Contains(err.Error(), want.err) {
+						t.Errorf("err = %v, want it to say %q", err, want.err)
 					}
-				case len(scenes) == 1:
-					if len(images) > 1 {
-						t.Errorf("%d frames from a file read as one image", len(images))
+					if len(images) != 0 {
+						t.Errorf("%d images returned with the error", len(images))
 					}
-				}
-				if err != nil {
 					if got := dirNames(t, out); len(got) != 0 {
 						t.Errorf("failed, and the output dir holds %v", got)
 					}
+					return
+				}
+				if err != nil || len(images) != want.images {
+					t.Errorf("%d images, err %v; want %d images", len(images), err, want.images)
+				}
+				if got := dirNames(t, out); len(got) != want.images {
+					t.Errorf("the output dir holds %v, want %d files", got, want.images)
 				}
 			})
 		}
