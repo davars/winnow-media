@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/davars/winnow-media/tool"
@@ -90,15 +91,36 @@ func run(t *testing.T, name string, args ...string) {
 	}
 }
 
+// builtWebPs holds each webpCase's file once built: the build is
+// deterministic, and costs a cwebp run a frame.
+var builtWebPs sync.Map // webpCase -> *builtWebP
+
+type builtWebP struct {
+	once sync.Once
+	data []byte
+}
+
 // buildWebP writes an animated WebP for c in a new directory and returns its
 // path. Frames are encoded separately and assembled with webpmux, which sets
-// each frame's offset, disposal and blending.
+// each frame's offset, disposal and blending. Each case is built once per
+// test binary; every call gets a copy of its own.
 func buildWebP(t *testing.T, c webpCase) string {
 	t.Helper()
-	dir := t.TempDir()
 	if c.frames == 0 {
 		c.frames = 5
 	}
+	v, _ := builtWebPs.LoadOrStore(c, &builtWebP{})
+	built := v.(*builtWebP)
+	built.once.Do(func() { built.data = assembleWebP(t, c) })
+	if built.data == nil {
+		t.Fatalf("building %v failed in another test", c)
+	}
+	return writeFile(t, "anim.webp", built.data)
+}
+
+func assembleWebP(t *testing.T, c webpCase) []byte {
+	t.Helper()
+	dir := t.TempDir()
 	args := []string{}
 	for k := range c.frames {
 		w, h, x, y := webpCanvasW, webpCanvasH, 0, 0
@@ -127,7 +149,11 @@ func buildWebP(t *testing.T, c webpCase) string {
 	}
 	out := filepath.Join(dir, "anim.webp")
 	run(t, "webpmux", append(args, "-loop", "0", "-bgcolor", "0,0,0,0", "-o", out)...)
-	return out
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 // pamImage is a decoded PAM of tuple type RGB_ALPHA.
