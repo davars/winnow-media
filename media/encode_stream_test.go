@@ -91,6 +91,127 @@ func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
 	}
 }
 
+// A compositor that reports other frames than were selected, or reports them
+// out of order, is an error whose message names the check, so a check that is
+// gone cannot be hidden by the one after it. The tool is a real webp-frames
+// whose report is rewritten.
+func TestOpenRefusesACompositorReportOfTheWrongFrames(t *testing.T) {
+	requireWebPBuilders(t)
+	real := requireMagick(t)
+	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
+	report := "0 0 0\n1 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n"
+	for _, c := range []struct {
+		name, report, want string
+	}{
+		{"one frame fewer", report[:len(report)-6], "composited 5 of 6 frames"},
+		{"no frames", "", "composited 0 of 6 frames"},
+		{"one frame more", report + "6 0 0\n", "the compositor wrote more frames than selected"},
+		{"out of order", "1 0 0\n0 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n", `compositor reported "1 0 0", expected frame 0`},
+		{"a repeated ordinal", "0 0 0\n0 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n", `compositor reported "0 0 0", expected frame 1`},
+		{"a line of two fields", "0 0 0\n1 0\n", `compositor reported "1 0", expected frame 1`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := stagedEnv(real, t.TempDir())
+			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
+				res, err := real.Run(ctx, name, args...)
+				if err == nil && name == webpFramesTool {
+					res.Stdout = []byte(c.report)
+				}
+				return res, err
+			}
+			src, err := env.Open(context.Background(), path, Hints{})
+			if err == nil {
+				src.Close()
+				t.Fatal("Open succeeded")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want it to say %q", err, c.want)
+			}
+		})
+	}
+}
+
+// A still WebP is decoded to exactly one image.
+func TestEncodeRefusesAStillWebPDecodeThatWritesTheWrongImages(t *testing.T) {
+	requireWebPBuilders(t)
+	real := requireMagick(t)
+	path := stillWebP(t, photoPNG(t, real, 300, 200, false), "-q", "80")
+	for _, c := range []struct {
+		name, report, want string
+	}{
+		{"no image", "", "webp-frames wrote 0 images, want 1"},
+		{"two images", "0 0 0\n1 0 0\n", "webp-frames wrote more than one image"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := stagedEnv(real, t.TempDir())
+			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
+				res, err := real.Run(ctx, name, args...)
+				if err == nil && name == webpFramesTool {
+					res.Stdout = []byte(c.report)
+				}
+				return res, err
+			}
+			src, err := env.Open(context.Background(), path, Hints{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer src.Close()
+			out, err := src.Encode(context.Background(), 0, Encoding{Format: WebP})
+			if err == nil {
+				out[0].Cleanup()
+				t.Fatal("Encode succeeded")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want it to say %q", err, c.want)
+			}
+		})
+	}
+}
+
+// The Processor, which encodes frames as the compositor writes them, refuses a
+// compositor that writes one frame more or fewer than were selected, and
+// leaves nothing behind.
+func TestAnimationFramesRefuseACompositorThatWritesTheWrongFrames(t *testing.T) {
+	requireWebPBuilders(t)
+	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
+	for _, c := range []struct {
+		name string
+		more bool
+		want string
+	}{
+		{"one frame more", true, "the compositor wrote more frames than selected"},
+		{"one frame fewer", false, "composited 5 of 6 frames"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessor(t)
+			inner := p.compose
+			t.Cleanup(func() { p.compose = inner })
+			p.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+				var last composedFrame
+				seen := 0
+				usage, err := inner(ctx, req, func(f composedFrame) error {
+					last = f
+					if seen++; !c.more && seen == len(req.selected) {
+						return nil
+					}
+					return onFrame(f)
+				})
+				if err == nil && c.more {
+					err = onFrame(last)
+				}
+				return usage, err
+			}
+			out := t.TempDir()
+			if _, _, err := p.AnimationFrames(context.Background(), path, Encoding{}, 0, out); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to say %q", err, c.want)
+			}
+			if got := dirNames(t, out); len(got) != 0 {
+				t.Errorf("output dir holds %v", got)
+			}
+		})
+	}
+}
+
 // A one-frame GIF is composited like any other: the type decides the decoder,
 // not the frame count.
 func TestEncodeRungCompositesAOneFrameGIF(t *testing.T) {
