@@ -77,9 +77,11 @@ are resolved, limited and cancelled, and where scratch files live.
   count divides the count `Open` selected (a halving ladder from 12, 16, 20,
   24 or 32 does; one from 14 or 18 does not), that is the source frames the
   rung selects of the whole file.
-  Each `Encode` drops the consecutive frames that are equal at its own size
-  and returns its own mapping. A file of several images that is neither a GIF
-  nor a WebP is refused with `ErrUnsupportedType` unless `Hints.Still` is set.
+  Each `Encode` returns its own mapping, read back from the scene delays of
+  the file it wrote: the WebP writer merges a frame into the scene before it
+  when the two are equal or nearly so at that size. A file of several images
+  that is neither a GIF nor a WebP is refused with `ErrUnsupportedType`
+  unless `Hints.Still` is set.
   An MP4, QuickTime, WebM or Matroska file is a video, as is any container
   ffmpeg detects among `detectedFormats`. A file that sniffs as a video, or
   that leads a QuickTime atom, AVI, ASF, FLV, an MPEG program or video stream
@@ -96,8 +98,9 @@ are resolved, limited and cancelled, and where scratch files live.
   `Frame`s have `SourceFrame` 0 and the sample time as `SourceTimeMS`, and
   `Source.Frames` lists the chosen times until that first `Encode` makes them
   final. `Hints.Still` and `Hints.Orientation` are errors for a video. Samples
-  are encoded as any animation's frames are: each frame is shown for half a
-  second, and equal consecutive frames are dropped and the scene count checked.
+  are encoded as any animation's frames are: each is asked to show for half a
+  second, and the mapping is read back from the scene delays, a scene the
+  writer merged from several samples lasting their sum.
   A JPEG is decoded at a reduced size (`-define jpeg:size`) when the largest
   target is far smaller: the smallest eighth of the stored size that covers
   twice every target in both dimensions. The output size is then computed in
@@ -177,8 +180,9 @@ are resolved, limited and cancelled, and where scratch files live.
   writes two animated WebP thumbnails of fifteen frames sampled evenly over a
   video, through the same pipeline as `Processor.VideoFrames` (below): samples
   are read by one decode or by seeks, as the stream's size decides, HDR is
-  tone-mapped, output is upright, sized, stripped and 8-bit, a frame identical
-  to the one before it is dropped, and each frame is shown for half a second.
+  tone-mapped, output is upright, sized, stripped and 8-bit, each sample is asked
+  to show for half a second, and the writer may merge near-identical
+  consecutive samples into one longer scene.
   The stream is ffprobe's choice; its `streamIndex` and `frames` arguments are
   ignored. The samples are staged in a subdirectory beside the outputs, and
   the same bounds and caps as the Processor's apply. It does not take the type

@@ -258,7 +258,6 @@ func TestEncodeArgsStages(t *testing.T) {
 		enc  encoding
 		out  encodeOutput
 	}{
-		{"probe", webpEncoding(100), encodeOutput{kind: outputProbe}},
 		{"still", webpEncoding(100), encodeOutput{kind: outputStill, path: "/o.webp"}},
 		{"animation", webpEncoding(100), encodeOutput{kind: outputAnimation, path: "/o.webp"}},
 		{"files", webpEncoding(100), encodeOutput{kind: outputFiles, path: "/o-%d.webp"}},
@@ -284,11 +283,11 @@ func TestEncodeArgsStages(t *testing.T) {
 				t.Errorf("args %q flatten by something other than the output format", args)
 			}
 			tail := args[len(args)-3:]
-			if !slices.Equal(tail, []string{"-format", encodeFormat, "info:"}) {
+			if !slices.Equal(tail, []string{"-format", reportFormat(c.out.kind == outputFiles), "info:"}) {
 				t.Errorf("args end with %q", tail)
 			}
-			if got := slices.Contains(args, "-write"); got != (c.out.kind != outputProbe) {
-				t.Errorf("args %q: -write present is %v", args, got)
+			if !slices.Contains(args, "-write") {
+				t.Errorf("args %q: no -write", args)
 			}
 			if got := slices.Contains(args, "delay"); got != (c.out.kind == outputAnimation) {
 				t.Errorf("args %q: delay present is %v", args, got)
@@ -367,14 +366,24 @@ func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
 }
 
 func TestParseEncoded(t *testing.T) {
-	got, err := parseEncoded([]byte("abc|12|8\ndef|6|4\n"))
+	got, err := parseEncoded([]byte("abc|12|8\ndef|6|4\n"), true)
 	want := []encodedFrame{{"abc", 12, 8}, {"def", 6, 4}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("parseEncoded = %v, %v, want %v", got, err, want)
 	}
+	got, err = parseEncoded([]byte("12|8\n6|4\n"), false)
+	want = []encodedFrame{{"", 12, 8}, {"", 6, 4}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("unsigned parseEncoded = %v, %v, want %v", got, err, want)
+	}
 	for _, bad := range []string{"", "abc|1", "abc|x|2", "abc|1|2|3"} {
-		if _, err := parseEncoded([]byte(bad)); err == nil {
-			t.Errorf("parseEncoded(%q) did not fail", bad)
+		if _, err := parseEncoded([]byte(bad), true); err == nil {
+			t.Errorf("parseEncoded(%q, signed) did not fail", bad)
+		}
+	}
+	for _, bad := range []string{"", "1", "x|2", "1|2|3"} {
+		if _, err := parseEncoded([]byte(bad), false); err == nil {
+			t.Errorf("parseEncoded(%q, unsigned) did not fail", bad)
 		}
 	}
 }

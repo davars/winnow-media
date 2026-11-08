@@ -10,8 +10,9 @@ import (
 // equal intervals of its duration and writes them as two animated WebPs whose
 // longest sides are at most sizeSmall and sizeLarge, at the given quality,
 // each frame shown for half a second. Frames are sampled, tone-mapped, sized
-// and stripped as Processor.VideoFrames does, and a frame identical to the one
-// before it once resized is dropped.
+// and stripped as Processor.VideoFrames does, and the WebP writer merges a
+// frame into the scene before it when the two are equal or nearly so once
+// resized.
 //
 // It requires smallPath and largePath to end in .webp and their directory to
 // be writable, where it stages samples in a subdirectory it removes. The video

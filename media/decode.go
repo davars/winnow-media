@@ -983,9 +983,10 @@ func (s *Source) decodeWebP(ctx context.Context, size [2]int) (srcFrame, stillMe
 // order of targets. Each holds the frames a budget of maxFrames selects of the
 // frames Open selected, evenly spaced from the first (all of them for 0), as
 // one animated file; a still, or one selected frame, makes a plain image, and
-// a target's Format must be WebP when there are several. A frame identical to
-// the one before it at the target's size is dropped, so Artifact.Frames says
-// which frames the file holds. A still is decoded once for all targets. It is
+// a target's Format must be WebP when there are several. A frame identical or
+// nearly so to the one before it is merged into its scene by the WebP writer,
+// so Artifact.Frames says which frames the file shows, each at the time it
+// starts. A still is decoded once for all targets. It is
 // refused with ErrTooLarge, before any pixel is decoded, when the frame the
 // decode yields for these targets has a side over 16384 or more than 52
 // million pixels; a JPEG that the targets let the decode reduce is judged at
@@ -1071,62 +1072,99 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 }
 
 // encodeAnimation encodes the frames at pos to one file at path and returns
-// its size and the positions it keeps.
+// its size and the positions of the frames its scenes show.
 //
-// With several frames there are two magick runs over the same frames. The
-// first reports the signature of the pixels that will actually be encoded,
-// taken after the resize, since two frames differing only in fine detail can
-// become identical once downscaled. The second encodes the frames that
-// differ from the one before. The dedup is needed because the WebP writer
-// collapses runs of identical consecutive frames and no option prevents it:
-// left alone, the mapping would promise frames the file does not hold. The
-// scene count of the written file is the guarantee, and the dedup is what
-// keeps the check from failing on the common case.
-func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, path string) (w, h int, kept []int, err error) {
+// Every frame is encoded, each for displayDelayCS of its stored delay. The
+// WebP writer merges a frame into the scene before it when the two differ by
+// less than its lossy tolerance, an identical frame included, and no option
+// prevents it, so the file may hold fewer scenes than frames were given. The
+// returned positions are those the scenes show, found by reading the scene
+// delays back (see sceneStarts).
+func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, path string) (w, h int, shown []int, err error) {
 	src := s.sourceOf(enc)
 	frames, err := s.framesAt(pos, enc, true)
 	if err != nil {
 		return 0, 0, nil, err
 	}
-	keepAt := []int{0}
-	if len(pos) > 1 {
-		probed, err := s.env.runEncode(ctx, encodeArgs(frames, src, enc, encodeOutput{kind: outputProbe}),
-			encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}})
-		if err != nil {
-			return 0, 0, nil, fmt.Errorf("probing selected frames: %w", err)
-		}
-		keepAt = keepAt[:0]
-		for i, f := range probed {
-			if i == 0 || f.signature != probed[i-1].signature {
-				keepAt = append(keepAt, i)
-			}
-		}
-	}
-	keptFrames := make([]encodeFrame, len(keepAt))
-	kept = make([]int, len(keepAt))
-	for i, k := range keepAt {
-		keptFrames[i], kept[i] = frames[k], pos[k]
-	}
 	kind := outputAnimation
-	if len(kept) == 1 {
+	if len(pos) == 1 {
 		kind = outputStill
 	}
-	res, err := s.env.runEncode(ctx, encodeArgs(keptFrames, src, enc, encodeOutput{kind: kind, path: path}),
-		encodeCheck{frames: len(kept), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}})
+	delays := make([]int, len(frames))
+	for i := range frames {
+		frames[i].delayCS = displayDelayCS(frames[i].delayCS)
+		delays[i] = frames[i].delayCS
+	}
+	res, err := s.env.runEncode(ctx, encodeArgs(frames, src, enc, encodeOutput{kind: kind, path: path}),
+		encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}})
 	if err != nil {
 		return 0, 0, nil, fmt.Errorf("encoding animation: %w", err)
 	}
-	if len(kept) == 1 {
-		return res[0].width, res[0].height, kept, nil
+	if len(pos) == 1 {
+		return res[0].width, res[0].height, pos, nil
 	}
-	scenes, w, h, err := s.env.IdentifyArtifact(ctx, path)
+	written, w, h, err := s.env.identifyScenes(ctx, path)
 	if err != nil {
 		return 0, 0, nil, err
 	}
-	if scenes != len(kept) {
-		return 0, 0, nil, fmt.Errorf("encoded artifact holds %d scenes, mapping describes %d", scenes, len(kept))
+	starts, err := sceneStarts(delays, written)
+	if err != nil {
+		return 0, 0, nil, err
 	}
-	return w, h, kept, nil
+	shown = make([]int, len(starts))
+	for i, k := range starts {
+		shown[i] = pos[k]
+	}
+	return w, h, shown, nil
+}
+
+func totalCS(delays []int) int {
+	var total int
+	for _, d := range delays {
+		total += d
+	}
+	return total
+}
+
+// sceneStarts returns, for each scene of a written animation, the index of
+// the frame it shows: the first of the frames the writer merged into it.
+// given are the delays asked for each frame, all positive, and written the
+// delay of each scene as the file states it, both in centiseconds. A scene
+// begins where a frame does and lasts the sum of the delays of the frames it
+// holds, so it fails when a scene is empty, starts or ends between frames, or
+// the file's total differs from the frames'. A file of one scene may be a
+// still, which states no delay, or a one-frame animation, which states the
+// total; either shows the first frame.
+func sceneStarts(given, written []int) ([]int, error) {
+	if len(written) == 1 {
+		if total := totalCS(given); written[0] != 0 && written[0] != total {
+			return nil, fmt.Errorf("encoded artifact scene lasts %d cs, the frames give %d", written[0], total)
+		}
+		return []int{0}, nil
+	}
+	starts := make([]int, 0, len(written))
+	next := 0
+	for i, d := range written {
+		if d <= 0 {
+			return nil, fmt.Errorf("encoded artifact scene %d lasts %d cs", i, d)
+		}
+		if next >= len(given) {
+			return nil, fmt.Errorf("encoded artifact holds %d scenes for %d frames", len(written), len(given))
+		}
+		starts = append(starts, next)
+		held := 0
+		for next < len(given) && held < d {
+			held += given[next]
+			next++
+		}
+		if held != d {
+			return nil, fmt.Errorf("encoded artifact scene %d lasts %d cs, the frames from %d give %d", i, d, starts[i], held)
+		}
+	}
+	if next != len(given) {
+		return nil, fmt.Errorf("encoded artifact ends before frame %d of %d", next, len(given))
+	}
+	return starts, nil
 }
 
 // EncodeFrames writes one file per frame of the source into dir, named

@@ -52,6 +52,6 @@
 "-write"
 "$OUT/still.jpg"
 "-format"
-"%#|%w|%h\n"
+"%w|%h\n"
 "info:"
 

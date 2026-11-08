@@ -54,10 +54,8 @@ type encodeSource struct {
 type outputKind int
 
 const (
-	// outputProbe writes nothing; the run reports what the others would write.
-	outputProbe outputKind = iota
 	// outputStill writes the one frame to path.
-	outputStill
+	outputStill outputKind = iota
 	// outputAnimation writes every frame to path as one animated file, each
 	// frame displayed for its delay.
 	outputAnimation
@@ -113,12 +111,19 @@ func fitExpr(maxEdge, maxArea int) (width, height string) {
 	return "%[fx:" + tw + "]", "%[fx:" + th + "]"
 }
 
-// encodeFormat is the -format of the report an encode run prints, one line
-// per frame.
-const encodeFormat = "%#|%w|%h\n"
+// reportFormat is the -format of the report an encode run prints, one line
+// per frame: the size of the frame, preceded by the signature of its pixels
+// when signed. Computing a signature costs a pass over every frame, so only
+// the frame-file route that compares them asks for it.
+func reportFormat(signed bool) string {
+	if signed {
+		return "%#|%w|%h\n"
+	}
+	return "%w|%h\n"
+}
 
-// encodedFrame is one line of that report: the signature of the pixels
-// written and the size of the frame.
+// encodedFrame is one line of that report. signature is empty unless the run
+// was signed.
 type encodedFrame struct {
 	signature     string
 	width, height int
@@ -159,6 +164,9 @@ type encodeCheck struct {
 	// outputs are the files the run writes. They are removed when the run
 	// fails or is refused.
 	outputs []string
+	// signed says the run reports a pixel signature with each frame (see
+	// reportFormat).
+	signed bool
 }
 
 // timeLimitMessage is what ImageMagick prints when a run exceeds its time
@@ -247,7 +255,7 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 	case outputFiles:
 		args = append(args, "+adjoin", "-scene", "0", "-write", out.path)
 	}
-	return append(args, "-format", encodeFormat, "info:")
+	return append(args, "-format", reportFormat(out.kind == outputFiles), "info:")
 }
 
 // frameOps are the operators applied to a frame once it is read: orientation,
@@ -320,7 +328,7 @@ func fusedArgs(readOps []string, src encodeSource, targets []fusedTarget) []stri
 	args = append(args, targets[0].frame.input)
 	for _, t := range targets {
 		ops := append(frameOps(t.frame, t.source(src), t.enc), encodeTail(t.enc)...)
-		ops = append(ops, "-write", t.path, "-format", encodeFormat)
+		ops = append(ops, "-write", t.path, "-format", reportFormat(false))
 		if len(targets) == 1 {
 			return append(append(args, ops...), "info:")
 		}
@@ -330,20 +338,28 @@ func fusedArgs(readOps []string, src encodeSource, targets []fusedTarget) []stri
 	return append(args, "null:")
 }
 
-// parseEncoded reads the report of an encode run.
-func parseEncoded(out []byte) ([]encodedFrame, error) {
+// parseEncoded reads the report of an encode run, signed as reportFormat says.
+func parseEncoded(out []byte, signed bool) ([]encodedFrame, error) {
+	fields := 2
+	if signed {
+		fields = 3
+	}
 	var frames []encodedFrame
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, "|")
-		if len(f) != 3 {
+		if len(f) != fields {
 			return nil, fmt.Errorf("encode report line %q missing fields", line)
 		}
-		w, err1 := strconv.Atoi(f[1])
-		h, err2 := strconv.Atoi(f[2])
+		var signature string
+		if signed {
+			signature, f = f[0], f[1:]
+		}
+		w, err1 := strconv.Atoi(f[0])
+		h, err2 := strconv.Atoi(f[1])
 		if err1 != nil || err2 != nil {
 			return nil, fmt.Errorf("encode report line %q has an unreadable size", line)
 		}
-		frames = append(frames, encodedFrame{signature: f[0], width: w, height: h})
+		frames = append(frames, encodedFrame{signature: signature, width: w, height: h})
 	}
 	return frames, nil
 }

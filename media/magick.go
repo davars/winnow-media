@@ -129,27 +129,42 @@ func DeleteExpr(keep []int, sourceFrames int) string {
 // returns its scene count and the first scene's canvas width and height. It
 // is the post-encode check: a still must hold exactly one scene.
 func (e Env) IdentifyArtifact(ctx context.Context, path string) (scenes, width, height int, err error) {
-	args := []string{"identify", "-ping", "-format", "%s %w %h\n", path}
+	delays, width, height, err := e.identifyScenes(ctx, path)
+	return len(delays), width, height, err
+}
+
+// identifyScenes runs "magick identify" over an encoded artifact and returns
+// the delay of each scene in centiseconds as the file states it, and the
+// first scene's canvas width and height. A still reports one scene with a
+// delay of 0. Like IdentifyArtifact it reads headers only.
+func (e Env) identifyScenes(ctx context.Context, path string) (delaysCS []int, width, height int, err error) {
+	args := []string{"identify", "-ping", "-format", "%s %w %h %T\n", path}
 	res, err := e.runMagick(ctx, args...)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("identifying artifact: %w", err)
+		return nil, 0, 0, fmt.Errorf("identifying artifact: %w", err)
 	}
 	trimmed := strings.TrimRight(string(res.Stdout), "\n")
 	if trimmed == "" {
-		return 0, 0, 0, fmt.Errorf("identify returned no output")
+		return nil, 0, 0, fmt.Errorf("identify returned no output")
 	}
-	lines := strings.Split(trimmed, "\n")
-	fields := strings.Fields(lines[0])
-	if len(fields) < 3 {
-		return 0, 0, 0, fmt.Errorf("identify line %q missing fields", lines[0])
+	for _, line := range strings.Split(trimmed, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			return nil, 0, 0, fmt.Errorf("identify line %q missing fields", line)
+		}
+		delay, err := strconv.Atoi(fields[3])
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("parsing delay from %q: %w", line, err)
+		}
+		if delaysCS == nil {
+			if width, err = strconv.Atoi(fields[1]); err != nil {
+				return nil, 0, 0, fmt.Errorf("parsing width from %q: %w", line, err)
+			}
+			if height, err = strconv.Atoi(fields[2]); err != nil {
+				return nil, 0, 0, fmt.Errorf("parsing height from %q: %w", line, err)
+			}
+		}
+		delaysCS = append(delaysCS, delay)
 	}
-	width, err = strconv.Atoi(fields[1])
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parsing width from %q: %w", lines[0], err)
-	}
-	height, err = strconv.Atoi(fields[2])
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parsing height from %q: %w", lines[0], err)
-	}
-	return len(lines), width, height, nil
+	return delaysCS, width, height, nil
 }

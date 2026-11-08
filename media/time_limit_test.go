@@ -67,7 +67,7 @@ func TestEncodeRefusesATimeLimitReportedOnStderr(t *testing.T) {
 	}
 	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 		return Result{
-			Stdout: []byte("sig|100|75\n"),
+			Stdout: []byte("100|75\n"),
 			Stderr: []byte("magick: time limit exceeded `x.png' @ error/cache.c/GetImagePixelCache/1743.\n"),
 		}, nil
 	}}
@@ -89,15 +89,15 @@ func TestEncodeRefusesAFrameOutsideItsBound(t *testing.T) {
 		report string
 		ok     bool
 	}{
-		{"inside", []encodeBound{bound}, "s|100|50\n", true},
-		{"edge over", []encodeBound{bound}, "s|101|10\n", false},
-		{"area over", []encodeBound{bound}, "s|90|60\n", false},
-		{"the source size", []encodeBound{bound}, "s|10328|7745\n", false},
-		{"exact", []encodeBound{exact}, "s|50|40\n", true},
-		{"not exact", []encodeBound{exact}, "s|49|40\n", false},
-		{"second frame over", []encodeBound{bound}, "s|10|10\ns|10328|7745\n", false},
-		{"per frame bound", []encodeBound{bound, exact}, "s|10|10\ns|51|40\n", false},
-		{"bounds and frames differ", []encodeBound{bound, bound}, "s|10|10\n", false},
+		{"inside", []encodeBound{bound}, "100|50\n", true},
+		{"edge over", []encodeBound{bound}, "101|10\n", false},
+		{"area over", []encodeBound{bound}, "90|60\n", false},
+		{"the source size", []encodeBound{bound}, "10328|7745\n", false},
+		{"exact", []encodeBound{exact}, "50|40\n", true},
+		{"not exact", []encodeBound{exact}, "49|40\n", false},
+		{"second frame over", []encodeBound{bound}, "10|10\n10328|7745\n", false},
+		{"per frame bound", []encodeBound{bound, exact}, "10|10\n51|40\n", false},
+		{"bounds and frames differ", []encodeBound{bound, bound}, "10|10\n", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out.webp")
@@ -128,7 +128,7 @@ func TestEncodeTimeLimitThroughTheLimitFlags(t *testing.T) {
 	args := timeLimitArgs(t, slowEncode(src, out), "1")
 
 	raw, err := env.Run(context.Background(), "magick", args...)
-	if err != nil || !strings.Contains(string(raw.Stderr), "time limit exceeded") || !strings.Contains(string(raw.Stdout), "|4000|4000") {
+	if err != nil || !strings.Contains(string(raw.Stderr), "time limit exceeded") || !strings.Contains(string(raw.Stdout), "4000|4000") {
 		t.Fatalf("premise: err = %v, stderr %q, report %q; want exit 0, a time limit and the unresized frame",
 			err, raw.Stderr, raw.Stdout)
 	}
@@ -163,20 +163,23 @@ func TestEncodeTimeLimitThroughTheProcessorPolicy(t *testing.T) {
 	assertGone(t, out)
 }
 
-// skipResize reports every frame of the encodes that write output when
-// writes is set, and of the probes that do not otherwise, at size w x h, as
-// an encode whose resize was skipped would.
-func skipResize(real Env, w, h int, writes bool) Env {
+// skipResize reports every frame of the encodes that write output at size
+// w x h, as an encode whose resize was skipped would.
+func skipResize(real Env, w, h int) Env {
 	inner := real.Run
 	real.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
 		res, err := inner(ctx, name, args...)
-		if err != nil || !slices.Contains(args, "-resize") || slices.Contains(args, "-write") != writes {
+		if err != nil || !slices.Contains(args, "-resize") || !slices.Contains(args, "-write") {
 			return res, err
 		}
 		var lines []string
 		for _, line := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
-			sig, _, _ := strings.Cut(line, "|")
-			lines = append(lines, fmt.Sprintf("%s|%d|%d", sig, w, h))
+			prefix := ""
+			if strings.Count(line, "|") == 2 {
+				sig, _, _ := strings.Cut(line, "|")
+				prefix = sig + "|"
+			}
+			lines = append(lines, fmt.Sprintf("%s%d|%d", prefix, w, h))
 		}
 		res.Stdout = []byte(strings.Join(lines, "\n") + "\n")
 		return res, nil
@@ -196,7 +199,7 @@ func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
 
 	t.Run("one still target", func(t *testing.T) {
 		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400, true)
+		env := skipResize(stagedEnv(real, staging), 600, 400)
 		src := openSource(t, env, jpg, Hints{})
 		_, err := src.Encode(context.Background(), 0, enc)
 		requireBoundsError(t, err)
@@ -204,7 +207,7 @@ func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
 	})
 	t.Run("two still targets", func(t *testing.T) {
 		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400, true)
+		env := skipResize(stagedEnv(real, staging), 600, 400)
 		src := openSource(t, env, jpg, Hints{})
 		wider := enc
 		wider.MaxEdge, wider.MaxArea = 200, 200*200
@@ -214,7 +217,7 @@ func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
 	})
 	t.Run("still frame files", func(t *testing.T) {
 		out := t.TempDir()
-		env := skipResize(stagedEnv(real, t.TempDir()), 600, 400, true)
+		env := skipResize(stagedEnv(real, t.TempDir()), 600, 400)
 		src := openSource(t, env, jpg, Hints{})
 		_, err := src.EncodeFrames(context.Background(), enc, out)
 		requireBoundsError(t, err)
@@ -222,15 +225,7 @@ func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
 	})
 	t.Run("animation", func(t *testing.T) {
 		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400, true)
-		src := openSource(t, env, gif, Hints{Frames: 4})
-		_, err := src.Encode(context.Background(), 4, enc)
-		requireBoundsError(t, err)
-		assertEmptyDir(t, staging)
-	})
-	t.Run("animation probe", func(t *testing.T) {
-		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400, false)
+		env := skipResize(stagedEnv(real, staging), 600, 400)
 		src := openSource(t, env, gif, Hints{Frames: 4})
 		_, err := src.Encode(context.Background(), 4, enc)
 		requireBoundsError(t, err)
@@ -238,7 +233,7 @@ func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
 	})
 	t.Run("animation frame files", func(t *testing.T) {
 		out := t.TempDir()
-		env := skipResize(stagedEnv(real, t.TempDir()), 600, 400, true)
+		env := skipResize(stagedEnv(real, t.TempDir()), 600, 400)
 		src := openSource(t, env, gif, Hints{Frames: 4})
 		_, err := src.EncodeFrames(context.Background(), enc, out)
 		requireBoundsError(t, err)
@@ -313,7 +308,7 @@ func TestHeaderReadsReportATimeLimit(t *testing.T) {
 // A frame count other than the expected one removes the outputs, on the
 // bound-less checks too.
 func TestEncodeRefusesAFrameCountMismatch(t *testing.T) {
-	for name, report := range map[string]string{"fewer": "s|10|10\n", "more": "s|10|10\ns|10|10\ns|10|10\n"} {
+	for name, report := range map[string]string{"fewer": "10|10\n", "more": "10|10\n10|10\n10|10\n"} {
 		out := filepath.Join(t.TempDir(), "out.webp")
 		if err := os.WriteFile(out, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
@@ -341,7 +336,7 @@ func TestEncodeRefusesAWrongExactSize(t *testing.T) {
 	for name, targets := range map[string][]Encoding{"one target": {enc}, "two targets": {enc, wider}} {
 		t.Run(name, func(t *testing.T) {
 			staging := t.TempDir()
-			env := skipResize(stagedEnv(real, staging), 90, 60, true)
+			env := skipResize(stagedEnv(real, staging), 90, 60)
 			src := openSource(t, env, jpg, Hints{})
 			readOps, sizes := src.reduction(mustResolveAll(t, targets))
 			if readOps == nil || sizes == nil {
@@ -367,20 +362,19 @@ func mustResolveAll(t *testing.T, targets []Encoding) []encoding {
 
 // dropLastFrame removes the last line of the report of every encode that
 // writes output.
-func dropLastFrame(real Env) Env { return editReport(real, -1, true) }
+func dropLastFrame(real Env) Env { return editReport(real, -1) }
 
 // repeatLastFrame repeats the last line of the report of every encode that
 // writes output.
-func repeatLastFrame(real Env) Env { return editReport(real, 1, true) }
+func repeatLastFrame(real Env) Env { return editReport(real, 1) }
 
 // editReport adds a line (delta 1) or removes one (delta -1) in the report of
-// the encodes that write output when writes is set, and of the probes
-// otherwise.
-func editReport(real Env, delta int, writes bool) Env {
+// the encodes that write output.
+func editReport(real Env, delta int) Env {
 	inner := real.Run
 	real.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
 		res, err := inner(ctx, name, args...)
-		if err != nil || name != "magick" || slices.Contains(args, "-write") != writes {
+		if err != nil || name != "magick" || !slices.Contains(args, "-write") {
 			return res, err
 		}
 		lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
@@ -440,9 +434,9 @@ func TestEncodeRoutesRefuseAShortReport(t *testing.T) {
 	})
 }
 
-// The video thumbnails go through the same checks: the probe of the sampled
-// frames and the animated encode, with the bound of their encoding and, for a
-// frame reduced in decoding, its exact size.
+// The video thumbnails go through the same checks: the animated encode, with
+// the bound of their encoding and, for a frame reduced in decoding, its exact
+// size.
 func TestVideoThumbnailsRefuseABadReport(t *testing.T) {
 	real := requireFFmpeg(t)
 	small := writeClip(t, real, ".mp4", testsrc("160x120", 10, 3)...)
@@ -453,12 +447,9 @@ func TestVideoThumbnailsRefuseABadReport(t *testing.T) {
 		env  func(Env) Env
 		want string
 	}{
-		{"probe over the bounds", small, func(e Env) Env { return skipResize(e, 160, 120, false) }, "above the bounds"},
-		{"encode over the bounds", small, func(e Env) Env { return skipResize(e, 160, 120, true) }, "above the bounds"},
-		{"probe too short", small, func(e Env) Env { return editReport(e, -1, false) }, "frames, want"},
-		{"encode too short", small, func(e Env) Env { return editReport(e, -1, true) }, "frames, want"},
-		{"probe of the wrong exact size", big, func(e Env) Env { return skipResize(e, 30, 20, false) }, "want exactly"},
-		{"encode of the wrong exact size", big, func(e Env) Env { return skipResize(e, 30, 20, true) }, "want exactly"},
+		{"encode over the bounds", small, func(e Env) Env { return skipResize(e, 160, 120) }, "above the bounds"},
+		{"encode too short", small, func(e Env) Env { return editReport(e, -1) }, "frames, want"},
+		{"encode of the wrong exact size", big, func(e Env) Env { return skipResize(e, 30, 20) }, "want exactly"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := t.TempDir()
