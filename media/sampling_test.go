@@ -239,17 +239,29 @@ func TestVideoFramesAt(t *testing.T) {
 		}
 	})
 
-	refusals := map[string][]int64{
-		"empty":             {},
-		"negative":          {1000, -1},
-		"at the duration":   {16000},
-		"past the duration": {1000, 99_000},
+	// An argument is refused before any tool runs; a time outside the video
+	// is refused after the one probe run.
+	refusals := map[string]struct {
+		times []int64
+		runs  int
+		want  string
+	}{
+		"empty":             {[]int64{}, 0, "times"},
+		"negative":          {[]int64{1000, -1}, 0, "is negative"},
+		"at the duration":   {[]int64{16000}, 1, "is not inside the video"},
+		"past the duration": {[]int64{1000, 99_000}, 1, "is not inside the video"},
 	}
-	for name, times := range refusals {
+	for name, c := range refusals {
 		t.Run("refuses "+name, func(t *testing.T) {
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
 			out := t.TempDir()
-			if _, _, err := p.VideoFramesAt(ctx, src, Encoding{}, times, out); err == nil {
-				t.Fatal("succeeded")
+			_, _, err := p.VideoFramesAt(ctx, src, Encoding{}, c.times, out)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to say %q", err, c.want)
+			}
+			if n := rec.count(); n != c.runs {
+				t.Errorf("%d tool runs, want %d", n, c.runs)
 			}
 			if got := dirNames(t, out); len(got) != 0 {
 				t.Errorf("output dir holds %v", got)
@@ -403,39 +415,38 @@ func TestVideoFrameRun(t *testing.T) {
 		}
 	})
 
+	// An argument is refused before any tool runs; a start outside the video
+	// is refused after the one probe run.
 	refusals := map[string]struct {
 		start int64
 		count int
+		runs  int
+		want  string
 	}{
-		"zero count":         {0, 0},
-		"negative count":     {0, -1},
-		"over the maximum":   {0, maxMaxFrames + 1},
-		"negative start":     {-1, 1},
-		"start at the end":   {4000, 1},
-		"start past the end": {99_000, 1},
+		"zero count":         {0, 0, 0, "count"},
+		"negative count":     {0, -1, 0, "count"},
+		"over the maximum":   {0, maxMaxFrames + 1, 0, "count"},
+		"negative start":     {-1, 1, 0, "is negative"},
+		"start at the end":   {4000, 1, 1, "is not inside the video"},
+		"start past the end": {99_000, 1, 1, "is not inside the video"},
 	}
 	for name, c := range refusals {
 		t.Run("refuses "+name, func(t *testing.T) {
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
 			out := t.TempDir()
-			if _, _, err := p.VideoFrameRun(ctx, src, Encoding{}, c.start, c.count, out); err == nil {
-				t.Fatal("succeeded")
+			_, _, err := p.VideoFrameRun(ctx, src, Encoding{}, c.start, c.count, out)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to say %q", err, c.want)
+			}
+			if n := rec.count(); n != c.runs {
+				t.Errorf("%d tool runs, want %d", n, c.runs)
 			}
 			if got := dirNames(t, out); len(got) != 0 {
 				t.Errorf("output dir holds %v", got)
 			}
 		})
 	}
-
-	t.Run("refuses an over-maximum count before any tool runs", func(t *testing.T) {
-		rec := record(p)
-		defer func() { p.run = rec.inner }()
-		if _, _, err := p.VideoFrameRun(ctx, src, Encoding{}, 0, maxMaxFrames+1, t.TempDir()); err == nil {
-			t.Fatal("succeeded")
-		}
-		if n := rec.count(); n != 0 {
-			t.Errorf("%d tool runs", n)
-		}
-	})
 
 	t.Run("cleans up when the run fails", func(t *testing.T) {
 		// Calls: probe, ffmpeg, encode.
@@ -484,15 +495,26 @@ func TestAnimationFramesAt(t *testing.T) {
 			t.Errorf("frames = %v, want 0, 2, %d", got, frames-1)
 		}
 
-		for name, indices := range map[string][]int{
-			"empty":                {},
-			"negative":             {1, -1},
-			"at the frame count":   {frames},
-			"past the frame count": {0, frames + 40},
+		// An argument is refused before any tool runs; an index outside the
+		// animation is refused after the one header read.
+		for name, c := range map[string]struct {
+			indices []int
+			runs    int
+		}{
+			"empty":                {[]int{}, 0},
+			"negative":             {[]int{1, -1}, 0},
+			"at the frame count":   {[]int{frames}, 1},
+			"past the frame count": {[]int{0, frames + 40}, 1},
 		} {
+			rec := record(p)
 			dir := t.TempDir()
-			if _, _, err := p.AnimationFramesAt(ctx, src, Encoding{}, indices, dir); err == nil {
+			_, _, err := p.AnimationFramesAt(ctx, src, Encoding{}, c.indices, dir)
+			p.run = rec.inner
+			if err == nil {
 				t.Errorf("%s: succeeded", name)
+			}
+			if n := rec.count(); n != c.runs {
+				t.Errorf("%s: %d tool runs, want %d", name, n, c.runs)
 			}
 			if got := dirNames(t, dir); len(got) != 0 {
 				t.Errorf("%s: output dir holds %v", name, got)
