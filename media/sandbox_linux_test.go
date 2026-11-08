@@ -197,6 +197,21 @@ func TestSandboxErrorKeepsTheStartAndEndOfStandardError(t *testing.T) {
 	}
 }
 
+// A compositor that fails after a flood on standard error has both ends of it
+// in the error, as a tool has.
+func TestSandboxCompositorErrorKeepsTheStartAndEndOfStandardError(t *testing.T) {
+	p := fakeProcessor(t)
+	err := composeWithScript(t, p, "echo FIRST-LINE >&2\ni=0\nwhile [ $i -lt 400 ]; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx >&2; i=$((i+1)); done\necho LAST-LINE >&2\nexit 5\n")
+	if err == nil {
+		t.Fatal("the compositor failed but the run did not")
+	}
+	for _, want := range []string{"exit status 5", "FIRST-LINE", "LAST-LINE", "bytes omitted"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err does not contain %q: %.300q", want, err)
+		}
+	}
+}
+
 func readPids(t *testing.T, path string) []int {
 	t.Helper()
 	b, err := os.ReadFile(path)
