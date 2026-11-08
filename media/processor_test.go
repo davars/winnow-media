@@ -29,7 +29,6 @@ func mvgFile(t *testing.T, textPath string) string {
 		"image over 0,0 0,0 'text:"+textPath+"'\npop graphic-context\n"))
 }
 
-// gifBytes returns a GIF whose logical screen and only frame are w x h.
 // gifFrames is a GIF with a w by h screen and n frames of fw by fh, each one
 // valid LZW data for a single pixel.
 func gifFrames(w, h, fw, fh, n int) []byte {
@@ -46,6 +45,7 @@ func gifFrames(w, h, fw, fh, n int) []byte {
 	return append(b, 0x3B)
 }
 
+// gifBytes returns a GIF whose logical screen and only frame are w x h.
 func gifBytes(w, h int) []byte { return gifFrames(w, h, w, h, 1) }
 
 func TestRunnerEnvironmentIgnoresCallerConfiguration(t *testing.T) {

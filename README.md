@@ -334,19 +334,19 @@ tools itself because the input is untrusted:
 - `Processor.VideoFramesAt(ctx, path, Encoding, timesMS []int64, dir)
   ([]Image, Usage, error)` samples the given times, read by one decode or
   one seek per time as the stream's size decides, exactly as `VideoFrames`
-  does; `VideoFrames` is this with evenly
-  spaced times. `timesMS` holds 1 to 64 times in any order; they are sorted
+  does; `VideoFrames` is this with evenly spaced times. `timesMS` holds 1 to 64 times in any order; they are sorted
   and repeats are sampled once. A time must be 0 or inside the duration;
   anything else is an error before a frame is decoded. `Image.TimeMS` is the
   requested time.
 - `Processor.VideoFrameRun(ctx, path, Encoding, startMS int64, count int, dir)
   ([]Image, Usage, error)` returns `count` (1 to 64) consecutive frames from
-  the first one at or after `startMS`, from a single ffmpeg run (one `-ss`,
-  then `-frames:v count`), so its cost is one seek plus the decode of the
-  frames, not one seek per frame. ffmpeg names its scratch files by each
-  frame's presentation time in ms (`-frame_pts` with a 1/1000 encoder time
-  base), which is where `Image.TimeMS` comes from: the frame's own time, not
-  the request. A run that reaches the end returns fewer frames. `startMS` is
+  the first one at or after `startMS`, from a single ffmpeg run, so its cost
+  is one run, not one per frame. A stream read by seeks starts that run a
+  margin before `startMS` with one `-ss`; a stream read once is decoded from
+  its start, with no `-ss`. ffmpeg names its scratch files by each frame's
+  presentation time in microseconds (`-frame_pts` with a 1:1000000 encoder
+  time base), which is where `Image.TimeMS` comes from, in ms: the frame's
+  own time, not the request. A run that reaches the end returns fewer frames. `startMS` is
   checked as the times of `VideoFramesAt` are.
 - `Processor.AnimationFramesAt(ctx, path, Encoding, indices []int, dir)
   ([]Image, Usage, error)` writes the frames with the given indices through

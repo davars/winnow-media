@@ -295,13 +295,16 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 // WebM or Matroska file and writes them to dir as frame-NNN.<ext>. The
 // samples are the centres of equal intervals of the duration of the video
 // stream flagged default (else the first), ignoring attached pictures. A
-// stream of at most 1e9 decoded pixels (frames times width times height) is
-// read by one decode, a longer one by one seek per sample, so the work does
-// not grow with the length of a long video. A container with more than 32 streams, a stream longer than six
-// hours or one wider or taller than 16384 pixels gives an error wrapping
-// ErrTooLarge before any frame is decoded. HDR (HLG or PQ) video is tone-mapped to SDR, output is
-// upright whatever the stream's display rotation, and a sample identical to
-// the one before it is dropped, with the files numbered consecutively from 0.
+// stream whose frame count is known and whose decoded pixels (frames times
+// width times height) are at most 1e9 is read by one decode; any other by one
+// seek per sample.
+//
+// A container with more than 32 streams, a stream longer than six hours or
+// one wider or taller than 16384 pixels gives an error wrapping ErrTooLarge
+// before any frame is decoded. HDR (HLG or PQ) video is tone-mapped to SDR,
+// output is upright whatever the stream's display rotation, and a sample
+// identical to the one before it is dropped, with the files numbered
+// consecutively from 0.
 // Image.TimeMS is the sample time in milliseconds; Image.Frame is 0 because a
 // sample has no known frame index. Output is otherwise as for Still.
 //
