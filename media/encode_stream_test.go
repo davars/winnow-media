@@ -506,9 +506,7 @@ func TestEncodeRungRefusesOversizeWebPAnimationsBeforeDecoding(t *testing.T) {
 	width := maxFramePixels / height
 	oneFrame := func(w, h int) string {
 		dir := t.TempDir()
-		src, still := filepath.Join(dir, "one.png"), filepath.Join(dir, "one.webp")
-		magick(t, real, "-size", fmt.Sprintf("%dx%d", w, h), "xc:red", src)
-		run(t, "cwebp", "-quiet", "-lossless", src, "-o", still)
+		still := writeFile(t, "one.webp", losslessWebP(w, h))
 		out := filepath.Join(dir, "anim.webp")
 		run(t, "webpmux", "-frame", still, "+100+0+0+0+b", "-frame", still, "+100+0+0+0+b", "-loop", "0", "-o", out)
 		return out
