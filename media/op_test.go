@@ -202,6 +202,10 @@ func TestFitSize(t *testing.T) {
 		{480, 640, 640, 307200, 480, 640, false},
 		{6000, 4000, 2576, 3750000, 2371, 1581, true},
 		{1, 4000, 100, 100000, 1, 100, true},
+		// A side that floors to 1 leaves the other over the area until the
+		// area bound clamps it.
+		{1, 4000, 16384, 100, 1, 100, true},
+		{4000, 1, 16384, 100, 100, 1, true},
 		// A rung is an edge bound and the area of its square. ImageMagick's
 		// -thumbnail rounds 1536.5 up to 1537; the size is the floor.
 		{4000, 3001, 2048, 2048 * 2048, 2048, 1536, true},
