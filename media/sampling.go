@@ -106,9 +106,9 @@ func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationI
 
 // VideoFramesAt decodes the frame at or after each of timesMS from an MP4,
 // QuickTime, WebM or Matroska file and writes them to dir as
-// frame-NNN.<ext>, read as VideoFrames reads its samples. Output, the gate, the caps,
-// errors, Usage and the state of dir are as for VideoFrames; Image.TimeMS is
-// the requested time.
+// frame-NNN.<ext>, read as VideoFrames reads its samples. Output, the gate,
+// the caps, errors, Usage and the state of dir are as for VideoFrames;
+// Image.TimeMS is the requested time.
 //
 // timesMS holds 1 to 64 times in milliseconds, in any order, with repeats.
 // The frames are written in ascending time and a repeated time is sampled

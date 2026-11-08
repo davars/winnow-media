@@ -1,11 +1,12 @@
 // Package media builds and runs the media tools' command lines: bounded WebP
 // encodes of still images and animations (a fallback ladder of dimension
 // ceilings and frame caps, with the frame mapping each encode holds), and
-// animated WebP thumbnails of video. It also offers media operations that turn
-// one input file into upright, sized, sRGB images in an output directory.
+// animated WebPs of a video's samples. It also offers media operations that
+// turn one input file into upright, sized, sRGB images in an output directory.
 //
-// The operations (Processor.Still, Processor.AnimationFrames and
-// Processor.VideoFrames) run the tools themselves, for untrusted input: a
+// The operations (Processor.Still, Processor.AnimationFrames,
+// Processor.VideoFrames and their AnimationFramesAt, VideoFramesAt and
+// VideoFrameRun variants) run the tools themselves, for untrusted input: a
 // Processor checks the file's size and type before any tool runs, pins the
 // decoder to the type found, and runs the tools with a fixed environment under
 // a generated ImageMagick policy that it has read back from the tool.

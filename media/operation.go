@@ -48,9 +48,9 @@ type Image struct {
 	// operations, a video among them.
 	Frame int
 	// TimeMS is the position of the image in the source, in milliseconds: the
-	// time a video was sampled at, or the delays of the frames before it in an
-	// animation (a stored delay below 20 ms counts as 100 ms, as browsers
-	// display it). It is 0 for other operations.
+	// time a video was sampled at, or the sum of the display delays of the
+	// frames before it in an animation (a stored delay below 20 ms counts as
+	// 100 ms, as browsers display it). It is 0 for other operations.
 	TimeMS int64
 }
 

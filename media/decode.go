@@ -1171,8 +1171,8 @@ func sceneStarts(given, written []int) ([]int, error) {
 // frame-NNN with the extension of enc.Format and numbered from 0, and returns
 // them in order; Image.Frame is the index of the source frame, 0 for a video,
 // and Image.TimeMS the time of that frame or sample, as Frame.SourceTimeMS
-// gives it. A frame identical to the one before it after resizing is dropped. dir must exist
-// and be empty. It fails as Encode does.
+// gives it. A frame identical to the one before it after resizing is dropped.
+// dir must exist and be empty. It fails as Encode does.
 func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]Image, error) {
 	ec, err := enc.resolve()
 	if err != nil {
