@@ -176,30 +176,21 @@ func TestGIFFrameAtTheCapDecodesWithinTheBounds(t *testing.T) {
 	if len(data) > 1<<20 {
 		t.Fatalf("bomb is %d bytes, want a small file", len(data))
 	}
-	for name, run := range map[string]func(path string) ([]Image, Usage, error){
-		"AnimationFrames": func(path string) ([]Image, Usage, error) {
-			return p.AnimationFrames(context.Background(), path, Encoding{}, 0, t.TempDir())
-		},
-		"AnimationFramesAt": func(path string) ([]Image, Usage, error) {
-			return p.AnimationFramesAt(context.Background(), path, Encoding{}, []int{0}, t.TempDir())
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			start := time.Now()
-			images, usage, err := run(writeFile(t, "bomb.gif", data))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(images) != 1 {
-				t.Errorf("%d images, want 1", len(images))
-			}
-			if wall := time.Since(start); wall > 2*time.Minute {
-				t.Errorf("took %v, the bound is 2m", wall)
-			}
-			if usage.MaxRSS > 4<<30 {
-				t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
-			}
-		})
+	// Both entry points decode through animationFrames; the gate in front of
+	// each is covered by the refusal tests, so one decode of the bomb suffices.
+	start := time.Now()
+	images, usage, err := p.AnimationFrames(context.Background(), writeFile(t, "bomb.gif", data), Encoding{}, 0, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 {
+		t.Errorf("%d images, want 1", len(images))
+	}
+	if wall := time.Since(start); wall > 2*time.Minute {
+		t.Errorf("took %v, the bound is 2m", wall)
+	}
+	if usage.MaxRSS > 4<<30 {
+		t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
 	}
 }
 
@@ -209,30 +200,21 @@ func TestAnimationAtTheFrameCapDecodesWithinTheBounds(t *testing.T) {
 	if frames*side*side > maxDecodedPixels {
 		t.Fatalf("fixture is %d frames of %d pixels, the cap is %d", frames, side*side, int64(maxDecodedPixels))
 	}
-	for name, run := range map[string]func(path string) ([]Image, Usage, error){
-		"AnimationFrames": func(path string) ([]Image, Usage, error) {
-			return p.AnimationFrames(context.Background(), path, Encoding{}, 0, t.TempDir())
-		},
-		"AnimationFramesAt": func(path string) ([]Image, Usage, error) {
-			return p.AnimationFramesAt(context.Background(), path, Encoding{}, []int{0, frames - 1}, t.TempDir())
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			start := time.Now()
-			images, usage, err := run(writeFile(t, "full.gif", oneColourGIF(t, side, side, frames)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(images) == 0 {
-				t.Error("no images")
-			}
-			if wall := time.Since(start); wall > 2*time.Minute {
-				t.Errorf("took %v, the bound is 2m", wall)
-			}
-			if usage.MaxRSS > 4<<30 {
-				t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
-			}
-		})
+	// The frames reached are the first and the last, which is where the cap
+	// bites; the other entry point shares the decode.
+	start := time.Now()
+	images, usage, err := p.AnimationFramesAt(context.Background(), writeFile(t, "full.gif", oneColourGIF(t, side, side, frames)), Encoding{}, []int{0, frames - 1}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) == 0 {
+		t.Error("no images")
+	}
+	if wall := time.Since(start); wall > 2*time.Minute {
+		t.Errorf("took %v, the bound is 2m", wall)
+	}
+	if usage.MaxRSS > 4<<30 {
+		t.Errorf("peak RSS %d bytes, the bound is 4 GiB", usage.MaxRSS)
 	}
 }
 
