@@ -63,8 +63,8 @@ func newVideoStub() *videoStub { return &videoStub{probe: fmt.Sprintf(stubVideoP
 func TestEveryFFmpegRunCarriesTheInputBounds(t *testing.T) {
 	ctx := context.Background()
 	entries := map[string]func(Env, string) error{
-		"GenerateVideoThumbnails": func(e Env, dir string) error {
-			return e.GenerateVideoThumbnails(ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 0, 10, 64, 200, 80)
+		"encodeWebPPair": func(e Env, dir string) error {
+			return encodeWebPPair(e, ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 64, 200, 80)
 		},
 		"videoFrames": func(e Env, dir string) error {
 			_, err := e.videoFrames(ctx, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 5, dir)
@@ -124,47 +124,60 @@ func testBounds(t *testing.T, run func(Env, string) error) {
 	}
 }
 
-// The cap is a property of the input: the thumbnails are refused before any
-// ffmpeg run or scratch directory.
-func TestGenerateVideoThumbnailsRefusesOversizedInputBeforeSampling(t *testing.T) {
+// forbidScratch is an Env.Scratch that fails the test when it is called.
+func forbidScratch(t *testing.T) func() (string, func(), error) {
+	return func() (string, func(), error) {
+		t.Error("Scratch called")
+		return "", nil, errors.New("scratch requested")
+	}
+}
+
+// The cap is a property of the input: an oversized stream is refused before
+// any ffmpeg run or scratch directory.
+func TestVideoOpenRefusesOversizedBeforeScratch(t *testing.T) {
 	for _, size := range [][2]int{{16385, 100}, {100, 16385}} {
 		stub := newVideoStub()
 		stub.probe = fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,"duration":"10"}],"format":{"duration":"10"}}`, size[0], size[1])
-		out := t.TempDir()
-		err := stub.env().GenerateVideoThumbnails(context.Background(), "/in.mov",
-			filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 10, 64, 200, 80)
+		env := stub.env()
+		env.Scratch = forbidScratch(t)
+		_, err := env.open(context.Background(), openRequest{
+			path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, video: &videoRequest{},
+		})
 		if !errors.Is(err, ErrTooLarge) {
 			t.Errorf("%v: err = %v, want ErrTooLarge", size, err)
 		}
 		if len(stub.runs) != 0 {
 			t.Errorf("%v: %d ffmpeg runs before the refusal", size, len(stub.runs))
 		}
-		if names := dirNames(t, out); len(names) != 0 {
-			t.Errorf("%v: left %v", size, names)
-		}
 	}
 }
 
-// The samples are staged beside the outputs, not in the system temporary
-// directory.
-func TestGenerateVideoThumbnailsKeepsScratchBesideTheOutputs(t *testing.T) {
-	out := t.TempDir()
-	systemTmp := t.TempDir()
-	t.Setenv("TMPDIR", systemTmp)
+// A request's scratch directory is used in place of the system temporary
+// directory and Env.Scratch.
+func TestVideoOpenStagesSamplesInTheRequestedScratch(t *testing.T) {
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", t.TempDir())
 	stub := newVideoStub()
-	_ = stub.env().GenerateVideoThumbnails(context.Background(), "/in.mov",
-		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 10, 64, 200, 80)
+	env := stub.env()
+	env.Scratch = forbidScratch(t)
+	staging := t.TempDir()
+	env.Stage = func(ext string) (string, func(), error) { return filepath.Join(staging, "out"+ext), func() {}, nil }
+	src, err := env.open(context.Background(), openRequest{
+		path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, scratch: scratch, video: &videoRequest{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	_, _ = src.encode(context.Background(), 0, []encoding{{format: WebP, ext: ".webp", quality: 80, maxEdge: 200, maxArea: 200 * 200}})
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
 	for _, args := range stub.runs {
 		sample := args[len(args)-1]
-		if !strings.HasPrefix(sample, out+string(filepath.Separator)) {
-			t.Errorf("scratch sample %s is not under %s", sample, out)
+		if !strings.HasPrefix(sample, scratch+string(filepath.Separator)) {
+			t.Errorf("scratch sample %s is not under %s", sample, scratch)
 		}
-	}
-	if names := dirNames(t, out); len(names) != 0 {
-		t.Errorf("scratch left behind: %v", names)
 	}
 }
 
@@ -175,8 +188,8 @@ func TestVideoSeeksCountFromTheContainerStart(t *testing.T) {
 	stub := newVideoStub()
 	stub.probe = fmt.Sprintf(stubVideoProbe, "1.5")
 	out := t.TempDir()
-	_ = stub.env().GenerateVideoThumbnails(context.Background(), "/in.mov",
-		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 10, 64, 200, 80)
+	_ = encodeWebPPair(stub.env(), context.Background(), "/in.mov",
+		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80)
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
@@ -268,15 +281,15 @@ func withRunCounts(env Env) *runCounter {
 	return c
 }
 
-func TestGenerateVideoThumbnailsSeeksEverySample(t *testing.T) {
+func TestWebPPairSeeksEverySample(t *testing.T) {
 	forceSeek(t)
 	env := requireFFmpeg(t)
-	// More frames than the select path ever decoded in full.
+	// 80 frames at 25 fps, so the run count shows one seek per sample.
 	src := sdrClip(t, env, "320x240", 25, 80)
 	c := withRunCounts(env)
 	out := t.TempDir()
 	small, large := filepath.Join(out, "small.webp"), filepath.Join(out, "large.webp")
-	if err := c.GenerateVideoThumbnails(context.Background(), src, small, large, 0, 2000, 64, 200, 80); err != nil {
+	if err := encodeWebPPair(c.Env, context.Background(), src, small, large, 64, 200, 80); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(c.runs["ffmpeg"]); n != maxVideoSampleFrames {
@@ -302,13 +315,13 @@ func TestGenerateVideoThumbnailsSeeksEverySample(t *testing.T) {
 	}
 }
 
-func TestGenerateVideoThumbnailsDropsRepeatedFrames(t *testing.T) {
+func TestWebPPairDropsRepeatedFrames(t *testing.T) {
 	env := requireFFmpeg(t)
 	src := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=red:size=160x120:rate=10:duration=4",
 		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
 	out := t.TempDir()
 	small, large := filepath.Join(out, "small.webp"), filepath.Join(out, "large.webp")
-	if err := env.GenerateVideoThumbnails(context.Background(), src, small, large, 0, 40, 64, 100, 80); err != nil {
+	if err := encodeWebPPair(env, context.Background(), src, small, large, 64, 100, 80); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{small, large} {
@@ -318,14 +331,14 @@ func TestGenerateVideoThumbnailsDropsRepeatedFrames(t *testing.T) {
 	}
 }
 
-// Both thumbnails come from one reduced decode, and the smaller one is sized
+// Both outputs come from one reduced decode, and the smaller one is sized
 // from the source, not from the frame reduced for the larger.
-func TestGenerateVideoThumbnailsSizeAHDRSmallFromTheSource(t *testing.T) {
+func TestWebPPairSizeAHDRSmallFromTheSource(t *testing.T) {
 	env := requireFFmpeg(t)
 	src := hlgClip(t, env, testsrc("402x208", 10, 3))
 	out := t.TempDir()
 	small, large := filepath.Join(out, "small.webp"), filepath.Join(out, "large.webp")
-	if err := env.GenerateVideoThumbnails(context.Background(), src, small, large, 0, 30, 64, 200, 80); err != nil {
+	if err := encodeWebPPair(env, context.Background(), src, small, large, 64, 200, 80); err != nil {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{small: "64x33", large: "200x103"} {
@@ -435,9 +448,9 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 	}
 }
 
-// The wrapper decodes for the larger output, so that output is never
+// Encoding at two sizes decodes for the larger output, so that output is never
 // upscaled from a frame reduced for the smaller one.
-func TestGenerateVideoThumbnailsDecodeForTheLargerOutput(t *testing.T) {
+func TestWebPPairDecodeForTheLargerOutput(t *testing.T) {
 	env := requireFFmpeg(t)
 	for name, c := range map[string]struct {
 		clip func() string
@@ -459,7 +472,7 @@ func TestGenerateVideoThumbnailsDecodeForTheLargerOutput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			counter := withRunCounts(env)
 			out := t.TempDir()
-			if err := counter.GenerateVideoThumbnails(context.Background(), c.clip(), filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 0, 64, 200, 80); err != nil {
+			if err := encodeWebPPair(counter.Env, context.Background(), c.clip(), filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80); err != nil {
 				t.Fatal(err)
 			}
 			for _, args := range counter.runs["ffmpeg"] {
@@ -601,7 +614,7 @@ func TestDetectedFormatsRefuseListFormats(t *testing.T) {
 			}
 			c := withRunCounts(env)
 			out := t.TempDir()
-			err := c.GenerateVideoThumbnails(context.Background(), path, filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 0, 64, 200, 80)
+			err := encodeWebPPair(c.Env, context.Background(), path, filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80)
 			if err == nil {
 				t.Fatal("a list format was opened")
 			}
@@ -614,13 +627,13 @@ func TestDetectedFormatsRefuseListFormats(t *testing.T) {
 
 // Containers that are neither MP4 nor Matroska are still read when no type is
 // named.
-func TestGenerateVideoThumbnailsReadsOtherContainers(t *testing.T) {
+func TestWebPPairReadsOtherContainers(t *testing.T) {
 	env := requireFFmpeg(t)
 	for ext, codec := range map[string]string{".avi": "mpeg4", ".ts": "mpeg2video", ".flv": "flv", ".wmv": "wmv2", ".mpg": "mpeg2video"} {
 		t.Run(ext, func(t *testing.T) {
 			src := writeClip(t, env, ext, append(testsrc("160x120", 10, 2), "-c:v", codec)...)
 			out := t.TempDir()
-			if err := env.GenerateVideoThumbnails(context.Background(), src, filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 0, 64, 100, 80); err != nil {
+			if err := encodeWebPPair(env, context.Background(), src, filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 100, 80); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -629,7 +642,7 @@ func TestGenerateVideoThumbnailsReadsOtherContainers(t *testing.T) {
 
 // Raw MPEG video streams and 3GPP files, which the catalog holds, are read
 // whether or not their brand is one the sniff table names.
-func TestGenerateVideoThumbnailsReadsRawMPEGAndThreeGPP(t *testing.T) {
+func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
 	env := requireFFmpeg(t)
 	cases := map[string][]string{
 		"mpeg1video": {"-c:v", "mpeg1video", "-r", "25", "-f", "mpeg1video"},
@@ -646,7 +659,7 @@ func TestGenerateVideoThumbnailsReadsRawMPEGAndThreeGPP(t *testing.T) {
 			}
 			out := t.TempDir()
 			small, large := filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp")
-			if err := env.GenerateVideoThumbnails(context.Background(), path, small, large, 0, 0, 64, 100, 80); err != nil {
+			if err := encodeWebPPair(env, context.Background(), path, small, large, 64, 100, 80); err != nil {
 				t.Fatal(err)
 			}
 			if got := sceneSizes(t, env, large)[0]; !strings.HasPrefix(got, "100x") {
@@ -873,9 +886,27 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			images, _, err := p.VideoFrameRun(context.Background(), src, enc, 500, 4, dir)
 			return sampled{images, readDir(t, dir)}, err
 		},
-		"GenerateVideoThumbnails": func(src string) (sampled, error) {
+		"Env.Open": func(src string) (sampled, error) {
 			dir := t.TempDir()
-			err := env.GenerateVideoThumbnails(context.Background(), src, filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 0, 0, 48, 100, 80)
+			staged := env
+			staged.Scratch = testScratch
+			n := 0
+			staged.Stage = func(ext string) (string, func(), error) {
+				path := filepath.Join(dir, fmt.Sprintf("target-%d%s", n, ext))
+				n++
+				return path, func() { _ = os.Remove(path) }, nil
+			}
+			source, err := staged.Open(context.Background(), src, Hints{})
+			if err != nil {
+				return sampled{}, err
+			}
+			defer source.Close()
+			_, err = source.Encode(context.Background(), 0, openTargets...)
+			return sampled{nil, readDir(t, dir)}, err
+		},
+		"encodeWebPPair": func(src string) (sampled, error) {
+			dir := t.TempDir()
+			err := encodeWebPPair(env, context.Background(), src, filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 48, 100, 80)
 			return sampled{nil, readDir(t, dir)}, err
 		},
 	}
@@ -940,8 +971,8 @@ func TestSelectIsChosenByDecodedPixelsOnly(t *testing.T) {
 			forceSelectLimit(t, c.limit)
 			ctx := context.Background()
 			entries := map[string]func(Env, string){
-				"GenerateVideoThumbnails": func(e Env, dir string) {
-					_ = e.GenerateVideoThumbnails(ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 0, 0, 32, 64, 80)
+				"encodeWebPPair": func(e Env, dir string) {
+					_ = encodeWebPPair(e, ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 32, 64, 80)
 				},
 				"videoFrames": func(e Env, dir string) {
 					_, _ = e.videoFrames(ctx, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 5, dir)
@@ -976,8 +1007,8 @@ func TestSelectCountsFromTheContainerStart(t *testing.T) {
 	stub := newVideoStub()
 	stub.probe = fmt.Sprintf(stubVideoProbe, "1.5")
 	out := t.TempDir()
-	_ = stub.env().GenerateVideoThumbnails(context.Background(), "/in.mov",
-		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 0, 10, 64, 200, 80)
+	_ = encodeWebPPair(stub.env(), context.Background(), "/in.mov",
+		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80)
 	if len(stub.runs) != 1 || !isSelectRun(stub.runs[0]) {
 		t.Fatalf("runs = %v, want one select run", stub.runs)
 	}
@@ -1036,4 +1067,34 @@ func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, decod
 		return videoPlan{}, err
 	}
 	return newVideoPlan(info, decode), nil
+}
+
+// encodeWebPPair opens a video and encodes it at two sizes of animated
+// WebP, writing the outputs to smallPath and largePath and staging samples in
+// a directory beside them.
+func encodeWebPPair(e Env, ctx context.Context, inputPath, smallPath, largePath string, sizeSmall, sizeLarge, quality int) error {
+	dir, err := os.MkdirTemp(filepath.Dir(smallPath), ".video-samples-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	outputs := []string{smallPath, largePath}
+	e.Stage = func(string) (string, func(), error) {
+		path := outputs[0]
+		outputs = outputs[1:]
+		return path, func() { _ = os.Remove(path) }, nil
+	}
+	src, err := e.open(ctx, openRequest{
+		path: inputPath, dec: sniffedVideoDecoder(inputPath), pinned: true, scratch: dir,
+		video: &videoRequest{},
+	})
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	webp := func(edge int) encoding {
+		return encoding{format: WebP, ext: ".webp", quality: quality, maxEdge: edge, maxArea: edge * edge}
+	}
+	_, err = src.encode(ctx, 0, []encoding{webp(sizeSmall), webp(sizeLarge)})
+	return err
 }

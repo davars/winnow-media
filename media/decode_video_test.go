@@ -17,7 +17,7 @@ import (
 	"testing"
 )
 
-var openThumbs = []Encoding{
+var openTargets = []Encoding{
 	{Format: WebP, Quality: 80, MaxEdge: 48, MaxArea: 48 * 48},
 	{Format: WebP, Quality: 80, MaxEdge: 100, MaxArea: 100 * 100},
 }
@@ -29,42 +29,6 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-// Open and Encode at two targets write what GenerateVideoThumbnails writes,
-// whichever way the samples are read.
-func TestOpenVideoEncodesWhatTheThumbnailWrapperWrites(t *testing.T) {
-	env := requireFFmpeg(t)
-	clips := map[string]string{
-		"sdr":     sdrClip(t, env, "320x240", 10, 4),
-		"reduced": sdrClip(t, env, "1280x720", 10, 3),
-		"hlg":     closedGOPHLG(t, env),
-		"rotated": rotatedClip(t, env),
-		"static": writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=blue:size=160x120:rate=10:duration=3",
-			"-c:v", "libx264", "-pix_fmt", "yuv420p"),
-	}
-	for name, clip := range clips {
-		for limit, mode := range map[int64]string{0: "seek", selectMaxPixels: "select"} {
-			t.Run(name+"/"+mode, func(t *testing.T) {
-				forceSelectLimit(t, limit)
-				out := t.TempDir()
-				small, large := filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp")
-				if err := env.GenerateVideoThumbnails(context.Background(), clip, small, large, 0, 0, 48, 100, 80); err != nil {
-					t.Fatal(err)
-				}
-				src := openSource(t, env, clip, Hints{})
-				arts, err := src.Encode(context.Background(), 0, openThumbs...)
-				if err != nil {
-					t.Fatal(err)
-				}
-				for i, want := range []string{small, large} {
-					if !bytes.Equal(readFile(t, arts[i].Path), readFile(t, want)) {
-						t.Errorf("target %d differs from the wrapper's output", i)
-					}
-				}
-			})
-		}
-	}
 }
 
 // Frames of a video are its sample times, final once decoded, and the
@@ -86,7 +50,7 @@ func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
 		if got := src.Frames(); !slices.Equal(got, want) {
 			t.Errorf("Frames{%d} = %v, want %v", c.hint, got, want)
 		}
-		arts, err := src.Encode(context.Background(), 0, openThumbs[1])
+		arts, err := src.Encode(context.Background(), 0, openTargets[1])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +64,7 @@ func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
 
 	// maxFrames chooses among the samples, evenly from the first.
 	src := openSource(t, env, clip, Hints{Frames: 8})
-	arts, err := src.Encode(context.Background(), 2, openThumbs[1])
+	arts, err := src.Encode(context.Background(), 2, openTargets[1])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +84,7 @@ func TestVideoMapsTheScenesTheWriterMerged(t *testing.T) {
 		"-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=2",
 		"-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
 	src := openSource(t, env, clip, Hints{})
-	arts, err := src.Encode(context.Background(), 0, openThumbs[1])
+	arts, err := src.Encode(context.Background(), 0, openTargets[1])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,14 +251,14 @@ func TestVideoSourceSurvivesAFailedDecode(t *testing.T) {
 			if len(before) != 6 {
 				t.Fatalf("Open chose %d times", len(before))
 			}
-			if _, err := src.Encode(context.Background(), 0, openThumbs[1]); err == nil {
+			if _, err := src.Encode(context.Background(), 0, openTargets[1]); err == nil {
 				t.Fatal("encode succeeded")
 			}
 			if got := src.Frames(); !slices.Equal(got, before) {
 				t.Errorf("Frames after the failure = %v, want %v", got, before)
 			}
 			failAt.Store(-1)
-			arts, err := src.Encode(context.Background(), 0, openThumbs[1])
+			arts, err := src.Encode(context.Background(), 0, openTargets[1])
 			if err != nil {
 				t.Fatalf("retry: %v", err)
 			}
@@ -365,7 +329,7 @@ func TestOpenReadsQuickTimeWithoutFtyp(t *testing.T) {
 			if src.video.dec != (decoder{"ffmpeg", "mov"}) {
 				t.Errorf("decoder = %+v, want mov", src.video.dec)
 			}
-			if _, err := src.Encode(context.Background(), 0, openThumbs[1]); err != nil {
+			if _, err := src.Encode(context.Background(), 0, openTargets[1]); err != nil {
 				t.Fatal(err)
 			}
 			for _, args := range counted.runs["magick"] {
@@ -432,10 +396,10 @@ func TestOpenVideoMatchesTheProcessorsFrames(t *testing.T) {
 	}
 }
 
-// Open reads every container GenerateVideoThumbnails does, with no type
+// Open reads every container video decoding supports, with no type
 // named: the bytes pin MP4, MOV, WebM and Matroska, and ffmpeg detects the
 // rest among detectedFormats.
-func TestOpenReadsEveryContainerTheWrapperReads(t *testing.T) {
+func TestOpenReadsEveryVideoContainer(t *testing.T) {
 	env := requireFFmpeg(t)
 	clip := func(args ...string) string {
 		path := filepath.Join(t.TempDir(), "input")
@@ -465,7 +429,7 @@ func TestOpenReadsEveryContainerTheWrapperReads(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			counted := withRunCounts(env)
 			src := openSource(t, counted.Env, path, Hints{Frames: 4})
-			arts, err := src.Encode(context.Background(), 0, openThumbs[1])
+			arts, err := src.Encode(context.Background(), 0, openTargets[1])
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -478,19 +442,6 @@ func TestOpenReadsEveryContainerTheWrapperReads(t *testing.T) {
 			}
 			if len(arts[0].Frames) == 0 || arts[0].Width != 100 {
 				t.Errorf("artifact %dx%d with frames %v", arts[0].Width, arts[0].Height, arts[0].Frames)
-			}
-			out := t.TempDir()
-			small, large := filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp")
-			if err := env.GenerateVideoThumbnails(context.Background(), path, small, large, 0, 0, 48, 100, 80); err != nil {
-				t.Fatal(err)
-			}
-			both := openSource(t, env, path, Hints{})
-			pair, err := both.Encode(context.Background(), 0, openThumbs...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(readFile(t, pair[1].Path), readFile(t, large)) || !bytes.Equal(readFile(t, pair[0].Path), readFile(t, small)) {
-				t.Error("Open and Encode differ from the wrapper")
 			}
 		})
 	}
@@ -601,7 +552,7 @@ func TestVideoSourceStillEncodesAfterAFailedRedecode(t *testing.T) {
 				return inner(ctx, tool, args...)
 			}
 			src := openSource(t, env, clip, Hints{Frames: 4})
-			want, err := src.Encode(context.Background(), 0, openThumbs[0])
+			want, err := src.Encode(context.Background(), 0, openTargets[0])
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -611,7 +562,7 @@ func TestVideoSourceStillEncodesAfterAFailedRedecode(t *testing.T) {
 				t.Fatal("the larger encode succeeded")
 			}
 			fail.Store(false)
-			got, err := src.Encode(context.Background(), 0, openThumbs[0])
+			got, err := src.Encode(context.Background(), 0, openTargets[0])
 			if err != nil {
 				t.Fatalf("the smaller encode after the failure: %v", err)
 			}
