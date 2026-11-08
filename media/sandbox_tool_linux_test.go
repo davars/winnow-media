@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -72,6 +73,16 @@ func fakeTool(args []string) {
 	case "exit":
 		n, _ := strconv.Atoi(args[1])
 		os.Exit(n)
+	case "noise":
+		// noise <bytes>: write a first line, filler and a last line to
+		// standard error, then fail.
+		n, _ := strconv.Atoi(args[1])
+		fmt.Fprintln(os.Stderr, "FIRST-LINE")
+		for written := 0; written < n; written += 100 {
+			fmt.Fprintln(os.Stderr, strings.Repeat("x", 99))
+		}
+		fmt.Fprintln(os.Stderr, "LAST-LINE")
+		os.Exit(4)
 	case "kill-self":
 		n, _ := strconv.Atoi(args[1])
 		check(syscall.Kill(os.Getpid(), syscall.Signal(n)))

@@ -9,8 +9,13 @@ import (
 	"github.com/davars/winnow-media/tool"
 )
 
-// stderrTail is how much of a failed tool's standard error an error carries.
-const stderrTail = 4 << 10
+// stderrHead and stderrTail are how much of the start and of the end of a
+// failed tool's standard error an error carries. A fatal runtime error names
+// its cause first and buries it under a goroutine dump.
+const (
+	stderrHead = 512
+	stderrTail = 4 << 10
+)
 
 // Processor runs the media operations. Every tool runs in the sandbox
 // described at NewProcessor. It owns the tools it runs, the
@@ -121,15 +126,36 @@ func (p *Processor) environ(tmp string) []string {
 	}
 }
 
-// tailBuffer keeps the last stderrTail bytes written to it.
-type tailBuffer struct{ buf []byte }
+// tailBuffer keeps the first stderrHead and the last stderrTail bytes
+// written to it.
+type tailBuffer struct {
+	head, tail []byte
+	omitted    int
+}
 
 func (t *tailBuffer) Write(b []byte) (int, error) {
-	t.buf = append(t.buf, b...)
-	if len(t.buf) > stderrTail {
-		t.buf = append(t.buf[:0], t.buf[len(t.buf)-stderrTail:]...)
+	n := len(b)
+	if room := stderrHead - len(t.head); room > 0 {
+		k := min(room, len(b))
+		t.head = append(t.head, b[:k]...)
+		b = b[k:]
 	}
-	return len(b), nil
+	t.tail = append(t.tail, b...)
+	if drop := len(t.tail) - stderrTail; drop > 0 {
+		t.tail = append(t.tail[:0], t.tail[drop:]...)
+		t.omitted += drop
+	}
+	return n, nil
+}
+
+// bytes returns what was written, with a note in place of what was dropped
+// between the head and the tail.
+func (t *tailBuffer) bytes() []byte {
+	out := append([]byte{}, t.head...)
+	if t.omitted > 0 {
+		out = fmt.Appendf(out, "\n[%d bytes omitted]\n", t.omitted)
+	}
+	return append(out, t.tail...)
 }
 
 // meter accumulates the usage of the runs of one operation.
