@@ -29,14 +29,13 @@ func forbidCompositor(t *testing.T, p *Processor) {
 }
 
 func TestGIFFramesGoToMagickInBatches(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
 	// Two 64x48 frames per run.
 	old, oldTimeout := encodeBatchPixels, composeTimeout
 	encodeBatchPixels, composeTimeout = 2*64*48, 10*time.Second
 	t.Cleanup(func() { encodeBatchPixels, composeTimeout = old, oldTimeout })
 	rec := record(p)
-	images, out := framesInto(t, p, writeGIF(t, env, solid, 12), Encoding{}, 6)
+	images, out := framesInto(t, p, writeGIF(t, solid, 12), Encoding{}, 6)
 	if len(images) != 6 {
 		t.Fatalf("%d images, want 6", len(images))
 	}
@@ -280,9 +279,8 @@ func mustAdobeProfile(t *testing.T) []byte {
 }
 
 func TestGIFWithoutTrailerGivesTheSameFrames(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
-	full := writeGIF(t, env, solid, 6)
+	full := writeGIF(t, solid, 6)
 	data, err := os.ReadFile(full)
 	if err != nil {
 		t.Fatal(err)

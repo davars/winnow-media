@@ -158,7 +158,9 @@ func TestEncodeRefusesAStillWebPDecodeThatWritesTheWrongImages(t *testing.T) {
 			defer src.Close()
 			out, err := src.Encode(context.Background(), 0, Encoding{Format: WebP})
 			if err == nil {
-				out[0].Cleanup()
+				if len(out) > 0 {
+					out[0].Cleanup()
+				}
 				t.Fatal("Encode succeeded")
 			}
 			if !strings.Contains(err.Error(), c.want) {

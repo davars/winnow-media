@@ -160,7 +160,7 @@ var probeFault string
 func probeSandbox(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var stderr tailBuffer
+	var stderr headTailBuffer
 	res, _, err := runHelper(ctx, helperConfig{Probe: true, Fault: probeFault}, io.Discard, &stderr)
 	if err != nil {
 		return fmt.Errorf("sandbox probe: %w (if this program never called media.Init, call it first thing in main): %s",
@@ -239,9 +239,10 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	var stdout bytes.Buffer
-	var stderr tailBuffer
+	var stderr headTailBuffer
 	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
-	return Result{Stdout: stdout.Bytes(), Stderr: bytes.TrimSpace(stderr.bytes()), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.bytes()))
+	tail := bytes.TrimSpace(stderr.bytes())
+	return Result{Stdout: stdout.Bytes(), Stderr: tail, Usage: UsageOf(state)}, helperError(ctx, name, res, err, tail)
 }
 
 // helperError turns the outcome of one helper run into an error, or nil.
@@ -292,7 +293,7 @@ func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFra
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	lines := &frameLines{dir: req.dir, onFrame: onFrame}
-	var stderr tailBuffer
+	var stderr headTailBuffer
 	res, state, err := runHelper(ctx, cfg, stopOnError{lines, cancel}, &stderr)
 	usage := UsageOf(state)
 	if lines.err != nil {

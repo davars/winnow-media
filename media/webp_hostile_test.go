@@ -83,16 +83,15 @@ func hostileWebPs(t *testing.T) map[string]hostileWebP {
 		"cut between frames":        {data: good[:frames[4]], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
 		"frame outside the canvas":  {data: patchFrame(2, 0, 500), w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
 		"canvas smaller than frame": {data: canvasSmall, w: 10, h: 10, frames: 6, refusal: "decodable", through: notDecodable},
-		// ImageMagick reads the file as five scenes and the frames it can read
-		// are written.
+		// How many scenes ImageMagick reads from these two damaged files is its
+		// own leniency, so the contract is a refusal or at most the frames asked
+		// for.
 		"garbage frame header": {data: garbageFrame, w: 40, h: 30, frames: 6, refusal: "header read found", through: map[string]webpOutcome{
-			"AnimationFrames": {images: 5}, "AnimationFramesAt": {images: 3},
+			"AnimationFrames": {atMost: 6}, "AnimationFramesAt": {atMost: 3},
 		}},
 		"garbage frame data": {data: garbageData, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
-		// The compositor stops after the last frame selected, so a request for
-		// the first three frames never reaches the damaged fourth.
 		"corrupt frame pixels": {data: corruptPixels, w: 40, h: 30, frames: 6, refusal: "decoding frame", through: map[string]webpOutcome{
-			"AnimationFrames": {err: "decoding frame 3 failed"}, "AnimationFramesAt": {images: 3},
+			"AnimationFrames": {atMost: 6}, "AnimationFramesAt": {atMost: 3},
 		}},
 		"chunk size past the end": {data: overlong, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
 	}
@@ -110,20 +109,24 @@ type hostileWebP struct {
 
 // webpOutcome is what an operation does with a damaged file: it writes images
 // frames, or, when err is set, fails with a message containing it and writes
-// none.
+// none, or, when atMost is set, either fails or writes no more than atMost
+// frames.
 type webpOutcome struct {
 	images int
 	err    string
+	atMost int
 }
 
 func both(o webpOutcome) map[string]webpOutcome {
 	return map[string]webpOutcome{"AnimationFrames": o, "AnimationFramesAt": o}
 }
 
-// TestHostileAnimatedWebPsFailCleanly runs damaged animated WebPs through
-// every operation that writes their frames. Each gives the outcome its
-// fixture states, none hangs, and a failure leaves nothing behind.
-func TestHostileAnimatedWebPsFailCleanly(t *testing.T) {
+// TestHostileAnimatedWebPsAreRefusedOrBounded runs damaged animated WebPs
+// through every operation that writes their frames. Each gives the outcome
+// its fixture states, or, where that depends on how far ImageMagick reads the
+// file, fails or writes no more frames than were asked for. None exceeds the
+// time and memory bounds, and a failure leaves nothing behind.
+func TestHostileAnimatedWebPsAreRefusedOrBounded(t *testing.T) {
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
 	for name, c := range hostileWebPs(t) {
@@ -137,9 +140,30 @@ func TestHostileAnimatedWebPsFailCleanly(t *testing.T) {
 				defer cancel()
 				path := writeFile(t, "x.webp", c.data)
 				out := t.TempDir()
-				images, _, err := entry.run(ctx, path, out)
+				images, usage, err := entry.run(ctx, path, out)
 				if ctx.Err() != nil {
 					t.Fatalf("timed out: %v", err)
+				}
+				if usage.MaxRSS > 512<<20 {
+					t.Errorf("peak RSS %d bytes, the bound is %d", usage.MaxRSS, int64(512<<20))
+				}
+				if want.atMost > 0 {
+					if err != nil {
+						if len(images) != 0 {
+							t.Errorf("%d images returned with the error", len(images))
+						}
+						if got := dirNames(t, out); len(got) != 0 {
+							t.Errorf("failed, and the output dir holds %v", got)
+						}
+						return
+					}
+					if len(images) > want.atMost {
+						t.Errorf("%d images, want at most %d", len(images), want.atMost)
+					}
+					if got := dirNames(t, out); len(got) != len(images) {
+						t.Errorf("the output dir holds %v, want %d files", got, len(images))
+					}
+					return
 				}
 				if want.err != "" {
 					if err == nil || !strings.Contains(err.Error(), want.err) {

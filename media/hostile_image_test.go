@@ -286,9 +286,10 @@ func reachCompositor(t *testing.T, p *Processor) func() int {
 	return func() int { return started }
 }
 
-// An accepted case is proved by the gate letting it through to the compositor,
-// which TestGIFFrameAtTheCapDecodesWithinTheBounds already bounds for a frame
-// at the cap; decoding every returned frame would only repeat that.
+// An accepted case is proved by the gate letting it through to the compositor.
+// No test completes a call at the returned-pixel cap: TestGIFFrameAtTheCapDecodesWithinTheBounds
+// bounds the decode of one frame at the frame cap, and TestAnimationAtTheFrameCapDecodesWithinTheBounds
+// that of the most frames, not 16 frames of 4 megapixels.
 func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 	p := requireProcessor(t)
 	cases := []struct {

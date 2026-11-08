@@ -28,8 +28,9 @@ import (
 // Result is one completed tool run.
 type Result struct {
 	Stdout []byte
-	// Stderr is the tail of the tool's standard error, or nil when the
-	// runner does not capture it. ImageMagick reports a run that hit its time
+	// Stderr is the start and end of the tool's standard error (a Processor
+	// keeps the first 512 bytes and the last 4 KiB, with a note of the bytes
+	// dropped), or nil when the runner does not capture it. ImageMagick reports a run that hit its time
 	// limit there and nowhere else, so a runner that leaves it nil leaves
 	// only the size check of the encodes to notice.
 	Stderr []byte

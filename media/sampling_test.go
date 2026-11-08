@@ -164,7 +164,6 @@ func TestProbeVideo(t *testing.T) {
 }
 
 func TestProbeAnimation(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
 	ctx := context.Background()
 
@@ -183,7 +182,7 @@ func TestProbeAnimation(t *testing.T) {
 		t.Errorf("gif: %+v", info)
 	}
 
-	info, _, err = p.ProbeAnimation(ctx, writeGIF(t, env, solid, 7))
+	info, _, err = p.ProbeAnimation(ctx, writeGIF(t, solid, 7))
 	if err != nil || info.Frames != 7 || info.Width != 64 || info.Height != 48 || len(info.DelaysMS) != 7 {
 		t.Errorf("magick gif: %+v, %v", info, err)
 	}
@@ -466,7 +465,6 @@ func TestVideoFrameRun(t *testing.T) {
 }
 
 func TestAnimationFramesAt(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
 	ctx := context.Background()
 
@@ -496,22 +494,25 @@ func TestAnimationFramesAt(t *testing.T) {
 		}
 
 		// An argument is refused before any tool runs; an index outside the
-		// animation is refused after the one header read.
+		// animation is refused after the one header read, by the gate and
+		// not by a compositor that fails later.
+		forbidCompositor(t, p)
 		for name, c := range map[string]struct {
 			indices []int
 			runs    int
+			want    string
 		}{
-			"empty":                {[]int{}, 0},
-			"negative":             {[]int{1, -1}, 0},
-			"at the frame count":   {[]int{frames}, 1},
-			"past the frame count": {[]int{0, frames + 40}, 1},
+			"empty":                {[]int{}, 0, "indices"},
+			"negative":             {[]int{1, -1}, 0, "is negative"},
+			"at the frame count":   {[]int{frames}, 1, "is outside the animation's"},
+			"past the frame count": {[]int{0, frames + 40}, 1, "is outside the animation's"},
 		} {
 			rec := record(p)
 			dir := t.TempDir()
 			_, _, err := p.AnimationFramesAt(ctx, src, Encoding{}, c.indices, dir)
 			p.run = rec.inner
-			if err == nil {
-				t.Errorf("%s: succeeded", name)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s: err = %v, want it to say %q", name, err, c.want)
 			}
 			if n := rec.count(); n != c.runs {
 				t.Errorf("%s: %d tool runs, want %d", name, n, c.runs)
@@ -522,7 +523,7 @@ func TestAnimationFramesAt(t *testing.T) {
 		}
 	}
 
-	t.Run("gif", func(t *testing.T) { check(t, writeGIF(t, env, solid, 12), 12) })
+	t.Run("gif", func(t *testing.T) { check(t, writeGIF(t, solid, 12), 12) })
 	t.Run("webp", func(t *testing.T) {
 		requireWebPBuilders(t)
 		check(t, buildWebP(t, webpCase{codec: "lossless", frames: 6}), 6)
@@ -535,7 +536,7 @@ func TestAnimationFramesAt(t *testing.T) {
 		for i := range indices {
 			indices[i] = i
 		}
-		if _, _, err := p.AnimationFramesAt(ctx, writeGIF(t, env, solid, 3), Encoding{}, indices, t.TempDir()); err == nil {
+		if _, _, err := p.AnimationFramesAt(ctx, writeGIF(t, solid, 3), Encoding{}, indices, t.TempDir()); err == nil {
 			t.Fatal("succeeded")
 		}
 		if n := rec.count(); n != 0 {
@@ -548,14 +549,14 @@ func TestAnimationFramesAt(t *testing.T) {
 		for i := range indices {
 			indices[i] = i
 		}
-		images, _, err := p.AnimationFramesAt(ctx, writeGIF(t, env, solid, maxMaxFrames), Encoding{}, indices, t.TempDir())
+		images, _, err := p.AnimationFramesAt(ctx, writeGIF(t, solid, maxMaxFrames), Encoding{}, indices, t.TempDir())
 		if err != nil || len(images) != maxMaxFrames {
 			t.Errorf("%d images, err %v", len(images), err)
 		}
 	})
 
 	t.Run("picks the frames asked for, not evenly spaced ones", func(t *testing.T) {
-		images, _, err := p.AnimationFramesAt(ctx, writeGIF(t, env, solid, 12), Encoding{}, []int{1, 2, 3}, t.TempDir())
+		images, _, err := p.AnimationFramesAt(ctx, writeGIF(t, solid, 12), Encoding{}, []int{1, 2, 3}, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -630,12 +631,11 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 // An index at or past the frame count is refused by the gate after the header
 // read, not by the compositor: the error is the gate's and no compositor runs.
 func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *testing.T) {
-	env := requireMagick(t)
 	for name, c := range map[string]struct {
 		src    func(t *testing.T) string
 		frames int
 	}{
-		"gif": {func(t *testing.T) string { return writeGIF(t, env, solid, 12) }, 12},
+		"gif": {func(t *testing.T) string { return writeGIF(t, solid, 12) }, 12},
 		"webp": {func(t *testing.T) string {
 			requireWebPBuilders(t)
 			return buildWebP(t, webpCase{codec: "lossless", frames: 6})
