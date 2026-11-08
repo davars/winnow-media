@@ -1,12 +1,16 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/gif"
 	"os"
 	"path/filepath"
 	"slices"
@@ -109,16 +113,38 @@ func solid(i int) string {
 }
 
 // writeGIF writes frames solid 64x48 frames of 50 ms each, staged without an
-// extension.
-func writeGIF(t *testing.T, env Env, colour func(i int) string, frames int) string {
+// extension. colour names each frame's colour as "xc:rgb(r,g,b)"; the file is
+// written in process, which costs microseconds where ImageMagick costs 70 ms
+// a frame.
+func writeGIF(t *testing.T, _ Env, colour func(i int) string, frames int) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "x.gif")
-	args := []string{"-size", "64x48"}
-	for i := range frames {
-		args = append(args, "-delay", "5", colour(i))
+	rect := image.Rect(0, 0, 64, 48)
+	palette := make(color.Palette, frames)
+	for i := range palette {
+		var r, g, b int
+		if _, err := fmt.Sscanf(colour(i), "xc:rgb(%d,%d,%d)", &r, &g, &b); err != nil {
+			t.Fatalf("colour %q: %v", colour(i), err)
+		}
+		palette[i] = color.RGBA{uint8(r), uint8(g), uint8(b), 255}
 	}
-	args = append(args, "-loop", "0", path)
-	magick(t, env, args...)
+	out := &gif.GIF{Config: image.Config{ColorModel: palette, Width: rect.Dx(), Height: rect.Dy()}}
+	for i := range frames {
+		img := image.NewPaletted(rect, palette)
+		for j := range img.Pix {
+			img.Pix[j] = uint8(i)
+		}
+		out.Image = append(out.Image, img)
+		out.Delay = append(out.Delay, 5)
+		out.Disposal = append(out.Disposal, 0)
+	}
+	var b bytes.Buffer
+	if err := gif.EncodeAll(&b, out); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "x.gif")
+	if err := os.WriteFile(path, b.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return stage(t, path)
 }
 
