@@ -164,7 +164,7 @@ func probeSandbox(ctx context.Context) error {
 	res, _, err := runHelper(ctx, helperConfig{Probe: true, Fault: probeFault}, io.Discard, &stderr)
 	if err != nil {
 		return fmt.Errorf("sandbox probe: %w (if this program never called media.Init, call it first thing in main): %s",
-			err, bytes.TrimSpace(stderr.buf))
+			err, bytes.TrimSpace(stderr.bytes()))
 	}
 	if res.Err != "" {
 		return fmt.Errorf("sandbox probe: %s", res.Err)
@@ -241,7 +241,7 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	var stdout bytes.Buffer
 	var stderr tailBuffer
 	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
-	return Result{Stdout: stdout.Bytes(), Stderr: bytes.TrimSpace(stderr.buf), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.buf))
+	return Result{Stdout: stdout.Bytes(), Stderr: bytes.TrimSpace(stderr.bytes()), Usage: UsageOf(state)}, helperError(ctx, name, res, err, bytes.TrimSpace(stderr.bytes()))
 }
 
 // helperError turns the outcome of one helper run into an error, or nil.
@@ -298,7 +298,7 @@ func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFra
 	if lines.err != nil {
 		return usage, lines.err
 	}
-	return usage, helperError(parent, name, res, err, bytes.TrimSpace(stderr.buf))
+	return usage, helperError(parent, name, res, err, bytes.TrimSpace(stderr.bytes()))
 }
 
 // stopOnError is a writer that calls stop when its writes fail, so that a

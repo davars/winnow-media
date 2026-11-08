@@ -176,6 +176,27 @@ func TestSandboxReportsHowTheToolEnded(t *testing.T) {
 	}
 }
 
+// A tool that fails after a flood on standard error has both ends of it in the
+// error: the first line, which names the cause, and the last.
+func TestSandboxErrorKeepsTheStartAndEndOfStandardError(t *testing.T) {
+	p := fakeProcessor(t)
+	res, err := runFake(t, p, "noise", "100000")
+	if err == nil {
+		t.Fatal("the tool failed but the run did not")
+	}
+	for _, want := range []string{"exit status 4", "FIRST-LINE", "LAST-LINE", "bytes omitted"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err does not contain %q: %.300q", want, err)
+		}
+	}
+	if !strings.Contains(string(res.Stderr), "FIRST-LINE") || !strings.Contains(string(res.Stderr), "LAST-LINE") {
+		t.Errorf("Result.Stderr does not hold both ends: %.300q", res.Stderr)
+	}
+	if limit := stderrHead + stderrTail + 200; len(err.Error()) > limit {
+		t.Errorf("the error is %d bytes, more than %d", len(err.Error()), limit)
+	}
+}
+
 func readPids(t *testing.T, path string) []int {
 	t.Helper()
 	b, err := os.ReadFile(path)

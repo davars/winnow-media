@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"os"
 	"path/filepath"
@@ -485,5 +486,38 @@ func TestKilledRunLeavesNothingInTheProcessorsTempDir(t *testing.T) {
 	}
 	if got := dirNames(t, p.tmpDir()); len(got) != 0 {
 		t.Errorf("the Processor's temporary directory holds %v after a killed run", got)
+	}
+}
+
+func TestTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
+	text := func(n int) string {
+		var b strings.Builder
+		for i := 0; b.Len() < n; i++ {
+			fmt.Fprintf(&b, "%d,", i)
+		}
+		return b.String()[:n]
+	}
+	for _, n := range []int{0, 1, stderrHead, stderrHead + stderrTail} {
+		var buf tailBuffer
+		_, _ = buf.Write([]byte(text(n)))
+		if got := string(buf.bytes()); got != text(n) {
+			t.Errorf("%d bytes written: got %d bytes back, want them unchanged", n, len(got))
+		}
+	}
+	// More than the two keep: the start, a note, the end, however the
+	// writes were cut.
+	const total = 50_000
+	whole := text(total)
+	for name, step := range map[string]int{"one write": total, "by 1000": 1000, "by 7": 7, "by 1": 1} {
+		var buf tailBuffer
+		for i := 0; i < total; i += step {
+			if _, err := buf.Write([]byte(whole[i:min(i+step, total)])); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := whole[:stderrHead] + fmt.Sprintf("\n[%d bytes omitted]\n", total-stderrHead-stderrTail) + whole[total-stderrTail:]
+		if got := string(buf.bytes()); got != want {
+			t.Errorf("%s: got %d bytes starting %.40q, want %d bytes starting %.40q", name, len(got), got, len(want), want)
+		}
 	}
 }
