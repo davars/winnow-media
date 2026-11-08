@@ -434,10 +434,10 @@ func TestEncodeRoutesRefuseAShortReport(t *testing.T) {
 	})
 }
 
-// The video thumbnails go through the same checks: the animated encode, with
-// the bound of their encoding and, for a frame reduced in decoding, its exact
-// size.
-func TestVideoThumbnailsRefuseABadReport(t *testing.T) {
+// The animated WebPs of a video go through the same checks: the animated
+// encode, with the bound of their encoding and, for a frame reduced in
+// decoding, its exact size.
+func TestVideoWebPPairRefusesABadReport(t *testing.T) {
 	real := requireFFmpeg(t)
 	small := writeClip(t, real, ".mp4", testsrc("160x120", 10, 3)...)
 	big := writeClip(t, real, ".mp4", testsrc("3840x2160", 5, 1)...)
@@ -453,8 +453,8 @@ func TestVideoThumbnailsRefuseABadReport(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := t.TempDir()
-			err := c.env(real).GenerateVideoThumbnails(context.Background(), c.clip,
-				filepath.Join(out, "small.webp"), filepath.Join(out, "large.webp"), 0, 10, 64, 100, 80)
+			err := encodeWebPPair(c.env(real), context.Background(), c.clip,
+				filepath.Join(out, "small.webp"), filepath.Join(out, "large.webp"), 64, 100, 80)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want one containing %q", err, c.want)
 			}

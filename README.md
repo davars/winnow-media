@@ -176,20 +176,6 @@ are resolved, limited and cancelled, and where scratch files live.
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
   path. A run that reaches ImageMagick's time limit fails with `ErrTimeLimit`
   (when the runner fills `Stderr`) and is not retried.
-- `Env.GenerateVideoThumbnails` is `Open` and `Encode` at two targets. It
-  writes two animated WebP thumbnails of fifteen frames sampled evenly over a
-  video, through the same pipeline as `Processor.VideoFrames` (below): samples
-  are read by one decode or by seeks, as the stream's size decides, HDR is
-  tone-mapped, output is upright, sized, stripped and 8-bit, each sample is asked
-  to show for half a second, and the writer may merge near-identical
-  consecutive samples into one longer scene.
-  The stream is ffprobe's choice; its `streamIndex` and `frames` arguments are
-  ignored. The samples are staged in a subdirectory beside the outputs, and
-  the same bounds and caps as the Processor's apply. It does not take the type
-  from the caller: the leading bytes pick the demuxer, and any other content
-  is left to ffmpeg's detection, limited to video containers (`mov`,
-  `matroska`, `avi`, `mpegts`, `mpeg`, `mpegvideo`, `flv`, `asf`), so a concat
-  or HLS list that names other files is refused.
 - `LimitArgs` and `DeleteExpr` are the argument fragments consumers reuse for
   their own invocations over these artifacts. `MemoryProfile.LimitArgs()`
   bounds memory, map, area and list length (2048 scenes) for the process and
