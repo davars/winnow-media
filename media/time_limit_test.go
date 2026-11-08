@@ -471,3 +471,87 @@ func TestVideoThumbnailsRefuseABadReport(t *testing.T) {
 		})
 	}
 }
+
+// ImageMagick exits 0 on a time limit, so a decode through the coder fallback
+// must fail on the message, and not retry with another coder.
+func TestRunMagickWithCoderFallbackReportsATimeLimit(t *testing.T) {
+	calls := 0
+	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
+		calls++
+		return Result{Stdout: []byte("partial"), Stderr: []byte(timeLimitStderr)}, nil
+	}}
+	build := func(string) []string { return []string{"png:x"} }
+	for _, mime := range []string{"image/png", "image/x-tga"} {
+		calls = 0
+		if _, err := env.RunMagickWithCoderFallback(context.Background(), mime, build); !errors.Is(err, ErrTimeLimit) {
+			t.Errorf("%s: err = %v, want ErrTimeLimit", mime, err)
+		}
+		if calls != 1 {
+			t.Errorf("%s: %d runs, want 1: a time limit is not retried", mime, calls)
+		}
+	}
+}
+
+// A retry with the coder that reaches the time limit fails with ErrTimeLimit
+// too, as every run that reaches it does.
+func TestRunMagickWithCoderFallbackReportsATimeLimitOnTheRetry(t *testing.T) {
+	calls := 0
+	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
+		calls++
+		if calls == 1 {
+			return Result{}, errors.New("magick: exit status 1: no decode delegate for this image format")
+		}
+		return Result{Stdout: []byte("partial"), Stderr: []byte(timeLimitStderr)}, nil
+	}}
+	_, err := env.RunMagickWithCoderFallback(context.Background(), "image/x-tga", func(string) []string { return []string{"x"} })
+	if calls != 2 || !errors.Is(err, ErrTimeLimit) {
+		t.Errorf("%d runs, err = %v; want a retry failing with ErrTimeLimit", calls, err)
+	}
+}
+
+// Through the real tool, a time-limited decode exits 0 with an unfinished
+// image; the fallback fails with ErrTimeLimit and runs magick once.
+func TestRunMagickWithCoderFallbackReportsARealTimeLimit(t *testing.T) {
+	env := testEnv(t)
+	src := writeBigPNG(t, env)
+	runs := 0
+	run := env.Run
+	env.Run = func(ctx context.Context, tool string, args ...string) (Result, error) {
+		runs++
+		return run(ctx, tool, args...)
+	}
+	out := filepath.Join(t.TempDir(), "out.jpg")
+	args := timeLimitArgs(t, slowEncode(src, out), "1")
+	for _, mime := range []string{"image/png", "image/x-tga"} {
+		runs = 0
+		_, err := env.RunMagickWithCoderFallback(context.Background(), mime, func(string) []string { return args })
+		if !errors.Is(err, ErrTimeLimit) || runs != 1 {
+			t.Errorf("%s: err = %v after %d runs, want ErrTimeLimit after 1", mime, err, runs)
+		}
+	}
+}
+
+// A header read whose stderr carries both messages is a time limit, not a
+// scene-count refusal.
+func TestIdentifyHeadersTimeLimitOutranksListLength(t *testing.T) {
+	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
+		return Result{Stderr: []byte(timeLimitStderr)}, errors.New("magick: " + listLengthRefusal)
+	}}
+	_, err := identifyHeaders(context.Background(), env, "x.tif", true)
+	if !errors.Is(err, ErrTimeLimit) || errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTimeLimit", err)
+	}
+}
+
+// identifyWithFallback does not retry a time-limited read with the coder.
+func TestIdentifyWithFallbackDoesNotRetryATimeLimit(t *testing.T) {
+	calls := 0
+	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
+		calls++
+		return Result{Stderr: []byte(timeLimitStderr)}, nil
+	}}
+	_, _, err := identifyWithFallback(context.Background(), env, "x", "", "image/x-tga")
+	if !errors.Is(err, ErrTimeLimit) || calls != 1 {
+		t.Fatalf("err = %v after %d runs, want ErrTimeLimit after 1", err, calls)
+	}
+}

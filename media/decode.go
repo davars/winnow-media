@@ -756,8 +756,8 @@ func (s *Source) pingDecoded(ctx context.Context, readOps []string) ([2]int, err
 	args := append([]string{"identify", "-ping"}, readOps...)
 	args = append(args, "-format", "%w %h", s.ref)
 	res, err := s.env.runMagick(ctx, args...)
-	if terr := timeLimitError(res.Stderr, err); terr != nil {
-		return [2]int{}, fmt.Errorf("reading the reduced size: %w", terr)
+	if err != nil {
+		return [2]int{}, fmt.Errorf("reading the reduced size: %w", err)
 	}
 	var d [2]int
 	if _, err := fmt.Sscanf(string(res.Stdout), "%d %d", &d[0], &d[1]); err != nil {

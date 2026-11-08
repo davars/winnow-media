@@ -236,7 +236,7 @@ func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]Fra
 func identifyWithFallback(ctx context.Context, env Env, path, selector, mimeType string) (scenes []sceneHeader, ref string, err error) {
 	ref = path + selector
 	scenes, err = identifyHeaders(ctx, env, ref, true)
-	if err == nil || errors.Is(err, ErrTooLarge) {
+	if err == nil || errors.Is(err, ErrTooLarge) || errors.Is(err, ErrTimeLimit) {
 		return scenes, ref, err
 	}
 	coder, ok := CoderForMIME(mimeType)

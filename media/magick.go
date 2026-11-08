@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -34,19 +35,22 @@ func CoderForMIME(mimeType string) (coder string, ok bool) {
 // limit flags, after a leading "identify" if there is one; buildArgs must not
 // include them, and must produce identify or convert-style arguments. Other
 // magick subcommands (compare, composite, montage, mogrify, stream) are not
-// supported.
+// supported. A run that reaches ImageMagick's time limit fails with an error
+// wrapping ErrTimeLimit, even though ImageMagick exits 0, and is not retried;
+// this needs the Runner to fill Result.Stderr.
 func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, buildArgs func(coder string) []string) ([]byte, error) {
 	first, err := e.runMagick(ctx, buildArgs("")...)
 	if err == nil {
 		return first.Stdout, nil
 	}
 	coder, ok := CoderForMIME(mimeType)
-	if !ok {
+	// A time limit is not a decode failure; a retry would reach it again.
+	if !ok || errors.Is(err, ErrTimeLimit) {
 		return first.Stdout, err
 	}
 	retried, retryErr := e.runMagick(ctx, buildArgs(coder)...)
 	if retryErr != nil {
-		return retried.Stdout, fmt.Errorf("magick: sniffed decode failed (%w); retried with coder %q, which also failed: %v", err, coder, retryErr)
+		return retried.Stdout, fmt.Errorf("magick: sniffed decode failed (%w); retried with coder %q, which also failed: %w", err, coder, retryErr)
 	}
 	return retried.Stdout, nil
 }
@@ -86,8 +90,9 @@ func (p MemoryProfile) Valid() bool {
 
 // runMagick runs magick with args under the Env's memory profile: the limit
 // flags follow a leading "identify" subcommand, which must stay first, and
-// otherwise start the arguments. Every magick run of the package goes through
-// it.
+// otherwise start the arguments. Every run that reads or writes an image goes
+// through it, so none reports success for a run that reached the time limit: ImageMagick
+// exits 0 then, and the error wraps ErrTimeLimit whatever the exit status.
 func (e Env) runMagick(ctx context.Context, args ...string) (Result, error) {
 	if !e.Memory.Valid() {
 		return Result{}, fmt.Errorf("unknown memory profile %d", int(e.Memory))
@@ -98,7 +103,8 @@ func (e Env) runMagick(ctx context.Context, args ...string) (Result, error) {
 		full, args = append(full, "identify"), args[1:]
 	}
 	full = append(append(full, limit...), args...)
-	return e.Run(ctx, "magick", full...)
+	res, err := e.Run(ctx, "magick", full...)
+	return res, timeLimitError(res.Stderr, err)
 }
 
 // DeleteExpr renders the magick -delete argument dropping every one of
