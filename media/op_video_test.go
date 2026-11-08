@@ -337,6 +337,47 @@ func TestVideoFramesHDRIsConvertedToSDR(t *testing.T) {
 	}
 }
 
+func TestIsHDRTransfer(t *testing.T) {
+	for trc, want := range map[string]bool{
+		"arib-std-b67": true,
+		"smpte2084":    true,
+		"bt709":        false,
+		"iec61966-2-1": false,
+		"":             false,
+	} {
+		if got := isHDRTransfer(trc); got != want {
+			t.Errorf("isHDRTransfer(%q) = %v, want %v", trc, got, want)
+		}
+	}
+}
+
+// A PQ clip is HDR, as an HLG one is: it is reported so and is tone mapped.
+func TestPQVideoIsHDR(t *testing.T) {
+	env := requireFFmpeg(t)
+	clip := writeClip(t, env, ".mp4", append(testsrc("160x120", 10, 2),
+		"-pix_fmt", "yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1",
+		"-x265-params", "keyint=10:log-level=error:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
+		"-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc")...)
+	p := requireProcessor(t)
+	info, _, err := p.ProbeVideo(context.Background(), clip)
+	if err != nil || !info.HDR {
+		t.Fatalf("PQ clip: %+v, %v", info, err)
+	}
+	rec := record(p)
+	if images, _ := videoInto(t, p, clip, Encoding{}, 1); len(images) == 0 {
+		t.Fatal("no images")
+	}
+	var sawZscale bool
+	for _, call := range rec.calls {
+		if call[0] == "ffmpeg" && strings.Contains(strings.Join(call, " "), "zscale") {
+			sawZscale = true
+		}
+	}
+	if !sawZscale {
+		t.Error("PQ input was not converted")
+	}
+}
+
 func TestVideoFramesHDRScalesBeforeToneMapping(t *testing.T) {
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
