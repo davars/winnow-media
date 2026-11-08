@@ -94,8 +94,8 @@ func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
 					t.Errorf("magick read %d frames, want 1..%d: %q", frames, maxFrames, call)
 				}
 			}
-			if pixelRuns != 2 {
-				t.Errorf("%d pixel runs, want the probe and the encode", pixelRuns)
+			if pixelRuns != 1 {
+				t.Errorf("%d pixel runs, want the encode alone", pixelRuns)
 			}
 		})
 	}
@@ -478,7 +478,7 @@ func TestEncodeRungRefusesFramesThatDifferFromTheHeaders(t *testing.T) {
 	}
 }
 
-// A compositor that reports fewer frames than were selected, or a probe that
+// A compositor that reports fewer frames than were selected, or an encode that
 // reports fewer rows, is an error and not a short mapping.
 func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
 	requireWebPBuilders(t)
@@ -498,7 +498,7 @@ func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
 		want string
 	}{
 		{"compositor", func(name string, _ []string) bool { return name == webpFramesTool }, "composited 1 of 4"},
-		{"probe", func(name string, args []string) bool {
+		{"encode", func(name string, args []string) bool {
 			return name == "magick" && slices.Contains(args, "info:") && slices.Contains(args, "-format") && !slices.Contains(args, "identify")
 		}, "encode reported 1 frames, want 4"},
 	} {
@@ -646,10 +646,9 @@ func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
 	}
 }
 
-// A one-frame animation has nothing to deduplicate: the selection probe exists
-// to drop consecutive duplicate frames, and one frame has no neighbour. The
-// encode is the only pixel pass such a file needs.
-func TestEncodeRungDoesNotProbeAOneFrameAnimation(t *testing.T) {
+// A one-frame animation is decoded once, by the encode, and maps to its one
+// frame.
+func TestEncodeRungDecodesAOneFrameAnimationOnce(t *testing.T) {
 	real := requireMagick(t)
 	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
@@ -715,7 +714,7 @@ func TestEncodeRungStillWithoutProfilePathUsesTheEmbeddedProfile(t *testing.T) {
 			return Result{Stdout: []byte("0|icc|64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
 		}
 		encodes = append(encodes, args)
-		return Result{Stdout: []byte("sig|64|64\n")}, nil
+		return Result{Stdout: []byte("64|64\n")}, nil
 	}}, t.TempDir())
 	path := writeFile(t, "content", []byte("not a recognised type"))
 	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "", false,

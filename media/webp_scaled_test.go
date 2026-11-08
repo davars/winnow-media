@@ -1100,9 +1100,9 @@ func TestWebPStillEncodesAreChecked(t *testing.T) {
 		reported string
 		want     string
 	}{
-		{"reduced, a pixel off", 400, "sig|401|266\n", "want exactly 400x266"},
-		{"stored size, within the bounds", 1900, "sig|1800|1200\n", ""},
-		{"stored size, far over", 1200, "sig|1800|1200\n", "above the bounds"},
+		{"reduced, a pixel off", 400, "401|266\n", "want exactly 400x266"},
+		{"stored size, within the bounds", 1900, "1800|1200\n", ""},
+		{"stored size, far over", 1200, "1800|1200\n", "above the bounds"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			env, _ := sourceEnv(t)

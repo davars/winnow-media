@@ -238,7 +238,7 @@ func TestVideoPlanSourceIsLiteralOnlyForAReducedFrame(t *testing.T) {
 	if got.width != 64 || got.height != 33 {
 		t.Errorf("reduced: %+v, want 64x33", got)
 	}
-	args := encodeArgs([]encodeFrame{{input: "pam:/a"}}, got, small, encodeOutput{kind: outputProbe})
+	args := encodeArgs([]encodeFrame{{input: "pam:/a"}}, got, small, encodeOutput{kind: outputStill, path: "/o.webp"})
 	if !slices.Contains(args, "64x33!") {
 		t.Errorf("args lack the literal size: %q", args)
 	}

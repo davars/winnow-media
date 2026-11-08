@@ -110,9 +110,10 @@ func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
 	}
 }
 
-// A run of identical samples is one frame, the artifact says which samples
-// it holds, and the written file holds exactly those scenes.
-func TestVideoSharesTheAnimationDedupAndSceneCheck(t *testing.T) {
+// A run of identical samples is merged into one scene, the artifact says
+// which samples its scenes show, and the written file holds exactly those
+// scenes.
+func TestVideoMapsTheScenesTheWriterMerged(t *testing.T) {
 	env := requireFFmpeg(t)
 	clip := writeClip(t, env, ".mp4",
 		"-f", "lavfi", "-i", "color=c=red:size=160x120:rate=10:duration=2",

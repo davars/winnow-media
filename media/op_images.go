@@ -272,7 +272,7 @@ func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]e
 	err = timeLimitError(res.Stderr, err)
 	var frames []encodedFrame
 	if err == nil {
-		if frames, err = parseEncoded(res.Stdout); err == nil {
+		if frames, err = parseEncoded(res.Stdout, chk.signed); err == nil {
 			err = chk.checkFrames(frames)
 		}
 	}
