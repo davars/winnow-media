@@ -32,6 +32,7 @@ func TestWebPFramesMatchCoalesce(t *testing.T) {
 					for _, sub := range []bool{false, true} {
 						c := webpCase{codec: codec, alpha: alpha, blend: blend, dispose: dispose, sub: sub}
 						t.Run(c.String(), func(t *testing.T) {
+							t.Parallel()
 							path := buildWebP(t, c)
 							data, err := os.ReadFile(path)
 							if err != nil {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -364,60 +365,68 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 			}
 		}
 	}
+	var mu sync.Mutex
 	var worst, total int
-	for _, c := range cases {
-		name, data := c.name, c.data
-		for _, resize := range []bool{false, true} {
-			if resize && !c.resize {
-				continue
-			}
-			t.Run(fmt.Sprintf("%s, resize %v", name, resize), func(t *testing.T) {
-				path := writeFile(t, "x.gif", data)
-				enc := Encoding{Format: PNG}
-				refArgs := []string{"gif:" + path, "-coalesce", "-auto-orient", "-profile", srgb}
-				if resize {
-					enc.MaxEdge = 16
-					refArgs = append(refArgs, "-filter", "Mitchell", "-resize", "16x13!")
+	// The runs are independent and cost mostly process start-up, so they share
+	// the cores; the group ends when the last has.
+	t.Run("runs", func(t *testing.T) {
+		for _, c := range cases {
+			name, data := c.name, c.data
+			for _, resize := range []bool{false, true} {
+				if resize && !c.resize {
+					continue
 				}
-				ref := t.TempDir()
-				magick(t, env, append(refArgs, "-strip", "-depth", "8", "+adjoin", filepath.Join(ref, "%03d.png"))...)
-				images, out := framesInto(t, p, path, enc, 0)
-				if len(images) != 4 {
-					t.Fatalf("%d images, want 4", len(images))
-				}
-				var maxDiff, differing int
-				for i, im := range images {
-					a := readNRGBA(t, filepath.Join(out, im.Name))
-					b := readNRGBA(t, filepath.Join(ref, fmt.Sprintf("%03d.png", im.Frame)))
-					if a.Bounds() != b.Bounds() {
-						t.Fatalf("frame %d: %v against %v", i, a.Bounds(), b.Bounds())
+				t.Run(fmt.Sprintf("%s, resize %v", name, resize), func(t *testing.T) {
+					t.Parallel()
+					path := writeFile(t, "x.gif", data)
+					enc := Encoding{Format: PNG}
+					refArgs := []string{"gif:" + path, "-coalesce", "-auto-orient", "-profile", srgb}
+					if resize {
+						enc.MaxEdge = 16
+						refArgs = append(refArgs, "-filter", "Mitchell", "-resize", "16x13!")
 					}
-					for j := 0; j < len(a.Pix); j += 4 {
-						if a.Pix[j+3] != b.Pix[j+3] {
-							differing++
-							maxDiff = 255
-							continue
+					ref := t.TempDir()
+					magick(t, env, append(refArgs, "-strip", "-depth", "8", "+adjoin", filepath.Join(ref, "%03d.png"))...)
+					images, out := framesInto(t, p, path, enc, 0)
+					if len(images) != 4 {
+						t.Fatalf("%d images, want 4", len(images))
+					}
+					var maxDiff, differing int
+					for i, im := range images {
+						a := readNRGBA(t, filepath.Join(out, im.Name))
+						b := readNRGBA(t, filepath.Join(ref, fmt.Sprintf("%03d.png", im.Frame)))
+						if a.Bounds() != b.Bounds() {
+							t.Fatalf("frame %d: %v against %v", i, a.Bounds(), b.Bounds())
 						}
-						if a.Pix[j+3] == 0 {
-							continue
-						}
-						for c := range 3 {
-							d := int(a.Pix[j+c]) - int(b.Pix[j+c])
-							if d != 0 {
+						for j := 0; j < len(a.Pix); j += 4 {
+							if a.Pix[j+3] != b.Pix[j+3] {
 								differing++
-								maxDiff = max(maxDiff, max(d, -d))
+								maxDiff = 255
+								continue
+							}
+							if a.Pix[j+3] == 0 {
+								continue
+							}
+							for c := range 3 {
+								d := int(a.Pix[j+c]) - int(b.Pix[j+c])
+								if d != 0 {
+									differing++
+									maxDiff = max(maxDiff, max(d, -d))
+								}
 							}
 						}
 					}
-				}
-				total++
-				worst = max(worst, maxDiff)
-				if differing != 0 {
-					t.Errorf("%d differing samples, largest difference %d", differing, maxDiff)
-				}
-			})
+					mu.Lock()
+					total++
+					worst = max(worst, maxDiff)
+					mu.Unlock()
+					if differing != 0 {
+						t.Errorf("%d differing samples, largest difference %d", differing, maxDiff)
+					}
+				})
+			}
 		}
-	}
+	})
 	t.Logf("%d runs, largest difference %d", total, worst)
 }
 
