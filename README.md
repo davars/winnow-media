@@ -35,7 +35,7 @@ are resolved, limited and cancelled, and where scratch files live.
   bytes) that is nil when the runner cannot measure it; `UsageOf` builds one
   from an exited `*os.ProcessState`. ImageMagick exits 0 when it hits its time
   limit and prints `time limit exceeded` on stderr only, so a runner that
-  fills `Stderr` lets the encodes and header reads fail with `ErrTimeLimit`
+  fills `Stderr` lets every magick run fail with `ErrTimeLimit`
   (a `Processor` always does); whatever the runner, an encode whose output is
   larger than its encoding allows, or does not have the size it was asked for,
   fails and leaves no output.
@@ -171,7 +171,8 @@ are resolved, limited and cancelled, and where scratch files live.
   headers.
 - `Env.RunMagickWithCoderFallback` retries a failed ImageMagick decode with the
   coder `CoderForMIME` names for formats it cannot sniff from an extensionless
-  path.
+  path. A run that reaches ImageMagick's time limit fails with `ErrTimeLimit`
+  (when the runner fills `Stderr`) and is not retried.
 - `Env.GenerateVideoThumbnails` is `Open` and `Encode` at two targets. It
   writes two animated WebP thumbnails of fifteen frames sampled evenly over a
   video, through the same pipeline as `Processor.VideoFrames` (below): samples

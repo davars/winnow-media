@@ -152,11 +152,8 @@ func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) (
 	}
 	args = append(args, "-format", sceneHeaderFormat, inputRef)
 	res, err := env.runMagick(ctx, args...)
-	if terr := timeLimitError(res.Stderr, err); errors.Is(terr, ErrTimeLimit) {
-		return nil, fmt.Errorf("reading headers: %w", terr)
-	}
 	if err != nil {
-		if strings.Contains(err.Error(), listLengthRefusal) {
+		if !errors.Is(err, ErrTimeLimit) && strings.Contains(err.Error(), listLengthRefusal) {
 			return nil, tooLarge("file holds more than %s scenes, the limit is %d", policyListLength, maxAnimationFrames)
 		}
 		return nil, fmt.Errorf("reading headers: %w", err)
@@ -269,7 +266,6 @@ func placeSRGB(dir string) (string, error) {
 // names.
 func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]encodedFrame, error) {
 	res, err := e.runMagick(ctx, args...)
-	err = timeLimitError(res.Stderr, err)
 	var frames []encodedFrame
 	if err == nil {
 		if frames, err = parseEncoded(res.Stdout); err == nil {

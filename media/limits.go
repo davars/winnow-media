@@ -11,9 +11,9 @@ import (
 // it with errors.Is.
 var ErrTooLarge = errors.New("input too large")
 
-// ErrTimeLimit is returned, wrapped with what the tool reported, when an
-// encode or a header read (ProbeFrames, Open and the operations built on
-// them) reached ImageMagick's time limit. ImageMagick often exits 0 when it
+// ErrTimeLimit is returned, wrapped with what the tool reported, when a
+// magick run (an encode, a header read, RunMagickWithCoderFallback) reached
+// ImageMagick's time limit. ImageMagick often exits 0 when it
 // does, with the work unfinished, so such a run's output is never used. The
 // error is recognised from ImageMagick's message on stderr: through an Env it
 // needs the Runner to fill Result.Stderr, and without it only the size check
