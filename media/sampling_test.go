@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"os"
 	"path/filepath"
@@ -543,6 +544,64 @@ func TestAnimationFramesAt(t *testing.T) {
 		if !slices.Equal(got, []int{1, 2, 3}) {
 			t.Errorf("frames = %v, want 1, 2, 3", got)
 		}
+	})
+}
+
+// An animation frame's Image.TimeMS is when it starts in the source: the sum
+// of the display delays before it, a stored delay below 20 ms counting as
+// 100 ms. It is the Frame.SourceTimeMS of the same frame.
+func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	ctx := context.Background()
+
+	check := func(t *testing.T, src string, indices []int, want []int64) {
+		t.Helper()
+		images, _, err := p.AnimationFramesAt(ctx, src, Encoding{Format: PNG}, indices, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int64
+		for _, img := range images {
+			got = append(got, img.TimeMS)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("AnimationFramesAt%v times = %v, want %v", indices, got, want)
+		}
+
+		staged := stagedEnv(env, t.TempDir())
+		source := openSource(t, staged, src, Hints{})
+		encoded, err := source.EncodeFrames(ctx, Encoding{Format: PNG}, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		frames := source.Frames()
+		for _, img := range encoded {
+			if f := frames[img.Frame]; img.TimeMS != f.SourceTimeMS {
+				t.Errorf("EncodeFrames: frame %d at %d ms, Frames says %d ms", img.Frame, img.TimeMS, f.SourceTimeMS)
+			}
+		}
+	}
+
+	t.Run("gif", func(t *testing.T) {
+		// Shown for 50, 100, 100, 300 and 70 ms.
+		src := writeGrayAnimGIF(t, env, []int{10, 60, 110, 160, 210}, []int{5, 0, 1, 30, 7})
+		check(t, src, []int{4, 1, 3}, []int64{50, 250, 550})
+	})
+	t.Run("webp", func(t *testing.T) {
+		requireWebPBuilders(t)
+		dir := t.TempDir()
+		var args []string
+		for k, ms := range []int{40, 250, 70, 30} {
+			png := filepath.Join(dir, fmt.Sprintf("f%d.png", k))
+			magick(t, env, "-size", "40x30", fmt.Sprintf("xc:gray(%d)", 20+50*k), png)
+			webp := filepath.Join(dir, fmt.Sprintf("f%d.webp", k))
+			run(t, "cwebp", "-quiet", "-lossless", png, "-o", webp)
+			args = append(args, "-frame", webp, fmt.Sprintf("+%d+0+0+0-b", ms))
+		}
+		out := filepath.Join(dir, "anim.webp")
+		run(t, "webpmux", append(args, "-loop", "0", "-o", out)...)
+		check(t, stage(t, out), []int{0, 2, 3}, []int64{0, 290, 360})
 	})
 }
 
