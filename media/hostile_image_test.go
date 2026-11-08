@@ -289,6 +289,24 @@ func TestManyFrameGIFIsRefusedAfterTheHeaderRead(t *testing.T) {
 	requireAnimationRefusals(t, p, refusalBounds{wall: time.Second, maxRSS: 512 << 20}, manyFrameGIF(1, 1, 10_000))
 }
 
+// reachCompositor replaces the processor's compositor with one that fails,
+// and returns how many times it was started. An operation that gets that far
+// has passed every gate before the decode.
+func reachCompositor(t *testing.T, p *Processor) func() int {
+	t.Helper()
+	old := p.compose
+	t.Cleanup(func() { p.compose = old })
+	var started int
+	p.compose = func(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
+		started++
+		return nil, errors.New("compositor reached")
+	}
+	return func() int { return started }
+}
+
+// An accepted case is proved by the gate letting it through to the compositor,
+// which TestGIFFrameAtTheCapDecodesWithinTheBounds already bounds for a frame
+// at the cap; decoding every returned frame would only repeat that.
 func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 	p := requireProcessor(t)
 	cases := []struct {
@@ -312,12 +330,10 @@ func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 					}, data)
 				return
 			}
-			images, _, err := p.AnimationFrames(context.Background(), writeFile(t, "a.gif", data), Encoding{}, c.want, t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(images) == 0 {
-				t.Error("no images")
+			started := reachCompositor(t, p)
+			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "a.gif", data), Encoding{}, c.want, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), "compositor reached") || started() != 1 {
+				t.Errorf("err = %v after %d compositor starts, want the gate to let it through to one", err, started())
 			}
 		})
 	}
@@ -341,12 +357,10 @@ func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
 			}, data)
 	})
 	t.Run("15 frames of the same canvas", func(t *testing.T) {
-		images, _, err := p.AnimationFramesAt(context.Background(), writeFile(t, "a.gif", data), Encoding{}, indices(15), t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(images) == 0 {
-			t.Error("no images")
+		started := reachCompositor(t, p)
+		_, _, err := p.AnimationFramesAt(context.Background(), writeFile(t, "a.gif", data), Encoding{}, indices(15), t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "compositor reached") || started() != 1 {
+			t.Errorf("err = %v after %d compositor starts, want the gate to let it through to one", err, started())
 		}
 	})
 }
