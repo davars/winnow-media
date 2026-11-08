@@ -306,8 +306,8 @@ tools itself because the input is untrusted:
     never holds more than that however many samples there are; a sample
     identical to the one before it (by ImageMagick signature) is dropped. The
     scratch files are removed before `VideoFrames` returns.
-  - `Image.TimeMS` is the seek target in ms; the file shows the first frame at
-    or after it. A seeked sample has no known frame index, so `Image.Frame` is
+  - `Image.TimeMS` is the sample time in ms; the file shows the first frame at
+    or after it. A sample has no known frame index, so `Image.Frame` is
     always 0.
   - Every ffprobe and ffmpeg run opens its input with `-protocol_whitelist
     file`, so a nested input cannot reach the network, and the pinned `-f`
@@ -332,8 +332,9 @@ tools itself because the input is untrusted:
   file can carry where only a decode sees it; `AnimationFrames` sizes its
   output from the decoded frame.
 - `Processor.VideoFramesAt(ctx, path, Encoding, timesMS []int64, dir)
-  ([]Image, Usage, error)` samples the given times, one seeked ffmpeg run
-  each, exactly as `VideoFrames` does; `VideoFrames` is this with evenly
+  ([]Image, Usage, error)` samples the given times, read by one decode or
+  one seek per time as the stream's size decides, exactly as `VideoFrames`
+  does; `VideoFrames` is this with evenly
   spaced times. `timesMS` holds 1 to 64 times in any order; they are sorted
   and repeats are sampled once. A time must be 0 or inside the duration;
   anything else is an error before a frame is decoded. `Image.TimeMS` is the
@@ -398,7 +399,7 @@ and 39% memory headroom, and a HEIC panorama at 52 MP takes about 25 s
 (inferred from 28.7 s at 59.6 MP). 80 MP was rejected, since AVIF (1399 MiB
 at 80 MP) and HEIC panoramas would need exceptions. The decision and its
 measurements are in winnow's
-`docs/plans/rearchitecture/2026-11-07_unified-pipeline.md`.
+`docs/plans/archive/2026-11-07_unified-pipeline.md`.
 ImageMagick keeps 16 bytes per pixel, so
 animations set the frame and pixel caps: it holds every composited frame
 beside the decoded ones, and a GIF of full-canvas frames read by ImageMagick
@@ -468,8 +469,8 @@ range, an unaccepted type, an input over a cap or a non-empty `dir` is an
 error with nothing written. On any later failure the operation removes what
 it wrote and `dir` is empty again. Each `Image` has the file's `Name`
 relative to `dir`, its `Width` and `Height`, and `Frame` (the animation frame
-index) and `TimeMS` (the video sample time; 0 for operations that do not
-sample a video).
+index) and `TimeMS` (the video sample time, or the time an animation frame
+starts at, the sum of the display delays before it; 0 for a still).
 
 The accepted media types, decoder pins and tools of each operation are
 internal.

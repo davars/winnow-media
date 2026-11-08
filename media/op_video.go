@@ -297,7 +297,7 @@ func parseRate(s string) float64 {
 	return n / d
 }
 
-// sampleTimesMS returns the seek targets, in ms: the centres of n equal
+// sampleTimesMS returns the sample times, in ms: the centres of n equal
 // intervals of the duration, n being at most maxFrames and at most the
 // stream's frame count when known. A target is kept inside the last frame so
 // that a seek always finds a frame at or after it. Equal targets collapse.

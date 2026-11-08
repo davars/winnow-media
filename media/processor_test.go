@@ -30,16 +30,23 @@ func mvgFile(t *testing.T, textPath string) string {
 }
 
 // gifBytes returns a GIF whose logical screen and only frame are w x h.
-func gifBytes(w, h int) []byte {
+// gifFrames is a GIF with a w by h screen and n frames of fw by fh, each one
+// valid LZW data for a single pixel.
+func gifFrames(w, h, fw, fh, n int) []byte {
 	b := []byte("GIF89a")
 	b = binary.LittleEndian.AppendUint16(b, uint16(w))
 	b = binary.LittleEndian.AppendUint16(b, uint16(h))
 	b = append(b, 0x80, 0, 0, 0, 0, 0, 255, 255, 255)
-	b = append(b, 0x2C, 0, 0, 0, 0)
-	b = binary.LittleEndian.AppendUint16(b, uint16(w))
-	b = binary.LittleEndian.AppendUint16(b, uint16(h))
-	return append(b, 0, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B)
+	for range n {
+		b = append(b, 0x2C, 0, 0, 0, 0)
+		b = binary.LittleEndian.AppendUint16(b, uint16(fw))
+		b = binary.LittleEndian.AppendUint16(b, uint16(fh))
+		b = append(b, 0, 0x02, 0x02, 0x44, 0x01, 0x00)
+	}
+	return append(b, 0x3B)
 }
+
+func gifBytes(w, h int) []byte { return gifFrames(w, h, w, h, 1) }
 
 func TestRunnerEnvironmentIgnoresCallerConfiguration(t *testing.T) {
 	p := requireProcessor(t)
@@ -412,17 +419,7 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 }
 
 // manyFrameGIF returns a GIF with a w x h logical screen and n frames of 1x1.
-func manyFrameGIF(w, h, n int) []byte {
-	b := []byte("GIF89a")
-	b = binary.LittleEndian.AppendUint16(b, uint16(w))
-	b = binary.LittleEndian.AppendUint16(b, uint16(h))
-	b = append(b, 0x80, 0, 0, 0, 0, 0, 255, 255, 255)
-	frame := []byte{0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0x02, 0x02, 0x44, 0x01, 0x00}
-	for range n {
-		b = append(b, frame...)
-	}
-	return append(b, 0x3B)
-}
+func manyFrameGIF(w, h, n int) []byte { return gifFrames(w, h, 1, 1, n) }
 
 func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 	p := requireProcessor(t)
