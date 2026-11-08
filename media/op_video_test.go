@@ -10,19 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/davars/winnow-media/tool"
 )
 
-func requireFFmpeg(t *testing.T) Env {
-	t.Helper()
-	for _, name := range []string{"ffmpeg", "ffprobe"} {
-		if _, err := tool.Resolve(name); err != nil {
-			t.Skip(name + " not available")
-		}
-	}
-	return requireMagick(t)
-}
+func requireFFmpeg(t *testing.T) Env { return requireTools(t, "magick", "ffmpeg", "ffprobe") }
 
 // writeClip runs ffmpeg to write a clip with the given extension and returns
 // it staged without one.

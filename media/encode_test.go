@@ -3,14 +3,12 @@ package media
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -129,7 +127,7 @@ func TestRunMagickWithCoderFallbackRecoversTGA(t *testing.T) {
 	dir := t.TempDir()
 	extPath := filepath.Join(dir, "src.tga")
 	magick(t, env, "-size", "4x4", "xc:red", extPath)
-	content := renameToContent(t, extPath)
+	content := stage(t, extPath)
 
 	build := func(coder string) []string {
 		in := content
@@ -150,7 +148,7 @@ func TestEncodeRungStillRecoversTGAViaCoderFallback(t *testing.T) {
 	env := requireMagick(t)
 	extPath := filepath.Join(t.TempDir(), "src.tga")
 	magick(t, env, "-size", "4x4", "xc:red", extPath)
-	content := renameToContent(t, extPath)
+	content := stage(t, extPath)
 
 	frames, err := env.ProbeFrames(context.Background(), content, "image/x-tga")
 	if err != nil {
@@ -181,7 +179,7 @@ func writeGrayAnimGIF(t *testing.T, env Env, levels, delaysCS []int) string {
 	}
 	extPath := filepath.Join(dir, "anim.gif")
 	magick(t, env, append(args, "-loop", "0", extPath)...)
-	return renameToContent(t, extPath)
+	return stage(t, extPath)
 }
 
 // Frames are sampled by source index, the mapping carries each frame's
@@ -218,7 +216,7 @@ func TestEncodeRungNeverUpscalesAStill(t *testing.T) {
 	env := requireMagick(t)
 	extPath := filepath.Join(t.TempDir(), "src.png")
 	magick(t, env, "-size", "40x20", "xc:blue", extPath)
-	content := renameToContent(t, extPath)
+	content := stage(t, extPath)
 	frames, err := env.ProbeFrames(context.Background(), content, "image/png")
 	if err != nil {
 		t.Fatal(err)
@@ -236,29 +234,13 @@ func TestEncodeRungNeverUpscalesAStill(t *testing.T) {
 
 func writeSRGBProfile(t *testing.T) string {
 	t.Helper()
-	encoded, err := os.ReadFile("profiles/sRGB2014.icc.base64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(encoded)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "sRGB2014.icc")
-	if err := os.WriteFile(path, profile, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return writeFile(t, "sRGB2014.icc", srgbProfile)
 }
 
 func writeAdobeProfile(t *testing.T, dir string) string {
 	t.Helper()
 	adobe := filepath.Join(dir, "adobe-rgb-1998.icc")
-	profile, err := base64.StdEncoding.DecodeString(adobeRGB1998Profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(adobe, profile, 0o600); err != nil {
+	if err := os.WriteFile(adobe, mustAdobeProfile(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return adobe
@@ -270,7 +252,7 @@ func writeWideGamutStill(t *testing.T, env Env, srgb string) string {
 	adobe := writeAdobeProfile(t, dir)
 	withExtension := filepath.Join(dir, "wide.png")
 	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-profile", srgb, "-profile", adobe, withExtension)
-	return renameToContent(t, withExtension)
+	return stage(t, withExtension)
 }
 
 // The fixture is stored in Adobe RGB, not merely tagged as sRGB: omitting the
@@ -323,7 +305,7 @@ func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
 	if !profileListHasICC(string(magick(t, env, "identify", "-format", "%[profiles]", withExtension))) {
 		t.Skip("this ImageMagick does not write an ICC profile into JXL")
 	}
-	input := renameToContent(t, withExtension)
+	input := stage(t, withExtension)
 
 	frames, err := env.ProbeFrames(context.Background(), input, "image/jxl")
 	if err != nil {
@@ -398,8 +380,8 @@ func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
 			t.Fatalf("animation mapping has %d frames, want 2", len(mapping))
 		}
 		for i := range mapping {
-			diff := animationFrameDifference(t, env, actual, reference, i)
-			plain := animationFrameDifference(t, env, actual, unconverted, i)
+			diff := animationFrameDifference(t, env, actual, reference, i, 2)
+			plain := animationFrameDifference(t, env, actual, unconverted, i, 2)
 			t.Logf("profilePath %q frame %d: %.6f from the converted reference, %.6f from the unconverted one", profilePath, i, diff, plain)
 			if diff > 0.004 {
 				t.Errorf("profilePath %q: corrected animation frame %d differs from explicit sRGB reference by %.6f, want <= 0.004", profilePath, i, diff)
@@ -445,7 +427,7 @@ func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
 	env := requireMagick(t)
 	withExtension := filepath.Join(t.TempDir(), "untagged.png")
 	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-strip", withExtension)
-	input := renameToContent(t, withExtension)
+	input := stage(t, withExtension)
 
 	frames, err := env.ProbeFrames(context.Background(), input, "image/png")
 	if err != nil {

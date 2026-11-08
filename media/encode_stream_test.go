@@ -17,17 +17,7 @@ import (
 // stagedEnv is real with a Stage that creates files in dir.
 func stagedEnv(real Env, dir string) Env {
 	real.Scratch = testScratch
-	real.Stage = func(ext string) (string, func(), error) {
-		f, err := os.CreateTemp(dir, "*"+ext)
-		if err != nil {
-			return "", nil, err
-		}
-		path := f.Name()
-		if err := f.Close(); err != nil {
-			return "", nil, err
-		}
-		return path, func() { _ = os.Remove(path) }, nil
-	}
+	real.Stage = stagerIn(dir)
 	return real
 }
 
@@ -218,42 +208,16 @@ func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
 	plainReference := filepath.Join(t.TempDir(), "plain-reference.webp")
 	magick(t, real, writeFile(t, "plain.gif", base), "-coalesce", "-auto-orient", "-strip", "-quality", strconv.Itoa(testQuality), plainReference)
 	for i := range 3 {
-		if d := animationFrameDifferenceN(t, real, plain, plainReference, i); d > 0.004 {
+		if d := animationFrameDifference(t, real, plain, plainReference, i, 3); d > 0.004 {
 			t.Errorf("unprofiled frame %d differs from the whole-file encode by %.6f", i, d)
 		}
-		if d := animationFrameDifferenceN(t, real, converted, reference, i); d > 0.004 {
+		if d := animationFrameDifference(t, real, converted, reference, i, 3); d > 0.004 {
 			t.Errorf("frame %d differs from the whole-file conversion by %.6f", i, d)
 		}
-		if d := animationFrameDifferenceN(t, real, converted, plain, i); d < 0.002 {
+		if d := animationFrameDifference(t, real, converted, plain, i, 3); d < 0.002 {
 			t.Errorf("frame %d is not converted: it differs from the unprofiled encode by %.6f", i, d)
 		}
 	}
-}
-
-// animationFrameDifferenceN is animationFrameDifference for any frame of a
-// three-frame animation.
-func animationFrameDifferenceN(t *testing.T, env Env, first, second string, frame int) float64 {
-	t.Helper()
-	pick := func(path string) []string {
-		return []string{"(", path, "-coalesce", "-delete", deleteAllBut(frame, 3), ")"}
-	}
-	out := magick(t, env, append(append(pick(first), pick(second)...),
-		"-compose", "difference", "-composite", "-format", "%[fx:mean]", "info:")...)
-	v, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v
-}
-
-func deleteAllBut(keep, n int) string {
-	var drop []string
-	for i := range n {
-		if i != keep {
-			drop = append(drop, strconv.Itoa(i))
-		}
-	}
-	return strings.Join(drop, ",")
 }
 
 // Consecutive frames that are the same after the resize are encoded once and
@@ -621,7 +585,7 @@ func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
 	magick(t, real, "-size", "8x8", "xc:red", "-profile", writeSRGBProfile(t), profiled)
 	gifPath := filepath.Join(dir, "anim.gif")
 	magick(t, real, "-delay", "7", profiled, "-size", "8x8", "xc:blue", "-size", "8x8", "xc:green", gifPath)
-	path := renameToContent(t, gifPath)
+	path := stage(t, gifPath)
 
 	if _, _, err := p.AnimationFrames(context.Background(), path, Encoding{}, 3, t.TempDir()); err != nil {
 		t.Fatalf("AnimationFrames refused the file: %v", err)

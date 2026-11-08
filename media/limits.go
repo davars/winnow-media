@@ -61,8 +61,9 @@ const (
 	// maxStreams is the most streams, of any kind, a video container may
 	// hold. It is a structural bound, not a measured one.
 	maxStreams = 32
-	// maxDurationMS is the longest video stream, in milliseconds. Sampling
-	// seeks, so a six-hour video costs what a short one does.
+	// maxDurationMS is the longest video stream, in milliseconds. A stream
+	// too long to read once is sampled by seeks, which cost what they do on a
+	// short one.
 	maxDurationMS = 6 * 3600 * 1000
 )
 

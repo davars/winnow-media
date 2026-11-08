@@ -106,7 +106,7 @@ func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationI
 
 // VideoFramesAt decodes the frame at or after each of timesMS from an MP4,
 // QuickTime, WebM or Matroska file and writes them to dir as
-// frame-NNN.<ext>, each taken by its own seek. Output, the gate, the caps,
+// frame-NNN.<ext>, read as VideoFrames reads its samples. Output, the gate, the caps,
 // errors, Usage and the state of dir are as for VideoFrames; Image.TimeMS is
 // the requested time.
 //
@@ -117,39 +117,34 @@ func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationI
 // decoded, as is a positive time when the duration is unknown. As for
 // VideoFrames, a sample identical to the one before it is dropped.
 func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding, timesMS []int64, dir string) ([]Image, Usage, error) {
-	ec, err := enc.resolve()
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("video frames at: %w", err)
-	}
-	if err := checkSampleCount("times", len(timesMS)); err != nil {
-		return nil, Usage{}, fmt.Errorf("video frames at: %w", err)
-	}
-	times := slices.Clone(timesMS)
-	slices.Sort(times)
-	times = slices.Compact(times)
-	if times[0] < 0 {
-		return nil, Usage{}, fmt.Errorf("video frames at: time %d ms is negative", times[0])
-	}
-	in, err := p.admit(videoSpec, path, dir)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("video frames at: %w", err)
-	}
-	var m meter
-	env := p.env(&m)
-	images, err := inDir(in.dir, func() ([]Image, error) {
-		return env.videoFramesPicked(ctx, in.decoder, in.path, ec, func(info videoInfo) ([]int64, error) {
-			for _, t := range times {
-				if err := checkSeekTime(info, t); err != nil {
-					return nil, err
-				}
+	var ec encoding
+	var times []int64
+	return p.operate("video frames at", videoSpec, path, dir,
+		func() (err error) {
+			if ec, err = enc.resolve(); err != nil {
+				return err
 			}
-			return times, nil
-		}, in.dir)
-	})
-	if err != nil {
-		return nil, m.usage, fmt.Errorf("video frames at: %w", err)
-	}
-	return images, m.usage, nil
+			if err := checkSampleCount("times", len(timesMS)); err != nil {
+				return err
+			}
+			times = slices.Clone(timesMS)
+			slices.Sort(times)
+			times = slices.Compact(times)
+			if times[0] < 0 {
+				return fmt.Errorf("time %d ms is negative", times[0])
+			}
+			return nil
+		},
+		func(env Env, in admitted) ([]Image, error) {
+			return env.videoFramesPicked(ctx, in.decoder, in.path, ec, func(info videoInfo) ([]int64, error) {
+				for _, t := range times {
+					if err := checkSeekTime(info, t); err != nil {
+						return nil, err
+					}
+				}
+				return times, nil
+			}, in.dir)
+		})
 }
 
 // VideoFrameRun decodes count consecutive frames of an MP4, QuickTime, WebM
@@ -165,29 +160,23 @@ func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding
 // rather than a fixed step; as for VideoFrames, a frame identical to the one
 // before it is dropped.
 func (p *Processor) VideoFrameRun(ctx context.Context, path string, enc Encoding, startMS int64, count int, dir string) ([]Image, Usage, error) {
-	ec, err := enc.resolve()
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("video frame run: %w", err)
-	}
-	if err := checkSampleCount("count", count); err != nil {
-		return nil, Usage{}, fmt.Errorf("video frame run: %w", err)
-	}
-	if startMS < 0 {
-		return nil, Usage{}, fmt.Errorf("video frame run: time %d ms is negative", startMS)
-	}
-	in, err := p.admit(videoSpec, path, dir)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("video frame run: %w", err)
-	}
-	var m meter
-	env := p.env(&m)
-	images, err := inDir(in.dir, func() ([]Image, error) {
-		return env.videoFrameRun(ctx, in.decoder, in.path, ec, startMS, count, in.dir)
-	})
-	if err != nil {
-		return nil, m.usage, fmt.Errorf("video frame run: %w", err)
-	}
-	return images, m.usage, nil
+	var ec encoding
+	return p.operate("video frame run", videoSpec, path, dir,
+		func() (err error) {
+			if ec, err = enc.resolve(); err != nil {
+				return err
+			}
+			if err := checkSampleCount("count", count); err != nil {
+				return err
+			}
+			if startMS < 0 {
+				return fmt.Errorf("time %d ms is negative", startMS)
+			}
+			return nil
+		},
+		func(env Env, in admitted) ([]Image, error) {
+			return env.videoFrameRun(ctx, in.decoder, in.path, ec, startMS, count, in.dir)
+		})
 }
 
 // AnimationFramesAt decodes the frames of a GIF or animated WebP with the
@@ -202,37 +191,32 @@ func (p *Processor) VideoFrameRun(ctx context.Context, path string, enc Encoding
 // AnimationFrames, a frame identical to the one before it after resizing is
 // dropped.
 func (p *Processor) AnimationFramesAt(ctx context.Context, path string, enc Encoding, indices []int, dir string) ([]Image, Usage, error) {
-	ec, err := enc.resolve()
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("animation frames at: %w", err)
-	}
-	if err := checkSampleCount("indices", len(indices)); err != nil {
-		return nil, Usage{}, fmt.Errorf("animation frames at: %w", err)
-	}
-	selected := slices.Clone(indices)
-	slices.Sort(selected)
-	selected = slices.Compact(selected)
-	if selected[0] < 0 {
-		return nil, Usage{}, fmt.Errorf("animation frames at: index %d is negative", selected[0])
-	}
-	in, err := p.admit(animationSpec, path, dir)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("animation frames at: %w", err)
-	}
-	var m meter
-	env := p.env(&m)
-	images, err := inDir(in.dir, func() ([]Image, error) {
-		return env.encodeAnimationFrames(ctx, in, ec, func(sourceFrames int) ([]int, error) {
-			if last := selected[len(selected)-1]; last >= sourceFrames {
-				return nil, fmt.Errorf("index %d is outside the animation's %d frames", last, sourceFrames)
+	var ec encoding
+	var selected []int
+	return p.operate("animation frames at", animationSpec, path, dir,
+		func() (err error) {
+			if ec, err = enc.resolve(); err != nil {
+				return err
 			}
-			return selected, nil
+			if err := checkSampleCount("indices", len(indices)); err != nil {
+				return err
+			}
+			selected = slices.Clone(indices)
+			slices.Sort(selected)
+			selected = slices.Compact(selected)
+			if selected[0] < 0 {
+				return fmt.Errorf("index %d is negative", selected[0])
+			}
+			return nil
+		},
+		func(env Env, in admitted) ([]Image, error) {
+			return env.encodeAnimationFrames(ctx, in, ec, func(sourceFrames int) ([]int, error) {
+				if last := selected[len(selected)-1]; last >= sourceFrames {
+					return nil, fmt.Errorf("index %d is outside the animation's %d frames", last, sourceFrames)
+				}
+				return selected, nil
+			})
 		})
-	})
-	if err != nil {
-		return nil, m.usage, fmt.Errorf("animation frames at: %w", err)
-	}
-	return images, m.usage, nil
 }
 
 // checkSampleCount refuses n unless it is 1 to maxMaxFrames, the number of

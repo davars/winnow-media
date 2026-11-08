@@ -45,10 +45,12 @@ type Image struct {
 	Name          string
 	Width, Height int
 	// Frame is the index of the animation frame the image shows; 0 for other
-	// operations.
+	// operations, a video among them.
 	Frame int
-	// TimeMS is the position in the video the image was sampled at, in
-	// milliseconds; 0 for other operations.
+	// TimeMS is the position of the image in the source, in milliseconds: the
+	// time a video was sampled at, or the delays of the frames before it in an
+	// animation (a stored delay below 20 ms counts as 100 ms, as browsers
+	// display it). It is 0 for other operations.
 	TimeMS int64
 }
 

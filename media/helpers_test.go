@@ -15,6 +15,21 @@ import (
 	"github.com/davars/winnow-media/tool"
 )
 
+// stagerIn is a Stage that creates files in dir.
+func stagerIn(dir string) func(string) (string, func(), error) {
+	return func(ext string) (string, func(), error) {
+		f, err := os.CreateTemp(dir, "*"+ext)
+		if err != nil {
+			return "", nil, err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			return "", nil, err
+		}
+		return path, func() { _ = os.Remove(path) }, nil
+	}
+}
+
 // testEnv runs the real tools, resolved through the tool package, and stages
 // outputs under a per-test directory. A test that needs a tool skips when it
 // cannot be found.
@@ -38,27 +53,23 @@ func testEnv(t *testing.T) Env {
 			return res, nil
 		},
 		Scratch: testScratch,
-		Stage: func(ext string) (string, func(), error) {
-			f, err := os.CreateTemp(staging, "*"+ext)
-			if err != nil {
-				return "", nil, err
-			}
-			path := f.Name()
-			if err := f.Close(); err != nil {
-				return "", nil, err
-			}
-			return path, func() { _ = os.Remove(path) }, nil
-		},
+		Stage:   stagerIn(staging),
 	}
 }
 
-func requireMagick(t *testing.T) Env {
+// requireTools skips the test unless every named tool resolves, and returns
+// testEnv.
+func requireTools(t *testing.T, names ...string) Env {
 	t.Helper()
-	if _, err := tool.Resolve("magick"); err != nil {
-		t.Skip("magick not available")
+	for _, name := range names {
+		if _, err := tool.Resolve(name); err != nil {
+			t.Skip(name + " not available")
+		}
 	}
 	return testEnv(t)
 }
+
+func requireMagick(t *testing.T) Env { return requireTools(t, "magick") }
 
 // requireProcessor returns a Processor over the real tools, closed when the
 // test ends, and skips the test when a tool cannot be found.
@@ -70,11 +81,7 @@ func requireProcessor(t *testing.T) *Processor {
 // requireProcessorWith is requireProcessor under the memory profile.
 func requireProcessorWith(t *testing.T, profile MemoryProfile) *Processor {
 	t.Helper()
-	for _, name := range []string{"magick", "ffmpeg", "ffprobe"} {
-		if _, err := tool.Resolve(name); err != nil {
-			t.Skip(name + " not available")
-		}
-	}
+	requireTools(t, "magick", "ffmpeg", "ffprobe")
 	p, err := NewProcessor(context.Background(), profile)
 	if err != nil {
 		t.Fatal(err)
@@ -92,17 +99,6 @@ func magick(t *testing.T, env Env, args ...string) []byte {
 	return res.Stdout
 }
 
-// renameToContent drops path's extension, so the decoder cannot rely on the
-// name.
-func renameToContent(t *testing.T, path string) string {
-	t.Helper()
-	content := filepath.Join(filepath.Dir(path), "content")
-	if err := os.Rename(path, content); err != nil {
-		t.Fatal(err)
-	}
-	return content
-}
-
 func meanAbsoluteDifference(t *testing.T, env Env, first, second string) float64 {
 	t.Helper()
 	out := magick(t, env, first, second, "-compose", "difference", "-composite", "-format", "%[fx:mean]", "info:")
@@ -113,19 +109,20 @@ func meanAbsoluteDifference(t *testing.T, env Env, first, second string) float64
 	return value
 }
 
-func animationFrameDifference(t *testing.T, env Env, first, second string, frame int) float64 {
+// animationFrameDifference is the mean absolute difference between frame
+// number frame of two animations of n frames each.
+func animationFrameDifference(t *testing.T, env Env, first, second string, frame, n int) float64 {
 	t.Helper()
-	deleteExpr := strconv.Itoa(1 - frame)
-	frameArgs := func(path string) []string {
-		return []string{"(", path, "-coalesce", "-delete", deleteExpr, ")"}
+	pick := func(path string) []string {
+		return []string{"(", path, "-coalesce", "-delete", DeleteExpr([]int{frame}, n), ")"}
 	}
-	args := append(frameArgs(first), frameArgs(second)...)
-	args = append(args, "-compose", "difference", "-composite", "-format", "%[fx:mean]", "info:")
-	value, err := strconv.ParseFloat(strings.TrimSpace(string(magick(t, env, args...))), 64)
+	out := magick(t, env, append(append(pick(first), pick(second)...),
+		"-compose", "difference", "-composite", "-format", "%[fx:mean]", "info:")...)
+	v, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
 	if err != nil {
 		t.Fatalf("parsing animation frame %d difference: %v", frame, err)
 	}
-	return value
+	return v
 }
 
 // writeFile writes data to a new file called name in a fresh directory.

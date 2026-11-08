@@ -229,7 +229,7 @@ func TestEncodeRungSizesWithFitSize(t *testing.T) {
 	env := stagedEnv(requireMagick(t), t.TempDir())
 	path := filepath.Join(t.TempDir(), "wide.png")
 	magick(t, env, "-size", "800x601", "gradient:red-blue", path)
-	content := renameToContent(t, path)
+	content := stage(t, path)
 	frames, err := env.ProbeFrames(context.Background(), content, "image/png")
 	if err != nil {
 		t.Fatal(err)
@@ -562,7 +562,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			other := writePNG(t, quadrantsShifted(48, 32), "other.png")
 			magick(t, real, "-delay", "5", srcPNG, "-delay", "5", other, "-loop", "0", gif)
-			content := renameToContent(t, gif)
+			content := stage(t, gif)
 			frames, err := env.ProbeFrames(context.Background(), content, "image/gif")
 			if err != nil {
 				t.Fatal(err)
@@ -585,7 +585,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 			env := stagedEnv(real, t.TempDir())
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			magick(t, real, srcPNG, gif)
-			content := renameToContent(t, gif)
+			content := stage(t, gif)
 			frames, err := env.ProbeFrames(context.Background(), content, "image/gif")
 			if err != nil {
 				t.Fatal(err)

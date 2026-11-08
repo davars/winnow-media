@@ -367,11 +367,19 @@ func TestFramesSelection(t *testing.T) {
 	if len(images) != 16 {
 		t.Fatalf("%d images, want 16", len(images))
 	}
+	info, _, err := p.ProbeAnimation(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var names []string
 	for i, f := range images {
 		wantIdx := i * 20 / 16
-		if f.Frame != wantIdx || f.TimeMS != 0 {
-			t.Errorf("image %d: source frame %d at %d ms, want %d", i, f.Frame, f.TimeMS, wantIdx)
+		var wantMS int64
+		for _, d := range info.DelaysMS[:wantIdx] {
+			wantMS += int64(d)
+		}
+		if f.Frame != wantIdx || f.TimeMS != wantMS {
+			t.Errorf("image %d: source frame %d at %d ms, want frame %d at %d ms", i, f.Frame, f.TimeMS, wantIdx, wantMS)
 		}
 		if f.Name != fmt.Sprintf("frame-%03d.jpg", i) || f.Width != 64 || f.Height != 48 {
 			t.Errorf("image %d = %+v", i, f)

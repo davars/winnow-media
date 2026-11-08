@@ -1170,8 +1170,8 @@ func sceneStarts(given, written []int) ([]int, error) {
 // EncodeFrames writes one file per frame of the source into dir, named
 // frame-NNN with the extension of enc.Format and numbered from 0, and returns
 // them in order; Image.Frame is the index of the source frame, 0 for a video,
-// whose Image.TimeMS holds the time of the sample. A frame
-// identical to the one before it after resizing is dropped. dir must exist
+// and Image.TimeMS the time of that frame or sample, as Frame.SourceTimeMS
+// gives it. A frame identical to the one before it after resizing is dropped. dir must exist
 // and be empty. It fails as Encode does.
 func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]Image, error) {
 	ec, err := enc.resolve()
@@ -1196,15 +1196,15 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 		return []Image{{Name: name, Width: res[0].width, Height: res[0].height}}, nil
 	}
 	var images []Image
+	sel := s.mapping(s.selected)
 	encoder := &sampleEncoder{
 		env: s.env, src: s.sourceOf(enc),
 		enc: enc, dir: dir, framePixels: s.framePixels(),
 		keep: func(i, n, w, h int) {
-			img := Image{Name: frameName(n, enc.ext), Width: w, Height: h, Frame: s.selected[i]}
-			if s.video != nil {
-				img.Frame, img.TimeMS = 0, s.video.times[i]
-			}
-			images = append(images, img)
+			images = append(images, Image{
+				Name: frameName(n, enc.ext), Width: w, Height: h,
+				Frame: sel[i].SourceFrame, TimeMS: sel[i].SourceTimeMS,
+			})
 		},
 	}
 	if !s.stream {
