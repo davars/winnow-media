@@ -563,6 +563,39 @@ func TestParseVideoProbeStreamSelection(t *testing.T) {
 	}
 }
 
+// A probe report that is not JSON, names no video stream, or gives the stream
+// no size is an error, not a video of unknown properties.
+func TestParseVideoProbeRefusesUnusableOutput(t *testing.T) {
+	for _, c := range []struct{ name, out, want string }{
+		{"empty", "", "parsing probe output"},
+		{"not JSON", "streams: none", "parsing probe output"},
+		{"no streams", `{"streams":[],"format":{}}`, "no video stream"},
+		{"audio alone", `{"streams":[{"index":0,"codec_type":"audio"}],"format":{}}`, "no video stream"},
+		{"zero width", `{"streams":[{"index":0,"codec_type":"video","width":0,"height":10}],"format":{}}`, "reports size 0x10"},
+		{"zero height", `{"streams":[{"index":0,"codec_type":"video","width":10,"height":0}],"format":{}}`, "reports size 10x0"},
+		{"no size", `{"streams":[{"index":0,"codec_type":"video"}],"format":{}}`, "reports size 0x0"},
+	} {
+		if _, err := parseVideoProbe([]byte(c.out)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want it to say %q", c.name, err, c.want)
+		}
+	}
+}
+
+// The display rotation is reported as 0, 90, 180 or 270, whichever way the
+// container writes it.
+func TestParseVideoProbeNormalisesRotation(t *testing.T) {
+	for _, c := range []struct {
+		written float64
+		want    int
+	}{{0, 0}, {90, 90}, {180, 180}, {270, 270}, {-90, 270}, {-180, 180}, {-270, 90}, {450, 90}, {89.6, 90}} {
+		out := fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":10,"height":10,"side_data_list":[{"rotation":%v}]}],"format":{}}`, c.written)
+		v, err := parseVideoProbe([]byte(out))
+		if err != nil || v.rotation != c.want {
+			t.Errorf("rotation %v: got %d, %v; want %d", c.written, v.rotation, err, c.want)
+		}
+	}
+}
+
 func TestVideoFramesSamplesTheDefaultStream(t *testing.T) {
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
