@@ -13,7 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/davars/winnow-media/tool"
 )
@@ -279,6 +281,96 @@ func TestAnimationFramesRefuseAnUnreadableEncodeReport(t *testing.T) {
 			}
 			if got := dirNames(t, out); len(got) != 0 {
 				t.Errorf("output dir holds %v", got)
+			}
+		})
+	}
+}
+
+// Each bound of an Encoding is inclusive, and a value one past it is refused.
+func TestEncodingBoundsAreInclusive(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		enc  Encoding
+		ok   bool
+	}{
+		{"quality 1", Encoding{Quality: 1}, true},
+		{"quality 100", Encoding{Quality: 100}, true},
+		{"quality 101", Encoding{Quality: 101}, false},
+		{"max edge 16", Encoding{MaxEdge: 16}, true},
+		{"max edge 15", Encoding{MaxEdge: 15}, false},
+		{"max edge 16384", Encoding{MaxEdge: 16384}, true},
+		{"max edge 16385", Encoding{MaxEdge: 16385}, false},
+		{"max area 256", Encoding{MaxArea: 256}, true},
+		{"max area 255", Encoding{MaxArea: 255}, false},
+		{"max area 100000000", Encoding{MaxArea: 100_000_000}, true},
+		{"max area 100000001", Encoding{MaxArea: 100_000_001}, false},
+	} {
+		if _, err := c.enc.resolve(); (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want accepted = %v", c.name, err, c.ok)
+		}
+	}
+}
+
+func TestDisplayDelayCS(t *testing.T) {
+	for delay, want := range map[int]int{-1: 10, 0: 10, 1: 10, 2: 2, 3: 3, 100: 100} {
+		if got := displayDelayCS(delay); got != want {
+			t.Errorf("displayDelayCS(%d) = %d, want %d", delay, got, want)
+		}
+	}
+}
+
+// uprightSize swaps the sides for exactly the four orientations that turn the
+// image a quarter.
+func TestUprightSizeSwapsForTheQuarterTurns(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		swap bool
+	}{
+		{"", false},
+		{"Undefined", false},
+		{"TopLeft", false},
+		{"TopRight", false},
+		{"BottomRight", false},
+		{"BottomLeft", false},
+		{"LeftTop", true},
+		{"RightTop", true},
+		{"RightBottom", true},
+		{"LeftBottom", true},
+	} {
+		w, h := uprightSize(30, 20, c.name)
+		if want := [2]int{30, 20}; c.swap && (w != 20 || h != 30) || !c.swap && [2]int{w, h} != want {
+			t.Errorf("uprightSize(30, 20, %q) = %dx%d", c.name, w, h)
+		}
+	}
+}
+
+// A directory or a FIFO is refused as a source before a tool runs, and the
+// call returns instead of waiting for a writer to open the FIFO.
+func TestOperationsRefuseASourceThatIsNotARegularFile(t *testing.T) {
+	p := requireProcessor(t)
+	rec := record(p)
+	defer func() { p.run = rec.inner }()
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("cannot make a FIFO:", err)
+	}
+	for name, path := range map[string]string{"directory": t.TempDir(), "FIFO": fifo} {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := p.Still(context.Background(), path, Encoding{}, t.TempDir())
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+					t.Errorf("err = %v, want a refusal of a file that is not regular", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the call did not return")
+			}
+			if n := rec.count(); n != 0 {
+				t.Errorf("%d tool runs", n)
 			}
 		})
 	}
