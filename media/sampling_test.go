@@ -627,6 +627,38 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 	})
 }
 
+// An index at or past the frame count is refused by the gate after the header
+// read, not by the compositor: the error is the gate's and no compositor runs.
+func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *testing.T) {
+	env := requireMagick(t)
+	for name, c := range map[string]struct {
+		src    func(t *testing.T) string
+		frames int
+	}{
+		"gif": {func(t *testing.T) string { return writeGIF(t, env, solid, 12) }, 12},
+		"webp": {func(t *testing.T) string {
+			requireWebPBuilders(t)
+			return buildWebP(t, webpCase{codec: "lossless", frames: 6})
+		}, 6},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := c.src(t)
+			p := requireProcessor(t)
+			forbidCompositor(t, p)
+			for _, indices := range [][]int{{c.frames}, {0, c.frames + 40}} {
+				dir := t.TempDir()
+				_, _, err := p.AnimationFramesAt(context.Background(), src, Encoding{}, indices, dir)
+				if err == nil || !strings.Contains(err.Error(), "is outside the animation's") {
+					t.Errorf("%v: err = %v, want the gate's refusal", indices, err)
+				}
+				if got := dirNames(t, dir); len(got) != 0 {
+					t.Errorf("%v: output dir holds %v", indices, got)
+				}
+			}
+		})
+	}
+}
+
 // ProbeAnimation reads the headers without decoding pixels, for a one-frame
 // WebP too, and the header read of the animation operations reports the
 // still's profile.

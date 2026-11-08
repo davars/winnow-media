@@ -521,3 +521,15 @@ func TestTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
 		}
 	}
 }
+
+// One byte more than the head and the tail hold is the first that is dropped,
+// and the note says so.
+func TestTailBufferNotesTheFirstByteDropped(t *testing.T) {
+	whole := strings.Repeat("h", stderrHead) + "x" + strings.Repeat("t", stderrTail)
+	var buf tailBuffer
+	_, _ = buf.Write([]byte(whole))
+	want := strings.Repeat("h", stderrHead) + "\n[1 bytes omitted]\n" + strings.Repeat("t", stderrTail)
+	if got := string(buf.bytes()); got != want {
+		t.Errorf("%d bytes written: got %d bytes back, want %d with a note of one byte omitted", len(whole), len(got), len(want))
+	}
+}
