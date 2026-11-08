@@ -193,6 +193,97 @@ func TestFitSize(t *testing.T) {
 	}
 }
 
+// A header report that cannot be read is an error, not a shorter list of
+// scenes.
+func TestParseSceneHeadersRefusesAnUnreadableReport(t *testing.T) {
+	const good = "5||40|30|40|30|WEBP|Undefined|DirectClass sRGB|False|END"
+	if scenes, err := parseSceneHeaders([]byte(good + "\n" + good + "\n")); err != nil || len(scenes) != 2 || scenes[0].delayCS != 5 || scenes[1].width != 40 {
+		t.Fatalf("a good report gave %+v, %v", scenes, err)
+	}
+	for _, c := range []struct{ name, report, want string }{
+		{"empty", "", "identify returned no scenes"},
+		{"too few fields", "5||40|30|40|30|WEBP|Undefined|DirectClass sRGB|False\n", "missing fields"},
+		{"too many fields", good + "|\n", "missing fields"},
+		{"no END", strings.TrimSuffix(good, "END") + "ENDS\n", "missing fields"},
+		{"a delay that is no number", "x" + strings.TrimPrefix(good, "5") + "\n", "parsing"},
+		{"a width", "5||x|30|40|30|WEBP|Undefined|DirectClass sRGB|False|END\n", "parsing"},
+		{"a height", "5||40|x|40|30|WEBP|Undefined|DirectClass sRGB|False|END\n", "parsing"},
+		{"a canvas width", "5||40|30|x|30|WEBP|Undefined|DirectClass sRGB|False|END\n", "parsing"},
+		{"a canvas height", "5||40|30|40|x|WEBP|Undefined|DirectClass sRGB|False|END\n", "parsing"},
+		{"a bad second scene", good + "\n" + "5||40|30|40|30|WEBP\n", "missing fields"},
+	} {
+		if scenes, err := parseSceneHeaders([]byte(c.report)); err == nil || !strings.Contains(err.Error(), c.want) || scenes != nil {
+			t.Errorf("%s: %+v, %v; want an error saying %q and no scenes", c.name, scenes, err, c.want)
+		}
+	}
+}
+
+// IdentifyArtifact reads what identify reports of an encoded file, and fails
+// on a report it cannot read.
+func TestIdentifyArtifactRefusesAnUnreadableReport(t *testing.T) {
+	read := func(report string) (int, int, int, error) {
+		env := Env{Run: func(context.Context, string, ...string) (Result, error) {
+			return Result{Stdout: []byte(report)}, nil
+		}}
+		return env.IdentifyArtifact(context.Background(), "/a.webp")
+	}
+	if scenes, w, h, err := read("1 8 6 0\n2 8 6 5\n"); err != nil || scenes != 2 || w != 8 || h != 6 {
+		t.Fatalf("a good report gave %d scenes %dx%d, %v", scenes, w, h, err)
+	}
+	for _, c := range []struct{ name, report, want string }{
+		{"empty", "", "identify returned no output"},
+		{"too few fields", "1 8 6\n", "missing fields"},
+		{"a width", "1 x 6 0\n", "parsing width"},
+		{"a height", "1 8 x 0\n", "parsing height"},
+		{"a delay", "1 8 6 x\n", "parsing delay"},
+		{"a bad second scene", "1 8 6 0\n2 8 6\n", "missing fields"},
+		{"a delay of a later one", "1 8 6 0\n2 8 6 x\n", "parsing delay"},
+	} {
+		if scenes, w, h, err := read(c.report); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %d scenes %dx%d, %v; want an error saying %q", c.name, scenes, w, h, err, c.want)
+		}
+	}
+}
+
+// An encode whose report cannot be read, or reports other frames than it was
+// given, fails and leaves no frame in the output directory.
+func TestAnimationFramesRefuseAnUnreadableEncodeReport(t *testing.T) {
+	env := requireMagick(t)
+	src := writeGIF(t, env, solid, 6)
+	for _, c := range []struct {
+		name, report, want string
+	}{
+		{"empty", "", "missing fields"},
+		{"no size", "0123abcd\n", "missing fields"},
+		{"unsigned", "8|6\n", "missing fields"},
+		{"a fourth field", "0123abcd|8|6|1\n", "missing fields"},
+		{"a width that is no number", "0123abcd|x|6\n", "unreadable size"},
+		{"a height that is no number", "0123abcd|8|x\n", "unreadable size"},
+		{"fewer frames than were given", "0123abcd|8|6\n", "reported 1 frames"},
+		{"a bad second line", "0123abcd|8|6\n0123abcd|8\n", "missing fields"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessor(t)
+			inner := p.run
+			p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
+				res, err := inner(ctx, name, args...)
+				if err == nil && name == "magick" && slices.Contains(args, "info:") && !slices.Contains(args, "identify") {
+					res.Stdout = []byte(c.report)
+				}
+				return res, err
+			}
+			out := t.TempDir()
+			_, _, err := p.AnimationFrames(context.Background(), src, Encoding{}, 6, out)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to say %q", err, c.want)
+			}
+			if got := dirNames(t, out); len(got) != 0 {
+				t.Errorf("output dir holds %v", got)
+			}
+		})
+	}
+}
+
 func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 	real := requireMagick(t)
 	p := requireProcessor(t)
