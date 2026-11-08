@@ -126,14 +126,15 @@ func (p *Processor) environ(tmp string) []string {
 	}
 }
 
-// tailBuffer keeps the first stderrHead and the last stderrTail bytes
-// written to it.
-type tailBuffer struct {
+// headTailBuffer keeps the first stderrHead and the last stderrTail bytes
+// written to it. It is for a single writer, which is all it needs: exec's copy
+// goroutine writes it, and bytes is read after Wait.
+type headTailBuffer struct {
 	head, tail []byte
 	omitted    int
 }
 
-func (t *tailBuffer) Write(b []byte) (int, error) {
+func (t *headTailBuffer) Write(b []byte) (int, error) {
 	n := len(b)
 	if room := stderrHead - len(t.head); room > 0 {
 		k := min(room, len(b))
@@ -150,9 +151,12 @@ func (t *tailBuffer) Write(b []byte) (int, error) {
 
 // bytes returns what was written, with a note in place of what was dropped
 // between the head and the tail.
-func (t *tailBuffer) bytes() []byte {
+func (t *headTailBuffer) bytes() []byte {
 	out := append([]byte{}, t.head...)
-	if t.omitted > 0 {
+	switch {
+	case t.omitted == 1:
+		out = append(out, "\n[1 byte omitted]\n"...)
+	case t.omitted > 1:
 		out = fmt.Appendf(out, "\n[%d bytes omitted]\n", t.omitted)
 	}
 	return append(out, t.tail...)

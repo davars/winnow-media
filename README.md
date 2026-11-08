@@ -30,7 +30,7 @@ are resolved, limited and cancelled, and where scratch files live.
 
 - `Env{Run, Stage, Scratch}`: `Run` is a `Runner`, `func(ctx, tool string, args ...string)
   (Result, error)`, and receives bare tool names (`"magick"`, `"ffmpeg"`).
-  A `Result` holds the tool's `Stdout`, its `Stderr` (the tail; nil when the
+  A `Result` holds the tool's `Stdout`, its `Stderr` (the start and end, which a `Processor` keeps as the first 512 bytes and the last 4 KiB with a note of those dropped; nil when the
   runner does not capture it) and a `*Usage` (CPU time, peak RSS in
   bytes) that is nil when the runner cannot measure it; `UsageOf` builds one
   from an exited `*os.ProcessState`. ImageMagick exits 0 when it hits its time

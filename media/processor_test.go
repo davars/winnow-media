@@ -155,9 +155,8 @@ func zipBytes(t *testing.T) []byte {
 }
 
 func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
-	clean := writeGIF(t, env, solid, 6)
+	clean := writeGIF(t, solid, 6)
 	cleanData, err := os.ReadFile(clean)
 	if err != nil {
 		t.Fatal(err)
@@ -395,7 +394,7 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 		compositor bool
 	}{
 		{"webp", webp, true},
-		{"gif", func(t *testing.T) string { return writeGIF(t, env, solid, 4) }, true},
+		{"gif", func(t *testing.T) string { return writeGIF(t, solid, 4) }, true},
 	} {
 		t.Run(c.name+" success", func(t *testing.T) {
 			runs = nil
@@ -489,7 +488,7 @@ func TestKilledRunLeavesNothingInTheProcessorsTempDir(t *testing.T) {
 	}
 }
 
-func TestTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
+func TestHeadTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
 	text := func(n int) string {
 		var b strings.Builder
 		for i := 0; b.Len() < n; i++ {
@@ -498,7 +497,7 @@ func TestTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
 		return b.String()[:n]
 	}
 	for _, n := range []int{0, 1, stderrHead, stderrHead + stderrTail} {
-		var buf tailBuffer
+		var buf headTailBuffer
 		_, _ = buf.Write([]byte(text(n)))
 		if got := string(buf.bytes()); got != text(n) {
 			t.Errorf("%d bytes written: got %d bytes back, want them unchanged", n, len(got))
@@ -509,7 +508,7 @@ func TestTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
 	const total = 50_000
 	whole := text(total)
 	for name, step := range map[string]int{"one write": total, "by 1000": 1000, "by 7": 7, "by 1": 1} {
-		var buf tailBuffer
+		var buf headTailBuffer
 		for i := 0; i < total; i += step {
 			if _, err := buf.Write([]byte(whole[i:min(i+step, total)])); err != nil {
 				t.Fatal(err)
@@ -524,11 +523,11 @@ func TestTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
 
 // One byte more than the head and the tail hold is the first that is dropped,
 // and the note says so.
-func TestTailBufferNotesTheFirstByteDropped(t *testing.T) {
+func TestHeadTailBufferNotesTheFirstByteDropped(t *testing.T) {
 	whole := strings.Repeat("h", stderrHead) + "x" + strings.Repeat("t", stderrTail)
-	var buf tailBuffer
+	var buf headTailBuffer
 	_, _ = buf.Write([]byte(whole))
-	want := strings.Repeat("h", stderrHead) + "\n[1 bytes omitted]\n" + strings.Repeat("t", stderrTail)
+	want := strings.Repeat("h", stderrHead) + "\n[1 byte omitted]\n" + strings.Repeat("t", stderrTail)
 	if got := string(buf.bytes()); got != want {
 		t.Errorf("%d bytes written: got %d bytes back, want %d with a note of one byte omitted", len(whole), len(got), len(want))
 	}

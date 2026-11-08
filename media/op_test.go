@@ -113,10 +113,9 @@ func solid(i int) string {
 }
 
 // writeGIF writes frames solid 64x48 frames of 50 ms each, staged without an
-// extension. colour names each frame's colour as "xc:rgb(r,g,b)"; the file is
-// written in process, which costs microseconds where ImageMagick costs 70 ms
-// a frame.
-func writeGIF(t *testing.T, _ Env, colour func(i int) string, frames int) string {
+// extension, at most 256 of them (each frame's palette index is a byte).
+// colour names each frame's colour as "xc:rgb(r,g,b)".
+func writeGIF(t *testing.T, colour func(i int) string, frames int) string {
 	t.Helper()
 	rect := image.Rect(0, 0, 64, 48)
 	palette := make(color.Palette, frames)
@@ -280,8 +279,7 @@ func TestIdentifyArtifactRefusesAnUnreadableReport(t *testing.T) {
 // An encode whose report cannot be read, or reports other frames than it was
 // given, fails and leaves no frame in the output directory.
 func TestAnimationFramesRefuseAnUnreadableEncodeReport(t *testing.T) {
-	env := requireMagick(t)
-	src := writeGIF(t, env, solid, 6)
+	src := writeGIF(t, solid, 6)
 	for _, c := range []struct {
 		name, report, want string
 	}{
@@ -407,10 +405,9 @@ func TestOperationsRefuseASourceThatIsNotARegularFile(t *testing.T) {
 }
 
 func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
-	real := requireMagick(t)
 	p := requireProcessor(t)
 	heic := writeHEIC(t)
-	gif := writeGIF(t, real, solid, 2)
+	gif := writeGIF(t, solid, 2)
 	rec := record(p)
 	garbage := filepath.Join(t.TempDir(), "garbage")
 	if err := os.WriteFile(garbage, []byte("not any media"), 0o600); err != nil {
@@ -575,7 +572,7 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 func TestFramesSelection(t *testing.T) {
 	env := requireMagick(t)
 	p := requireProcessor(t)
-	src := writeGIF(t, env, solid, 20)
+	src := writeGIF(t, solid, 20)
 	images, out := framesInto(t, p, src, Encoding{}, 0)
 	if len(images) != 16 {
 		t.Fatalf("%d images, want 16", len(images))
@@ -628,9 +625,8 @@ func rgbDistance(t *testing.T, a, b string) int {
 }
 
 func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
-	src := writeGIF(t, env, func(int) string { return "xc:rgb(10,120,200)" }, 4)
+	src := writeGIF(t, func(int) string { return "xc:rgb(10,120,200)" }, 4)
 	images, out := framesInto(t, p, src, Encoding{}, 0)
 	if len(images) != 1 || images[0].Name != "frame-000.jpg" || images[0].Frame != 0 {
 		t.Fatalf("images = %+v", images)
@@ -641,10 +637,9 @@ func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
 }
 
 func TestFramesRenumbersAfterDedup(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
 	// Frames 0-1 identical, 2-3 identical: two kept frames, numbered 0 and 1.
-	src := writeGIF(t, env, func(i int) string { return solid(i / 2) }, 4)
+	src := writeGIF(t, func(i int) string { return solid(i / 2) }, 4)
 	images, out := framesInto(t, p, src, Encoding{}, 0)
 	var got []int
 	for _, f := range images {
@@ -698,9 +693,8 @@ func TestFramesStripsMetadataAndAcceptsWebP(t *testing.T) {
 }
 
 func TestFramesSizing(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
-	src := writeGIF(t, env, solid, 3) // 64x48
+	src := writeGIF(t, solid, 3) // 64x48
 	cases := []struct {
 		name         string
 		enc          Encoding
@@ -724,9 +718,8 @@ func TestFramesSizing(t *testing.T) {
 }
 
 func TestFramesMaxFrames(t *testing.T) {
-	env := requireMagick(t)
 	p := requireProcessor(t)
-	src := writeGIF(t, env, solid, 20)
+	src := writeGIF(t, solid, 20)
 	images, _ := framesInto(t, p, src, Encoding{}, 4)
 	var idx []int
 	for _, f := range images {
@@ -738,7 +731,6 @@ func TestFramesMaxFrames(t *testing.T) {
 }
 
 func TestOperationsCleanUpOnFailure(t *testing.T) {
-	real := requireMagick(t)
 	wide := func() string { return heicFixture(t, "adobe-64x64") }
 	cases := []struct {
 		name      string
@@ -748,8 +740,8 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 	}{
 		{"still after encode", true, func() string { return writeHEIC(t) }, 2},
 		{"still with profile after encode", true, wide, 2},
-		{"frames after header read", false, func() string { return writeGIF(t, real, solid, 6) }, 1},
-		{"frames after encode", false, func() string { return writeGIF(t, real, solid, 6) }, 2},
+		{"frames after header read", false, func() string { return writeGIF(t, solid, 6) }, 1},
+		{"frames after encode", false, func() string { return writeGIF(t, solid, 6) }, 2},
 	}
 	for _, c := range cases {
 		opNames := animationFrameOpNames
@@ -778,7 +770,6 @@ func TestOperationsCleanUpOnFailure(t *testing.T) {
 // TestGIFFramesCleanUpOnFailureBetweenBatches fails an encode while the
 // compositor is still waiting to write the next batch.
 func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
-	real := requireMagick(t)
 	old := encodeBatchPixels
 	encodeBatchPixels = 2 * 64 * 48
 	t.Cleanup(func() { encodeBatchPixels = old })
@@ -787,7 +778,7 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()
-		_, _, err := p.AnimationFrames(context.Background(), writeGIF(t, real, solid, 12), Encoding{}, 6, out)
+		_, _, err := p.AnimationFrames(context.Background(), writeGIF(t, solid, 12), Encoding{}, 6, out)
 		if err == nil {
 			t.Fatalf("failAfter=%d: operation succeeded", failAfter)
 		}
@@ -801,7 +792,7 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()
-		_, _, err := p.AnimationFramesAt(context.Background(), writeGIF(t, real, solid, 12), Encoding{}, []int{0, 3, 6, 9}, out)
+		_, _, err := p.AnimationFramesAt(context.Background(), writeGIF(t, solid, 12), Encoding{}, []int{0, 3, 6, 9}, out)
 		if err == nil {
 			t.Fatalf("AnimationFramesAt failAfter=%d: operation succeeded", failAfter)
 		}
@@ -812,7 +803,6 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 }
 
 func TestGoldenArgv(t *testing.T) {
-	real := requireMagick(t)
 	wide := func() string { return heicFixture(t, "adobe-64x32") }
 	type run func(p *Processor, input, out string) error
 	still := func(enc Encoding) run {
@@ -838,9 +828,9 @@ func TestGoldenArgv(t *testing.T) {
 			still(Encoding{Format: PNG, MaxEdge: 400, MaxArea: 100000, Quality: 75}),
 		},
 		{"still-profiled", wide, still(Encoding{})},
-		{"frames-gif-default", func() string { return writeGIF(t, real, solid, 20) }, frames(Encoding{}, 0)},
+		{"frames-gif-default", func() string { return writeGIF(t, solid, 20) }, frames(Encoding{}, 0)},
 		{
-			"frames-gif-webp-bounded", func() string { return writeGIF(t, real, solid, 10) },
+			"frames-gif-webp-bounded", func() string { return writeGIF(t, solid, 10) },
 			frames(Encoding{Format: WebP, MaxEdge: 32}, 3),
 		},
 	}
