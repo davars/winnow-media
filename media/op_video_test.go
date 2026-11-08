@@ -585,6 +585,28 @@ func TestVideoFramesSamplesTheDefaultStream(t *testing.T) {
 	}
 }
 
+func TestCheckSeekTime(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		durationMS int64
+		ms         int64
+		want       string
+	}{
+		{"start of a video", 4000, 0, ""},
+		{"start of a video of unknown duration", 0, 0, ""},
+		{"last millisecond", 4000, 3999, ""},
+		{"at the duration", 4000, 4000, "is not inside the video"},
+		{"past the duration", 4000, 4001, "is not inside the video"},
+		{"any time of a video of unknown duration", 0, 1, "is not inside the video"},
+		{"negative", 4000, -1, "is negative"},
+	} {
+		err := checkSeekTime(videoInfo{durationMS: c.durationMS}, c.ms)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: checkSeekTime(%d ms of %d) = %v, want %q", c.name, c.ms, c.durationMS, err, c.want)
+		}
+	}
+}
+
 func TestCheckVideoInfo(t *testing.T) {
 	ok := videoInfo{streams: maxStreams, durationMS: maxDurationMS, width: maxDimension, height: maxDimension}
 	if err := checkVideoInfo(ok); err != nil {
