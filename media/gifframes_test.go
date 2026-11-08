@@ -195,11 +195,16 @@ func TestCompositorMatchesMagickCoalesce(t *testing.T) {
 			}
 		}
 	}
-	t.Run("frames without a graphic control extension", func(t *testing.T) { check(t, noGCE) })
+	t.Run("frames without a graphic control extension", func(t *testing.T) {
+		t.Parallel()
+		check(t, noGCE)
+	})
 	t.Run("frames without a graphic control extension, interlaced", func(t *testing.T) {
+		t.Parallel()
 		check(t, writeFile(t, "i.gif", withoutGCE(t, 5, true)))
 	})
 	t.Run("no trailer", func(t *testing.T) {
+		t.Parallel()
 		data := buildGIF(t, w, h, paletteA, cases["mixed disposals"])
 		if data[len(data)-1] != 0x3B {
 			t.Fatal("fixture does not end with a trailer")
@@ -208,9 +213,11 @@ func TestCompositorMatchesMagickCoalesce(t *testing.T) {
 	})
 	for name, frames := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			check(t, writeFile(t, "x.gif", buildGIF(t, w, h, globalFor(name), frames)))
 		})
 		t.Run(name+", interlaced", func(t *testing.T) {
+			t.Parallel()
 			plain := writeFile(t, "x.gif", buildGIF(t, w, h, globalFor(name), frames))
 			interlaced := filepath.Join(filepath.Dir(plain), "i.gif")
 			magick(t, env, plain, "-interlace", "GIF", interlaced)
