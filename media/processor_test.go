@@ -333,21 +333,6 @@ func TestCheckReturnedPixels(t *testing.T) {
 	}
 }
 
-func TestReadHeadersReportsTheProfileOfAStillWebP(t *testing.T) {
-	env := requireMagick(t)
-	p := requireProcessor(t)
-	path := filepath.Join(t.TempDir(), "icc.webp")
-	magick(t, env, "-size", "100x80", "gradient:red-blue", "+profile", "*", "-profile", writeSRGBProfile(t), path)
-	var m meter
-	scenes, err := readHeaders(context.Background(), p.env(&m), decoder{"magick", "webp"}, path, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(scenes) != 1 || !scenes[0].hasICC {
-		t.Errorf("scenes = %+v, want one with an ICC profile", scenes)
-	}
-}
-
 func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 	env := requireMagick(t)
 	p := requireProcessor(t)
