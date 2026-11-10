@@ -1009,8 +1009,10 @@ func TestSelectCountsFromTheContainerStart(t *testing.T) {
 	out := t.TempDir()
 	_ = encodeWebPPair(stub.env(), context.Background(), "/in.mov",
 		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80)
-	if len(stub.runs) != 1 || !isSelectRun(stub.runs[0]) {
-		t.Fatalf("runs = %v, want one select run", stub.runs)
+	// The stub writes no frame, so the sample at 0 that follows is a second
+	// select run.
+	if len(stub.runs) == 0 || !isSelectRun(stub.runs[0]) {
+		t.Fatalf("runs = %v, want a select run first", stub.runs)
 	}
 	// 10 s over 15 samples centres the first at 333 ms, 1833 ms on the
 	// container's timeline.

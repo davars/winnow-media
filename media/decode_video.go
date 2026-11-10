@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 )
 
 // maxVideoSampleFrames is the number of samples Open takes of a video when
@@ -134,6 +135,11 @@ func (s *Source) decodeVideo(ctx context.Context, encs []encoding) error {
 		}
 	} else {
 		samples, err = s.env.sampleVideo(ctx, v.dec, v.path, s.dir, plan, v.times)
+		// The times are guesses from the duration, which can lie past the
+		// only frame of a clip whose frame count is unknown.
+		if err == nil && len(samples) == 0 && !slices.Equal(v.times, []int64{0}) {
+			samples, err = s.env.sampleVideo(ctx, v.dec, v.path, s.dir, plan, []int64{0})
+		}
 	}
 	if err == nil && len(samples) == 0 {
 		err = errors.New("no frame could be sampled")

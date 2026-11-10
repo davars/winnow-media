@@ -572,3 +572,32 @@ func TestVideoSourceStillEncodesAfterAFailedRedecode(t *testing.T) {
 		})
 	}
 }
+
+// A video whose only frame is at 0 and whose container outlasts it still
+// yields that frame, as one sample at time 0, whether or not the frame count
+// is known and on either sampling path.
+func TestVideoWithOneFrameBeforeALongerContainerYieldsASampleAtZero(t *testing.T) {
+	env := requireFFmpeg(t)
+	for _, ext := range []string{".mkv", ".mp4"} {
+		clip := writeClip(t, env, ext, append(testsrc("160x120", 10, 1),
+			"-f", "lavfi", "-i", "sine=duration=3", "-vf", "trim=end_frame=1",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac")...)
+		for name, limit := range map[string]int64{"seek": 0, "select": selectMaxPixels} {
+			t.Run(ext[1:]+" "+name, func(t *testing.T) {
+				forceSelectLimit(t, limit)
+				src := openSource(t, env, clip, Hints{})
+				arts, err := src.Encode(context.Background(), 0, openTargets[1])
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := []Frame{{SourceTimeMS: 0}}
+				if got := src.Frames(); !slices.Equal(got, want) {
+					t.Errorf("Frames = %v, want %v", got, want)
+				}
+				if got := arts[0].Frames; !slices.Equal(got, want) {
+					t.Errorf("Artifact.Frames = %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
