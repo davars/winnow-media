@@ -150,11 +150,11 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)
 			}
 		})
-		t.Run("readHeaders/"+c.name, func(t *testing.T) {
+		t.Run("readSource/"+c.name, func(t *testing.T) {
 			env, calls := countingEnv(real)
-			scenes, err := readHeaders(context.Background(), env, decoder{"magick", "webp"}, path, true)
-			if err != nil || len(scenes) != 1 || scenes[0].hasICC != want {
-				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", scenes, err, want)
+			hdr, err := env.readSource(context.Background(), openRequest{path: path, dec: decoder{"magick", "webp"}, pinned: true, caps: true})
+			if err != nil || len(hdr.scenes) != 1 || hdr.scenes[0].hasICC != want {
+				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", hdr.scenes, err, want)
 			}
 			if onlyPinged(calls()) != c.known {
 				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)

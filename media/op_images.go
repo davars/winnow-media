@@ -72,23 +72,6 @@ type sceneHeader struct {
 	soft bool
 }
 
-// readHeaders reads the headers of every scene of path, decoded with
-// decoder, and refuses ones that exceed the caps before any pixel is decoded.
-func readHeaders(ctx context.Context, env Env, dec decoder, path string, animated bool) ([]sceneHeader, error) {
-	ref := dec.name + ":" + path
-	scenes, err := identifyHeaders(ctx, env, ref, true)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkSceneHeaders(scenes, animated); err != nil {
-		return nil, err
-	}
-	if err := completeProfile(ctx, env, ref, path, scenes); err != nil {
-		return nil, err
-	}
-	return scenes, nil
-}
-
 // completeProfile fills in hasICC for the one scene of a file whose coder
 // does not report its profile under -ping. ref is the identify input the
 // headers were read from, path the file it names. A WebP is answered by its
