@@ -269,7 +269,10 @@ tools itself because the input is untrusted:
   - The samples are the centres of `maxFrames` equal intervals of the
     duration, fewer when the stream has fewer frames (the duration is the only
     guide when the frame count is unknown). Targets that coincide are
-    merged, and a clip of unknown duration gives one sample at 0.
+    merged, and a clip of unknown duration gives one sample at 0. A video
+    that yields no frame at any of those times, as when its only frame
+    precedes a duration the container reports, is sampled at 0 instead; it
+    fails only if that gives no frame either.
   - A stream of at most `selectMaxPixels` decoded pixels (frames times width
     times height as stored) is read by one ffmpeg run whose `select` filter
     keeps, for each sample time, the first frame at or after it. The frame
