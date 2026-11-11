@@ -640,8 +640,8 @@ func TestWebPPairReadsOtherContainers(t *testing.T) {
 	}
 }
 
-// Raw MPEG video streams and 3GPP files, which the catalog holds, are read
-// whether or not their brand is one the sniff table names.
+// Raw MPEG video streams and 3GPP files are read whether or not their brand
+// is one the sniff table names.
 func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
 	env := requireFFmpeg(t)
 	cases := map[string][]string{
