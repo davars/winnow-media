@@ -159,10 +159,11 @@ type Result struct {
 
 // Usage is what one tool run consumed. A Processor operation returns the CPU
 // time summed over every tool run of the call and the largest peak resident
-// set size of any run, also when the call fails.
+// set size of any run, also when the call fails. Both cover the tool and its
+// descendants, never the calling program.
 type Usage struct {
 	CPU    time.Duration // user plus system time
-	MaxRSS int64         // peak resident set size, in bytes
+	MaxRSS int64         // largest resident set of the tool or any descendant, in bytes
 }
 
 // UsageOf reports the resources an exited process consumed. It returns nil
