@@ -347,7 +347,7 @@ func TestEncodeRefusesAWrongExactSize(t *testing.T) {
 			staging := t.TempDir()
 			env := skipResize(stagedEnv(real, staging), 90, 60)
 			src := openSource(t, env, jpg, Hints{})
-			readOps, sizes := src.reduction(mustResolveAll(t, targets))
+			readOps, sizes := src.reduction(region{}, mustResolveAll(t, targets))
 			if readOps == nil || sizes == nil {
 				t.Fatal("the fixture does not take the reduced route")
 			}

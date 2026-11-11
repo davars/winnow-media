@@ -59,8 +59,8 @@ var uprightSources = map[string]func(t *testing.T) (*Source, func() [][]string){
 
 func heicSource(t *testing.T) (*Source, func() [][]string) { return uprightSources["heic"](t) }
 
-func regionEncoding(r region) encoding {
-	return encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000, region: r}
+func pngEncoding() encoding {
+	return encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000}
 }
 
 // The region is checked against the upright frame of a rotated image, whose
@@ -83,7 +83,7 @@ func TestRegionEdgesAreThoseOfTheUprightFrame(t *testing.T) {
 			t.Run(kind+" "+c.name, func(t *testing.T) {
 				src, calls := open(t)
 				before := len(calls())
-				art, err := src.encode(context.Background(), 0, []encoding{regionEncoding(c.r)})
+				art, err := src.encode(context.Background(), c.r, 0, []encoding{pngEncoding()})
 				if c.ok {
 					if err != nil {
 						t.Fatal(err)
@@ -106,7 +106,7 @@ func TestRegionIsRefusedWithoutRunningATool(t *testing.T) {
 	src, calls := heicSource(t)
 	before := len(calls())
 	for _, r := range []region{{-1, 0, 10, 10}, {0, -1, 10, 10}, {0, 0, 0, 10}, {2, 2, 0, 0}} {
-		if _, err := src.encode(context.Background(), 0, []encoding{regionEncoding(r)}); err == nil {
+		if _, err := src.encode(context.Background(), r, 0, []encoding{pngEncoding()}); err == nil {
 			t.Errorf("region %+v accepted", r)
 		}
 	}
@@ -120,7 +120,7 @@ func TestRegionIsRefusedWithoutRunningATool(t *testing.T) {
 func TestStillImageRefusesARegionOutsideTheFrame(t *testing.T) {
 	env, _ := sourceEnv(t)
 	dir := t.TempDir()
-	_, err := env.still(context.Background(), decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), regionEncoding(region{400, 0, 100, 100}), dir)
+	_, err := env.stillRegion(context.Background(), region{400, 0, 100, 100}, decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), pngEncoding(), dir)
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("err = %v, want a refusal that the region is outside the 480x640 frame", err)
 	}
@@ -229,7 +229,7 @@ func TestRegionIsCutFromTheUprightPicture(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			img, err := env.still(context.Background(), decoder{"magick", "jpeg"}, path, regionEncoding(c.r), dir)
+			img, err := env.stillRegion(context.Background(), c.r, decoder{"magick", "jpeg"}, path, pngEncoding(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -256,7 +256,7 @@ func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			img, err := env.still(context.Background(), decoder{"magick", "heic"}, path, regionEncoding(c.r), dir)
+			img, err := env.stillRegion(context.Background(), c.r, decoder{"magick", "heic"}, path, pngEncoding(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -302,7 +302,7 @@ func TestRegionTurnsJPEGReductionOff(t *testing.T) {
 	env, calls := sourceEnv(t)
 	path := filepath.Join(t.TempDir(), "big.jpg")
 	magick(t, env, "-size", "1600x1200", "gradient:red-blue", "-quality", "90", path)
-	enc := regionEncoding(region{})
+	enc := pngEncoding()
 	enc.format, enc.ext = JPEG, ".jpg"
 
 	img, err := env.still(context.Background(), decoder{"magick", "jpeg"}, path, enc, t.TempDir())
@@ -314,8 +314,7 @@ func TestRegionTurnsJPEGReductionOff(t *testing.T) {
 	}
 
 	env2, calls2 := sourceEnv(t)
-	enc.region = region{100, 100, 800, 600}
-	img, err = env2.still(context.Background(), decoder{"magick", "jpeg"}, path, enc, t.TempDir())
+	img, err = env2.stillRegion(context.Background(), region{100, 100, 800, 600}, decoder{"magick", "jpeg"}, path, enc, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,8 +335,9 @@ func TestRegionStillWebP(t *testing.T) {
 	path := withOrientation(t, real, stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80"), 6)
 	enc := Encoding{Format: PNG, MaxEdge: 400, MaxArea: 400 * 400}.mustResolve(t)
 
+	var r region
 	env, calls := sourceEnv(t)
-	art, err := openSource(t, env, path, Hints{}).encode(context.Background(), 0, []encoding{enc})
+	art, err := openSource(t, env, path, Hints{}).encode(context.Background(), r, 0, []encoding{enc})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,9 +347,9 @@ func TestRegionStillWebP(t *testing.T) {
 	}
 
 	// The picture is 1200x1800 upright.
-	enc.region = region{1100, 0, 100, 100}
+	r = region{1100, 0, 100, 100}
 	env, calls = sourceEnv(t)
-	art, err = openSource(t, env, path, Hints{}).encode(context.Background(), 0, []encoding{enc})
+	art, err = openSource(t, env, path, Hints{}).encode(context.Background(), r, 0, []encoding{enc})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,11 +361,11 @@ func TestRegionStillWebP(t *testing.T) {
 		t.Errorf("output is %dx%d, want 100x100", art[0].Width, art[0].Height)
 	}
 
-	enc.region = region{1101, 0, 100, 100}
+	r = region{1101, 0, 100, 100}
 	env, _ = sourceEnv(t)
 	staged := t.TempDir()
 	env.Stage = stagerIn(staged)
-	if _, err := openSource(t, env, path, Hints{}).encode(context.Background(), 0, []encoding{enc}); err == nil || !strings.Contains(err.Error(), "outside") {
+	if _, err := openSource(t, env, path, Hints{}).encode(context.Background(), r, 0, []encoding{enc}); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("err = %v, want a refusal that the region is outside the 1200x1800 frame", err)
 	}
 	if entries, _ := os.ReadDir(staged); len(entries) != 0 {
@@ -413,7 +413,7 @@ func TestRegionRefusesAForgedUprightReport(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			env := stagedEnv(rewriteMagick(real, c.fn), t.TempDir())
 			dir := t.TempDir()
-			if _, err := env.still(context.Background(), decoder{"magick", "heic"}, path, regionEncoding(region{10, 10, 50, 50}), dir); err == nil {
+			if _, err := env.stillRegion(context.Background(), region{10, 10, 50, 50}, decoder{"magick", "heic"}, path, pngEncoding(), dir); err == nil {
 				t.Fatal("the call succeeded")
 			}
 			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -427,7 +427,7 @@ func TestRegionRefusesAForgedUprightReport(t *testing.T) {
 			seen = seen || strings.Contains(out, "upright|480|640\n")
 			return out
 		}), t.TempDir())
-		if _, err := env.still(context.Background(), decoder{"magick", "heic"}, path, regionEncoding(region{10, 10, 50, 50}), t.TempDir()); err != nil {
+		if _, err := env.stillRegion(context.Background(), region{10, 10, 50, 50}, decoder{"magick", "heic"}, path, pngEncoding(), t.TempDir()); err != nil {
 			t.Fatal(err)
 		}
 		if !seen {
@@ -441,7 +441,7 @@ func TestEncodeRefusesAnUprightLineWhenNothingIsCropped(t *testing.T) {
 	real := requireMagick(t)
 	env := stagedEnv(rewriteMagick(real, func(out string) string { return "upright|480|640\n" + out }), t.TempDir())
 	dir := t.TempDir()
-	_, err := env.still(context.Background(), decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), regionEncoding(region{}), dir)
+	_, err := env.stillRegion(context.Background(), region{}, decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), pngEncoding(), dir)
 	if err == nil {
 		t.Fatal("the call succeeded")
 	}
@@ -491,7 +491,7 @@ func TestRegionOnAnAnimationIsInTheUprightCanvas(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			images, err := open(t).encodeFiles(context.Background(), regionEncoding(c.r), dir)
+			images, err := open(t).encodeFiles(context.Background(), c.r, pngEncoding(), dir)
 			if !c.ok {
 				if err == nil || !strings.Contains(err.Error(), "outside") {
 					t.Fatalf("err = %v, want a refusal that the region is outside the canvas", err)
@@ -523,7 +523,7 @@ func TestRegionDoesNotRelaxTheReturnedPixelCap(t *testing.T) {
 	dir := t.TempDir()
 	in := admitted{path: gif, dir: dir, decoder: decoder{"magick", "gif"}}
 	all := func(n int) ([]int, error) { return []int{0, 1, 2, 3, 4}[:n], nil }
-	_, err := env.encodeAnimationFrames(context.Background(), in, regionEncoding(region{0, 0, 1, 1}), all)
+	_, err := env.encodeAnimationFrames(context.Background(), region{0, 0, 1, 1}, in, pngEncoding(), all)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Errorf("err = %v, want ErrTooLarge", err)
 	}

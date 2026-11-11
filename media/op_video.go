@@ -401,8 +401,8 @@ func (e Env) probeChecked(ctx context.Context, dec decoder, inputPath string) (v
 // delivered at the size decode needs, which is the largest of the encodings
 // that will be made from them, with videoReductionMargin to spare for SDR and
 // none for HDR.
-func newVideoPlan(info videoInfo, decode encoding) videoPlan {
-	w, h := decode.subject(info.upright())
+func newVideoPlan(info videoInfo, r region, decode encoding) videoPlan {
+	w, h := r.subject(info.upright())
 	tw, th, resize := fitSize(w, h, decode.maxEdge, decode.maxArea)
 	hdr := isHDRTransfer(info.transfer)
 	rw, rh, reduced := tw, th, resize
@@ -411,8 +411,8 @@ func newVideoPlan(info videoInfo, decode encoding) videoPlan {
 	}
 	return videoPlan{
 		info:         info,
-		filter:       videoFilter(hdr, reduced, rw, rh, decode.region),
-		region:       decode.region,
+		filter:       videoFilter(hdr, reduced, rw, rh, r),
+		region:       r,
 		fw:           rw,
 		fh:           rh,
 		reduced:      reduced,
@@ -443,7 +443,7 @@ func (v videoPlan) source(enc encoding) encodeSource {
 	if !v.reduced && v.region.zero() {
 		return encodeSource{}
 	}
-	w, h := enc.subject(v.info.upright())
+	w, h := v.region.subject(v.info.upright())
 	tw, th, _ := fitSize(w, h, enc.maxEdge, enc.maxArea)
 	return encodeSource{width: tw, height: th}
 }
@@ -530,8 +530,8 @@ type sampledFrame struct {
 }
 
 // videoFrames samples up to maxFrames frames evenly.
-func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
-	return e.videoFramesPicked(ctx, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
+func (e Env) videoFrames(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
+	return e.videoFramesPicked(ctx, r, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
 		return sampleTimesMS(info, maxFrames), nil
 	}, dir)
 }
@@ -539,16 +539,16 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 // videoFramesPicked samples the frames at the times pick chooses, given the
 // probe, which must be in ascending order without repeats; sampleVideo reads
 // them.
-func (e Env) videoFramesPicked(ctx context.Context, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
-	return e.encodeVideoFiles(ctx, openRequest{
+func (e Env) videoFramesPicked(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
+	return e.encodeVideoFiles(ctx, r, openRequest{
 		path: inputPath, dec: dec, pinned: true, scratch: dir, video: &videoRequest{times: pick},
 	}, enc, dir)
 }
 
 // videoFrameRun samples count consecutive frames from startMS in one ffmpeg
 // run.
-func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
-	return e.encodeVideoFiles(ctx, openRequest{
+func (e Env) videoFrameRun(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
+	return e.encodeVideoFiles(ctx, r, openRequest{
 		path: inputPath, dec: dec, pinned: true, scratch: dir,
 		video: &videoRequest{run: &frameRun{startMS: startMS, count: count}},
 	}, enc, dir)
@@ -556,13 +556,13 @@ func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, e
 
 // encodeVideoFiles opens the video req describes and writes its samples to
 // dir.
-func (e Env) encodeVideoFiles(ctx context.Context, req openRequest, enc encoding, dir string) ([]Image, error) {
+func (e Env) encodeVideoFiles(ctx context.Context, r region, req openRequest, enc encoding, dir string) ([]Image, error) {
 	src, err := e.open(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	defer src.Close()
-	return src.encodeFiles(ctx, enc, dir)
+	return src.encodeFiles(ctx, r, enc, dir)
 }
 
 // sampleVideo writes the frame at or after each of times, which must be

@@ -38,8 +38,9 @@ func TestVideoFilterWithARegion(t *testing.T) {
 // the frame.
 func TestVideoPlanReducesTheRegion(t *testing.T) {
 	info := videoInfo{width: 1600, height: 1200, frames: 10}
-	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 20, maxArea: 400, region: region{100, 50, 400, 300}}
-	plan := newVideoPlan(info, enc)
+	r := region{100, 50, 400, 300}
+	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 20, maxArea: 400}
+	plan := newVideoPlan(info, r, enc)
 	if !plan.reduced || plan.fw != 40 || plan.fh != 30 {
 		t.Errorf("plan reduces to %dx%d (reduced %v), want 40x30, twice the 20x15 target", plan.fw, plan.fh, plan.reduced)
 	}
@@ -53,7 +54,7 @@ func TestVideoPlanReducesTheRegion(t *testing.T) {
 
 	// A region that needs no reduction is delivered as cut, and sized exactly.
 	enc.maxEdge, enc.maxArea = 4000, 4000*4000
-	plan = newVideoPlan(info, enc)
+	plan = newVideoPlan(info, r, enc)
 	if plan.reduced || plan.fw != 400 || plan.fh != 300 || plan.filter != "crop=400:300:100:50:exact=1" {
 		t.Errorf("plan = %+v, want the region delivered unscaled", plan)
 	}
@@ -93,8 +94,8 @@ func TestVideoRunCropsBeforeScalingAndToneMapping(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer src.Close()
-			enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 8, maxArea: 64, region: region{10, 6, 40, 30}}
-			_, _ = src.encode(context.Background(), 0, []encoding{enc})
+			enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 8, maxArea: 64}
+			_, _ = src.encode(context.Background(), region{10, 6, 40, 30}, 0, []encoding{enc})
 			if len(stub.runs) == 0 {
 				t.Fatal("no ffmpeg run")
 			}
@@ -124,9 +125,9 @@ func TestVideoRegionDecodeCoversTheLargestTarget(t *testing.T) {
 	r := region{10, 10, 100, 20}
 	// On the whole 160x120 frame the first fits to 28x21, the second to
 	// 18x13; on the region, to 30x6 and 35x7.
-	a := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 30, maxArea: 600, region: r}
-	b := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 40, maxArea: 256, region: r}
-	_, _ = src.encode(context.Background(), 0, []encoding{a, b})
+	a := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 30, maxArea: 600}
+	b := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 40, maxArea: 256}
+	_, _ = src.encode(context.Background(), r, 0, []encoding{a, b})
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
@@ -137,8 +138,9 @@ func TestVideoRegionDecodeCoversTheLargestTarget(t *testing.T) {
 
 // ImageMagick is not asked to crop a video's samples: they are already cut.
 func TestVideoRegionIsNotCroppedAgainByTheEncode(t *testing.T) {
-	plan := newVideoPlan(videoInfo{width: 160, height: 120}, encoding{maxEdge: 64, maxArea: 4096, region: region{1, 1, 50, 50}})
-	if got := plan.source(encoding{maxEdge: 64, maxArea: 4096, region: region{1, 1, 50, 50}}); !got.crop.zero() {
+	enc := encoding{maxEdge: 64, maxArea: 4096}
+	plan := newVideoPlan(videoInfo{width: 160, height: 120}, region{1, 1, 50, 50}, enc)
+	if got := plan.source(enc); !got.crop.zero() {
 		t.Errorf("source crops %+v", got.crop)
 	}
 }
@@ -160,8 +162,8 @@ func TestVideoRegionBounds(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			c2 := withRunCounts(env)
 			dir := t.TempDir()
-			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 200, maxArea: 200 * 200, region: c.r}
-			images, err := c2.videoFrames(context.Background(), sniffedVideoDecoder(src), src, enc, 1, dir)
+			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 200, maxArea: 200 * 200}
+			images, err := c2.videoFrames(context.Background(), c.r, sniffedVideoDecoder(src), src, enc, 1, dir)
 			if c.ok {
 				if err != nil || len(images) == 0 {
 					t.Fatalf("images = %v, %v", images, err)
@@ -203,7 +205,7 @@ func TestVideoRegionOfARotatedClipIsInUprightCoordinates(t *testing.T) {
 	dec := sniffedVideoDecoder(rotated)
 
 	whole := t.TempDir()
-	images, err := env.videoFrames(context.Background(), dec, rotated, enc, 1, whole)
+	images, err := env.videoFrames(context.Background(), region{}, dec, rotated, enc, 1, whole)
 	if err != nil || len(images) != 1 {
 		t.Fatalf("images = %v, %v", images, err)
 	}
@@ -213,8 +215,7 @@ func TestVideoRegionOfARotatedClipIsInUprightCoordinates(t *testing.T) {
 	colours := map[[3]int]bool{}
 	for _, r := range []region{{0, 0, 40, 40}, {80, 0, 40, 40}, {0, 120, 40, 40}, {80, 120, 40, 40}} {
 		dir := t.TempDir()
-		enc.region = r
-		got, err := env.videoFrames(context.Background(), dec, rotated, enc, 1, dir)
+		got, err := env.videoFrames(context.Background(), r, dec, rotated, enc, 1, dir)
 		if err != nil || len(got) != 1 {
 			t.Fatalf("region %+v: images = %v, %v", r, got, err)
 		}
@@ -249,8 +250,8 @@ func TestVideoRegionOfAnHDRClipMayBeOdd(t *testing.T) {
 		{"reduced", region{5, 7, 61, 45}, 30, 30, 22},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: c.maxEdge, maxArea: c.maxEdge * c.maxEdge, region: c.r}
-			images, err := env.videoFrames(context.Background(), dec, clip, enc, 1, t.TempDir())
+			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: c.maxEdge, maxArea: c.maxEdge * c.maxEdge}
+			images, err := env.videoFrames(context.Background(), c.r, dec, clip, enc, 1, t.TempDir())
 			if err != nil || len(images) != 1 {
 				t.Fatalf("images = %v, %v", images, err)
 			}
@@ -278,8 +279,8 @@ func TestVideoSecondEncodeWithAnotherRegionDecodesAgain(t *testing.T) {
 	defer src.Close()
 	encode := func(r region) {
 		t.Helper()
-		enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 64, maxArea: 64 * 64, region: r}
-		out, err := src.encode(context.Background(), 1, []encoding{enc})
+		enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 64, maxArea: 64 * 64}
+		out, err := src.encode(context.Background(), r, 1, []encoding{enc})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -304,12 +305,13 @@ func TestVideoSecondEncodeWithAnotherRegionDecodesAgain(t *testing.T) {
 
 func TestVideoPlanCoversOnlyItsOwnRegion(t *testing.T) {
 	info := videoInfo{width: 160, height: 120}
-	a := newVideoPlan(info, encoding{maxEdge: 64, maxArea: 4096, region: region{0, 0, 80, 60}})
-	b := newVideoPlan(info, encoding{maxEdge: 64, maxArea: 4096, region: region{40, 30, 80, 60}})
+	enc := encoding{maxEdge: 64, maxArea: 4096}
+	a := newVideoPlan(info, region{0, 0, 80, 60}, enc)
+	b := newVideoPlan(info, region{40, 30, 80, 60}, enc)
 	if !a.covers(a) || a.covers(b) || b.covers(a) {
 		t.Error("plans for different regions of one size cover each other")
 	}
-	whole := newVideoPlan(info, encoding{maxEdge: 64, maxArea: 4096})
+	whole := newVideoPlan(info, region{}, enc)
 	if whole.covers(a) || a.covers(whole) {
 		t.Error("a plan for a region covers one for the whole frame")
 	}
@@ -317,7 +319,7 @@ func TestVideoPlanCoversOnlyItsOwnRegion(t *testing.T) {
 
 func TestVideoFramesWithoutARegionAreSampledAsBefore(t *testing.T) {
 	info := videoInfo{width: 160, height: 120, frames: 10}
-	plan := newVideoPlan(info, encoding{maxEdge: 20, maxArea: 400})
+	plan := newVideoPlan(info, region{}, encoding{maxEdge: 20, maxArea: 400})
 	if plan.filter != "scale=40:30:flags=lanczos" || !plan.region.zero() {
 		t.Errorf("plan = %+v", plan)
 	}

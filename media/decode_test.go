@@ -464,7 +464,7 @@ func TestEncodeFromOneOpenMatchesEncodeRungPerRung(t *testing.T) {
 	src := openSource(t, env, path, Hints{Frames: rungs[0].MaxFrames})
 	for _, r := range rungs {
 		enc := encoding{format: WebP, ext: ".webp", quality: testQuality, maxEdge: r.CeilingPx, maxArea: r.CeilingPx * r.CeilingPx}
-		out, err := src.encode(context.Background(), r.MaxFrames, []encoding{enc})
+		out, err := src.encode(context.Background(), region{}, r.MaxFrames, []encoding{enc})
 		if err != nil {
 			t.Fatalf("rung %+v: %v", r, err)
 		}
@@ -811,7 +811,7 @@ func TestJPEGSizeReductionChoice(t *testing.T) {
 		{[]encoding{enc(3200)}, ""},                    // N=8: no reduction
 		{[]encoding{enc(8000)}, ""},                    // no downscale at all
 	} {
-		ops, sizes := s.reduction(c.encs)
+		ops, sizes := s.reduction(region{}, c.encs)
 		got := ""
 		if len(ops) == 2 {
 			got = strings.TrimPrefix(ops[1], "jpeg:size=")
@@ -826,15 +826,15 @@ func TestJPEGSizeReductionChoice(t *testing.T) {
 	// Rotated by the file's orientation, the sides the targets bound are the
 	// other way round from the stored ones.
 	rotated := &Source{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{4000, 6000}}
-	if ops, _ := rotated.reduction([]encoding{enc(1024)}); len(ops) != 2 || ops[1] != "jpeg:size=2250x1500" {
+	if ops, _ := rotated.reduction(region{}, []encoding{enc(1024)}); len(ops) != 2 || ops[1] != "jpeg:size=2250x1500" {
 		t.Errorf("rotated source: %v, want a 2250x1500 hint", ops)
 	}
 	s.reduce = false
-	if ops, _ := s.reduction([]encoding{enc(256)}); ops != nil {
+	if ops, _ := s.reduction(region{}, []encoding{enc(256)}); ops != nil {
 		t.Errorf("reduction disabled still gives %v", ops)
 	}
 	s.reduce, s.jpeg = true, false
-	if ops, _ := s.reduction([]encoding{enc(256)}); ops != nil {
+	if ops, _ := s.reduction(region{}, []encoding{enc(256)}); ops != nil {
 		t.Errorf("a non-JPEG is reduced: %v", ops)
 	}
 }
@@ -870,7 +870,7 @@ func TestFusedAndMaterialisedEncodesAgreeOnTwoTargetsAndReducedJPEG(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			readOps, sizes := src.reduction([]encoding{mustResolve(t, targets[0]), mustResolve(t, targets[1])})
+			readOps, sizes := src.reduction(region{}, []encoding{mustResolve(t, targets[0]), mustResolve(t, targets[1])})
 			if reduce != (readOps != nil) {
 				t.Fatalf("reduction = %v with reduce=%t", readOps, reduce)
 			}

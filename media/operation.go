@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 )
 
 // ErrUnsupportedType is returned, wrapped with the media type found in the
@@ -87,10 +86,6 @@ type encoding struct {
 	format                    Format
 	ext                       string
 	quality, maxEdge, maxArea int
-	// region is the part of each frame the output shows, cut before the
-	// output is sized. It belongs to the encode call, not to a target:
-	// Source.encode gives every target the first one's.
-	region region
 }
 
 // region is a rectangle of a frame in pixels of the frame as shown: after a
@@ -127,17 +122,12 @@ func (r region) check(w, h int) error {
 }
 
 // subject returns the size the output is fitted to: the region's, or w x h,
-// the size of the frame, when there is none.
-func (e encoding) subject(w, h int) (int, int) {
-	if e.region.zero() {
+// the size of the frame, when r is the zero region.
+func (r region) subject(w, h int) (int, int) {
+	if r.zero() {
 		return w, h
 	}
-	return e.region.width, e.region.height
-}
-
-// anyRegion reports whether any of encs has a region.
-func anyRegion(encs []encoding) bool {
-	return slices.ContainsFunc(encs, func(e encoding) bool { return !e.region.zero() })
+	return r.width, r.height
 }
 
 func (e Encoding) resolve() (encoding, error) {

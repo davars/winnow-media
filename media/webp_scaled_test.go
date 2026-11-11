@@ -257,7 +257,7 @@ func TestScaledWebPDecodeKeepsTheOutputSize(t *testing.T) {
 					if len(decoded) != 1 {
 						t.Fatalf("%s: webp-frames decoded %d times for %d targets, want 1", name, len(decoded), len(ts))
 					}
-					if want := src.webpDecodeSize(resolveAll(t, ts)); decoded[0] != want {
+					if want := src.webpDecodeSize(region{}, resolveAll(t, ts)); decoded[0] != want {
 						t.Errorf("%s: decoded at %v, webpDecodeSize says %v", name, decoded[0], want)
 					}
 					if decoded[0] == src.stored {
@@ -361,7 +361,7 @@ func TestScaledWebPReductionChoice(t *testing.T) {
 		{[]encoding{enc(256), enc(8000)}, [2]int{}}, // one target needs no resize
 		{[]encoding{{maxEdge: 6000, maxArea: 600 * 400}}, [2]int{1200, 800}},
 	} {
-		got := s.webpDecodeSize(c.encs)
+		got := s.webpDecodeSize(region{}, c.encs)
 		want := c.want
 		if want == [2]int{} {
 			want = s.stored
@@ -373,14 +373,14 @@ func TestScaledWebPReductionChoice(t *testing.T) {
 	// Turned by the file's orientation, the sides the targets bound are the
 	// other way round from the stored ones.
 	rotated := &Source{webp: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{4000, 6000}}
-	if got := rotated.webpDecodeSize([]encoding{enc(1024)}); got != [2]int{2048, 1366} {
+	if got := rotated.webpDecodeSize(region{}, []encoding{enc(1024)}); got != [2]int{2048, 1366} {
 		t.Errorf("rotated source: decode at %v, want 2048x1366", got)
 	}
 	// Both sides cover the margin even where the targets round apart.
 	for _, sz := range [][2]int{{1001, 1000}, {1000, 1001}, {5001, 3333}, {999, 1500}} {
 		s := &Source{webp: true, reduce: true, stored: sz, upright: sz}
 		for _, edge := range []int{100, 200, 333} {
-			got := s.webpDecodeSize([]encoding{enc(edge)})
+			got := s.webpDecodeSize(region{}, []encoding{enc(edge)})
 			if got == sz {
 				t.Errorf("%v at %d: no reduction", sz, edge)
 				continue
@@ -392,7 +392,7 @@ func TestScaledWebPReductionChoice(t *testing.T) {
 		}
 	}
 	s.reduce = false
-	if got := s.webpDecodeSize([]encoding{enc(256)}); got != s.stored {
+	if got := s.webpDecodeSize(region{}, []encoding{enc(256)}); got != s.stored {
 		t.Errorf("reduction disabled still gives %v", got)
 	}
 }
@@ -803,7 +803,7 @@ func TestWebPDecodeSizeIsTheSameForEitherOrientation(t *testing.T) {
 		for _, enc := range targets {
 			straight := &Source{webp: true, reduce: true, stored: sz, upright: sz}
 			turned := &Source{webp: true, reduce: true, stored: sz, upright: [2]int{sz[1], sz[0]}}
-			a, b := straight.webpDecodeSize([]encoding{enc}), turned.webpDecodeSize([]encoding{enc})
+			a, b := straight.webpDecodeSize(region{}, []encoding{enc}), turned.webpDecodeSize(region{}, []encoding{enc})
 			if a != b {
 				t.Errorf("%v at %+v: %v upright, %v turned", sz, enc, a, b)
 			}
