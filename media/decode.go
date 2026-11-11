@@ -400,6 +400,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	}
 
 	s.orientation = cmp.Or(override, first.orientation)
+	s.upright[0], s.upright[1] = uprightSize(s.layout.cw, s.layout.ch, s.orientation)
 	s.req = composeRequest{
 		path: req.path, dir: s.dir, selected: s.selected, inFlight: len(s.selected),
 		frames: count, width: s.layout.cw, height: s.layout.ch, consumeTimeout: composeTimeout,
@@ -601,7 +602,29 @@ func (s *Source) sourceOf(enc encoding) encodeSource {
 	if s.video != nil {
 		return s.video.plan.source(enc)
 	}
-	return encodeSource{orientation: s.orientation}
+	return s.cropped(encodeSource{orientation: s.orientation}, enc)
+}
+
+// cropped returns src made to cut the region of enc, and to size the cut
+// exactly, when enc has one.
+func (s *Source) cropped(src encodeSource, enc encoding) encodeSource {
+	if enc.region.zero() {
+		return src
+	}
+	tw, th, _ := fitSize(enc.region.width, enc.region.height, enc.maxEdge, enc.maxArea)
+	src.crop, src.upright = enc.region, s.upright
+	src.width, src.height = tw, th
+	return src
+}
+
+// checkRegion returns an error if the region of enc is not inside the frame
+// the source shows. A still WebP's orientation is only known once it is
+// decoded; encodeWebPStill checks it then.
+func (s *Source) checkRegion(enc encoding) error {
+	if s.webp && s.orientation == "" && !s.exifKnown {
+		return enc.region.shape()
+	}
+	return enc.region.check(s.upright[0], s.upright[1])
 }
 
 // positions returns which of the source's frames a budget of maxFrames
@@ -665,7 +688,8 @@ func (s *Source) stillFrame(enc encoding) (encodeFrame, error) {
 // answer does not depend on the orientation: both bounds are symmetric in
 // the two sides.
 func (s *Source) fits(enc encoding) bool {
-	_, _, resize := fitSize(s.upright[0], s.upright[1], enc.maxEdge, enc.maxArea)
+	w, h := enc.subject(s.upright[0], s.upright[1])
+	_, _, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
 	return !resize
 }
 
@@ -692,7 +716,7 @@ func reducible(format string) bool { return format == "JPEG" }
 // sizes are computed here, from the size and orientation the header gives,
 // because ImageMagick would round each side of the reduced frame separately.
 func (s *Source) reducedEighths(encs []encoding) (n int, sizes [][2]int) {
-	if !s.jpeg || !s.reduce {
+	if !s.jpeg || !s.reduce || anyRegion(encs) {
 		return 0, nil
 	}
 	sizes = s.outputSizes(encs)
@@ -776,10 +800,22 @@ func (s *Source) pingDecoded(ctx context.Context, readOps []string) ([2]int, err
 func (s *Source) outputSizes(encs []encoding) [][2]int {
 	sizes := make([][2]int, len(encs))
 	for i, enc := range encs {
-		tw, th, resize := fitSize(s.upright[0], s.upright[1], enc.maxEdge, enc.maxArea)
+		w, h := enc.subject(s.upright[0], s.upright[1])
+		tw, th, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
 		if !resize {
 			return nil
 		}
+		sizes[i] = [2]int{tw, th}
+	}
+	return sizes
+}
+
+// regionSizes returns the exact size of each output of encs when each shows
+// its region.
+func (s *Source) regionSizes(encs []encoding) [][2]int {
+	sizes := make([][2]int, len(encs))
+	for i, enc := range encs {
+		tw, th, _ := fitSize(enc.region.width, enc.region.height, enc.maxEdge, enc.maxArea)
 		sizes[i] = [2]int{tw, th}
 	}
 	return sizes
@@ -810,7 +846,7 @@ func (s *Source) storedSizes(sizes [][2]int) [][2]int {
 // output's fit in the stored axes is the same either way.
 func (s *Source) webpDecodeSize(encs []encoding) [2]int {
 	sw, sh := s.stored[0], s.stored[1]
-	if !s.reduce {
+	if !s.reduce || anyRegion(encs) {
 		return s.stored
 	}
 	var decoded [2]int
@@ -843,6 +879,9 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 	if err != nil {
 		return nil, err
 	}
+	if anyRegion(encs) {
+		sizes = s.regionSizes(encs)
+	}
 	if err := checkStillSize(s.stored, decoded); err != nil {
 		return nil, err
 	}
@@ -869,6 +908,10 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 	for _, t := range targets {
 		chk.bounds = append(chk.bounds, boundOf(t.enc, t.source(src)))
 	}
+	if anyRegion(encs) {
+		src.crop, src.upright = encs[0].region, s.upright
+		chk.upright = s.upright
+	}
 	return s.env.runEncode(ctx, fusedArgs(readOps, src, targets), chk)
 }
 
@@ -890,13 +933,18 @@ func (s *Source) encodeWebPStill(ctx context.Context, encs []encoding, paths []s
 		return nil, err
 	}
 	s.upright[0], s.upright[1] = uprightSize(s.stored[0], s.stored[1], orientation)
+	for _, enc := range encs {
+		if err := enc.region.check(s.upright[0], s.upright[1]); err != nil {
+			return nil, err
+		}
+	}
 	var sizes [][2]int
 	if decoded != s.stored {
 		sizes = s.outputSizes(encs)
 	}
 	res := make([]encodedFrame, len(encs))
 	for i, enc := range encs {
-		src := encodeSource{orientation: orientation}
+		src := s.cropped(encodeSource{orientation: orientation}, enc)
 		if sizes != nil {
 			src.width, src.height = sizes[i][0], sizes[i][1]
 		}
@@ -906,7 +954,7 @@ func (s *Source) encodeWebPStill(ctx context.Context, encs []encoding, paths []s
 		}
 		out, err := s.env.runEncode(ctx,
 			encodeArgs([]encodeFrame{f}, src, enc, encodeOutput{kind: outputStill, path: paths[i]}),
-			encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}})
+			encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}, upright: src.upright})
 		if err != nil {
 			return nil, err
 		}
@@ -1042,6 +1090,13 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 	if s.stream {
 		return nil, errors.New("a streaming source encodes frames to files only")
 	}
+	encs = slices.Clone(encs)
+	for i := range encs {
+		encs[i].region = encs[0].region
+	}
+	if err := s.checkRegion(encs[0]); err != nil {
+		return nil, err
+	}
 	if s.video != nil {
 		if err := s.decodeVideo(ctx, encs); err != nil {
 			return nil, err
@@ -1126,7 +1181,7 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 		delays[i] = frames[i].delayCS
 	}
 	res, err := s.env.runEncode(ctx, encodeArgs(frames, src, enc, encodeOutput{kind: kind, path: path}),
-		encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}})
+		encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}, upright: src.upright})
 	if err != nil {
 		return 0, 0, nil, fmt.Errorf("encoding animation: %w", err)
 	}
@@ -1212,6 +1267,9 @@ func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]
 }
 
 func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]Image, error) {
+	if err := s.checkRegion(enc); err != nil {
+		return nil, err
+	}
 	if s.video != nil {
 		if err := s.decodeVideo(ctx, []encoding{enc}); err != nil {
 			return nil, err
@@ -1306,6 +1364,9 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 // stillImage writes the first image of a source of one frame to dir as
 // still.<ext> and describes it.
 func (s *Source) stillImage(ctx context.Context, enc encoding, dir string) (Image, error) {
+	if err := s.checkRegion(enc); err != nil {
+		return Image{}, err
+	}
 	name := "still" + enc.ext
 	res, err := s.encodeStills(ctx, []encoding{enc}, []string{filepath.Join(dir, name)})
 	if err != nil {

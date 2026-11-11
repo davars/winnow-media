@@ -49,6 +49,11 @@ type encodeSource struct {
 	// the source's header, since the size computed from a reduced frame can
 	// differ from the one computed from the source by a pixel.
 	width, height int
+	// crop, when set, is cut from each frame once it is upright, before it is
+	// sized. upright is the size the frames must have at that point; the
+	// run reports the size it found and is refused if it differs.
+	crop    region
+	upright [2]int
 }
 
 type outputKind int
@@ -167,6 +172,9 @@ type encodeCheck struct {
 	// signed says the run reports a pixel signature with each frame (see
 	// reportFormat).
 	signed bool
+	// upright is the upright size every frame must report before it is
+	// cropped; the zero value means the run crops nothing and reports none.
+	upright [2]int
 }
 
 // timeLimitMessage is what ImageMagick prints when a run exceeds its time
@@ -270,6 +278,12 @@ func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 	} else {
 		args = append(args, "-auto-orient")
 	}
+	if !src.crop.zero() {
+		// ImageMagick clips a crop outside the frame without failing, so the
+		// run reports the size it cropped.
+		args = append(args, "-print", uprightPrefix+"%w|%h\\n",
+			"-crop", fmt.Sprintf("%dx%d+%d+%d", src.crop.width, src.crop.height, src.crop.x, src.crop.y), "+repage")
+	}
 	if f.convertTo != "" {
 		if f.assign != "" {
 			args = append(args, "-profile", f.assign)
@@ -292,6 +306,10 @@ func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 	}
 	return append(args, "-filter", string(filter), "-resize", width+"x"+height+"!")
 }
+
+// uprightPrefix starts each line a crop makes the encode run print: the size
+// of the frame before the crop.
+const uprightPrefix = "upright|"
 
 // encodeTail are the operators that follow the last frame: metadata is
 // stripped after the conversion that needed it, and the output is written at
@@ -336,6 +354,52 @@ func fusedArgs(readOps []string, src encodeSource, targets []fusedTarget) []stri
 		args = append(append(args, ops...), "-write", "info:", "+delete", ")")
 	}
 	return append(args, "null:")
+}
+
+// splitUpright separates the upright lines of an encode run's output from the
+// report, and returns the report and the sizes the lines give.
+func splitUpright(out []byte) ([]byte, [][2]int, error) {
+	var report []string
+	var sizes [][2]int
+	for _, line := range strings.Split(string(out), "\n") {
+		rest, ok := strings.CutPrefix(line, uprightPrefix)
+		if !ok {
+			report = append(report, line)
+			continue
+		}
+		var size [2]int
+		w, h, found := strings.Cut(rest, "|")
+		var err1, err2 error
+		size[0], err1 = strconv.Atoi(w)
+		size[1], err2 = strconv.Atoi(h)
+		if !found || err1 != nil || err2 != nil {
+			return nil, nil, fmt.Errorf("encode report line %q has an unreadable size", line)
+		}
+		sizes = append(sizes, size)
+	}
+	return []byte(strings.Join(report, "\n")), sizes, nil
+}
+
+// checkUpright returns an error unless the run printed the upright size c
+// expects once for each of frames reported frames, or nothing when c expects
+// no crop.
+func (c encodeCheck) checkUpright(got [][2]int, frames int) error {
+	if c.upright == [2]int{} {
+		if len(got) > 0 {
+			return fmt.Errorf("encode reported %d upright sizes for a run that crops nothing", len(got))
+		}
+		return nil
+	}
+	if len(got) != frames {
+		return fmt.Errorf("encode reported %d upright sizes for %d frames", len(got), frames)
+	}
+	for i, size := range got {
+		if size != c.upright {
+			return fmt.Errorf("magick: frame %d is %dx%d upright, the region was checked against %dx%d",
+				i, size[0], size[1], c.upright[0], c.upright[1])
+		}
+	}
+	return nil
 }
 
 // parseEncoded reads the report of an encode run, signed as reportFormat says.

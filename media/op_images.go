@@ -251,8 +251,14 @@ func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]e
 	res, err := e.runMagick(ctx, args...)
 	var frames []encodedFrame
 	if err == nil {
-		if frames, err = parseEncoded(res.Stdout, chk.signed); err == nil {
-			err = chk.checkFrames(frames)
+		var report []byte
+		var uprights [][2]int
+		if report, uprights, err = splitUpright(res.Stdout); err == nil {
+			if frames, err = parseEncoded(report, chk.signed); err == nil {
+				if err = chk.checkUpright(uprights, len(frames)); err == nil {
+					err = chk.checkFrames(frames)
+				}
+			}
 		}
 	}
 	if err != nil {

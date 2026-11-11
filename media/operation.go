@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // ErrUnsupportedType is returned, wrapped with the media type found in the
@@ -86,6 +87,57 @@ type encoding struct {
 	format                    Format
 	ext                       string
 	quality, maxEdge, maxArea int
+	// region is the part of each frame the output shows, cut before the
+	// output is sized. It belongs to the encode call, not to a target:
+	// Source.encode gives every target the first one's.
+	region region
+}
+
+// region is a rectangle of a frame in pixels of the frame as shown: after a
+// still's orientation, a video's display rotation, on an animation's canvas.
+// x, y is its top-left corner. The zero region is the whole frame.
+type region struct{ x, y, width, height int }
+
+func (r region) zero() bool { return r == region{} }
+
+// shape returns an error unless r is the zero region or has a corner at or
+// after 0,0 and a side of at least one pixel.
+func (r region) shape() error {
+	switch {
+	case r.zero():
+		return nil
+	case r.x < 0 || r.y < 0:
+		return fmt.Errorf("region corner %d,%d is negative", r.x, r.y)
+	case r.width < 1 || r.height < 1:
+		return fmt.Errorf("region %dx%d has a side below 1 pixel", r.width, r.height)
+	}
+	return nil
+}
+
+// check returns an error unless r is the zero region or has a valid shape and
+// lies inside a frame of w x h.
+func (r region) check(w, h int) error {
+	if err := r.shape(); err != nil || r.zero() {
+		return err
+	}
+	if r.width > w || r.x > w-r.width || r.height > h || r.y > h-r.height {
+		return fmt.Errorf("region %dx%d at %d,%d is outside the %dx%d frame", r.width, r.height, r.x, r.y, w, h)
+	}
+	return nil
+}
+
+// subject returns the size the output is fitted to: the region's, or w x h,
+// the size of the frame, when there is none.
+func (e encoding) subject(w, h int) (int, int) {
+	if e.region.zero() {
+		return w, h
+	}
+	return e.region.width, e.region.height
+}
+
+// anyRegion reports whether any of encs has a region.
+func anyRegion(encs []encoding) bool {
+	return slices.ContainsFunc(encs, func(e encoding) bool { return !e.region.zero() })
 }
 
 func (e Encoding) resolve() (encoding, error) {

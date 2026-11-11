@@ -747,7 +747,7 @@ func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 	}
 	pattern := strings.ReplaceAll(filepath.Join(s.dir, ".enc-"), "%", "%%") + "%d" + s.enc.ext
 	encoded, err := s.env.runEncode(ctx, encodeArgs(batch, s.src, s.enc, encodeOutput{kind: outputFiles, path: pattern}),
-		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch)), signed: true})
+		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch)), signed: true, upright: s.src.upright})
 	if err != nil {
 		return fmt.Errorf("encoding frames %d to %d: %w", s.seen, s.seen+len(batch)-1, err)
 	}
