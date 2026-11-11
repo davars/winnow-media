@@ -76,7 +76,7 @@ source carries a profile, and carries no metadata.
 
 | Call | Does |
 |---|---|
-| `Processor.Open` | Applies the gate and the caps and reads the headers, or probes a video, without decoding a pixel. `OpenOptions.Type` names the type of a file whose bytes name none (TGA, ICO, CUR, G3, DNG). |
+| `Processor.Open` | Applies the gate and the caps and reads the headers, or probes a video, without decoding a pixel. `OpenOptions.Type` names the type of a file whose bytes name none (TGA, ICO, CUR, G3, DNG). `OpenOptions.Reuse` keeps a still's decode between `Encode` calls. |
 | `Source.Info` | What is known of the file: type, kind (still, animation, video), size, orientation, frame count and delays, and for a video the duration, rate, rotation, HDR, codec and audio. |
 | `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Run`) and region of a `Select`, one file per frame for each `Encoding`, or one animated WebP when `Animate` is set. |
 | `Source.Close`, `Processor.Close` | Remove a Source's scratch; closing the Processor closes its Sources. |

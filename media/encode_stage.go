@@ -15,7 +15,7 @@ type encodeFrame struct {
 	// "pam:/dir/f.pam" or "heic:/in/photo[0]".
 	input string
 	// prelude holds operators applied as soon as the frame is read, before
-	// orientation.
+	// the operators every frame gets.
 	prelude []string
 	// delayCS is the frame's delay in centiseconds in an animated output; -1
 	// keeps the delay the input carries. Other outputs ignore it.
@@ -187,6 +187,8 @@ type encodeCheck struct {
 	// size once the run passes its checks.
 	reportUpright bool
 	uprightOut    *[2]int
+	// keepOut, when not nil, receives the "keep|" line the run printed.
+	keepOut *string
 }
 
 // timeLimitMessage is what ImageMagick prints when a run exceeds its time
@@ -281,15 +283,7 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 // frameOps are the operators applied to a frame once it is read: orientation,
 // conversion to sRGB, flattening for JPEG and the resize.
 func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
-	var args []string
-	if src.orientation != "" && src.orientation != "Undefined" {
-		args = append(args, "-orient", src.orientation, "-auto-orient",
-			// -orient also sets the orientation the writers record, which
-			// a PNG would carry on pixels already turned upright.
-			"-orient", "TopLeft")
-	} else {
-		args = append(args, "-auto-orient")
-	}
+	args := orientOps(src.orientation)
 	if !src.crop.zero() {
 		// -crop counts from the virtual canvas, whose origin a page offset in
 		// the file moves, so the offset goes first. ImageMagick clips a crop
@@ -321,6 +315,20 @@ func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 		filter = filterLanczos
 	}
 	return append(args, "-filter", string(filter), "-resize", width+"x"+height+"!")
+}
+
+// orientOps turns a frame upright: by the orientation name when there is one,
+// else by the tag the frame carries.
+func orientOps(name string) []string {
+	if name == "" || name == "Undefined" {
+		return []string{"-auto-orient"}
+	}
+	return []string{
+		"-orient", name, "-auto-orient",
+		// -orient also sets the orientation the writers record, which a PNG
+		// would carry on pixels already turned upright.
+		"-orient", "TopLeft",
+	}
 }
 
 // uprightPrefix starts each line a crop makes the encode run print: the size
@@ -356,10 +364,14 @@ func (t fusedTarget) source(src encodeSource) encodeSource {
 // input is the decode reference. The result carries no resource limits;
 // Env.runMagick adds them.
 //
+// The first target's prelude, if any, is applied to the decoded image before
+// any target.
+//
 // A single target needs no clone.
 func fusedArgs(readOps []string, src encodeSource, targets []fusedTarget) []string {
 	args := slices.Clone(readOps)
 	args = append(args, targets[0].frame.input)
+	args = append(args, targets[0].frame.prelude...)
 	for _, t := range targets {
 		ops := append(frameOps(t.frame, t.source(src), t.enc), encodeTail(t.enc)...)
 		ops = append(ops, "-write", t.path, "-format", reportFormat(false))

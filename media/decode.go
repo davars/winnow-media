@@ -309,6 +309,9 @@ type EnvSource struct {
 	// -ping read decided it.
 	softRef   string
 	softScene int
+	// keep, when set, makes the next still encode also write the upright,
+	// full-size decode it reads (see keepPlan).
+	keep *keepPlan
 }
 
 // Open reads the headers of the file at path, applies the caps and selects
@@ -960,7 +963,7 @@ func (s *EnvSource) encodeStills(ctx context.Context, r region, encs []encoding,
 	var readOps []string
 	var sizes [][2]int
 	decoded := s.stored
-	if r.zero() {
+	if r.zero() && s.keep == nil {
 		var err error
 		if readOps, sizes, decoded, err = s.decodePlan(ctx, encs); err != nil {
 			return nil, err
@@ -991,11 +994,21 @@ func (s *EnvSource) encodeStills(ctx context.Context, r region, encs []encoding,
 			targets[i].width, targets[i].height = sizes[i][0], sizes[i][1]
 		}
 	}
+	if s.keep != nil {
+		if targets[0].frame.convertTo == "" {
+			s.keep.icc = ""
+		}
+		targets[0].frame.prelude = s.keep.prelude(s.orientation, true)
+		src.orientation = ""
+	}
 	var observed [2]int
 	src.reportUpright = s.unsettled
 	chk := encodeCheck{
 		frames: len(encs), outputs: paths, crop: src.crop, upright: src.upright,
 		reportUpright: s.unsettled, uprightOut: &observed,
+	}
+	if s.keep != nil {
+		chk.keepOut = &s.keep.line
 	}
 	for _, t := range targets {
 		chk.bounds = append(chk.bounds, boundOf(t.enc, t.source(src)))
@@ -1038,7 +1051,7 @@ func (s *EnvSource) settle(observed, decoded [2]int) {
 // otherwise.
 func (s *EnvSource) encodeWebPStill(ctx context.Context, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
 	decoded := s.stored
-	if r.zero() {
+	if r.zero() && s.keep == nil {
 		decoded = s.webpDecodeSize(encs)
 	}
 	frame, meta, cleanup, err := s.decodeWebP(ctx, decoded)
@@ -1066,13 +1079,26 @@ func (s *EnvSource) encodeWebPStill(ctx context.Context, r region, encs []encodi
 		if err != nil {
 			return nil, err
 		}
+		if i == 0 && s.keep != nil {
+			if f.assign == "" {
+				s.keep.icc = ""
+			}
+			f.prelude = s.keep.prelude(src.orientation, false)
+			src.orientation = ""
+		}
+		chk := encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}, crop: src.crop, upright: src.upright}
+		if i == 0 && s.keep != nil {
+			chk.keepOut = &s.keep.line
+		}
 		out, err := s.env.runEncode(ctx,
-			encodeArgs([]encodeFrame{f}, src, enc, encodeOutput{kind: outputStill, path: paths[i]}),
-			encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}, crop: src.crop, upright: src.upright})
+			encodeArgs([]encodeFrame{f}, src, enc, encodeOutput{kind: outputStill, path: paths[i]}), chk)
 		if err != nil {
 			return nil, err
 		}
 		res[i] = out[0]
+		if i == 0 && s.keep != nil && s.keep.icc != "" {
+			s.keep.err = copyProfile(f.assign, s.keep.icc)
+		}
 	}
 	return res, nil
 }

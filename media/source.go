@@ -39,6 +39,20 @@ type OpenOptions struct {
 	// animation whose header read reports none; 0 leaves the file's own. It
 	// is an error for a video.
 	Orientation int
+	// Reuse keeps a full-size decode of a still between Encode calls, in
+	// the Source's private scratch, up to half of Resources.Disk for each
+	// Source (the other half is room for the copy a later Encode reads). Only
+	// the images the latest Encode selected stay kept. A later Encode of a
+	// kept image reads the region it needs from the decode and writes the
+	// bytes an Encode from a full-size decode would, which are not those of
+	// an Encode without Reuse that decodes a JPEG or a still WebP reduced.
+	// The Source never decodes a Reuse still reduced, so its frame and pixel
+	// caps judge the full decode; an image over them is encoded as without
+	// Reuse, as is a type or image whose kept decode would not be exact (more
+	// than 16 bits a channel, floating-point samples, a colorspace a PAM
+	// does not carry) or that does not fit. Animations and videos ignore
+	// Reuse.
+	Reuse bool
 }
 
 // Info describes a Source. It is a snapshot: a later Encode can settle a size
@@ -119,6 +133,11 @@ type Source struct {
 	hdr    headerRead
 	req    openRequest
 	stills map[int]*EnvSource
+	// reuse is OpenOptions.Reuse; kept holds the decodes it keeps, by image.
+	reuse bool
+	kept  map[int]*keptDecode
+	// noKeep holds the images no later call could keep.
+	noKeep map[int]bool
 	// profiled are the images whose profile has been read in full.
 	profiled map[int]bool
 
@@ -170,6 +189,7 @@ func (p *Processor) openKinds(ctx context.Context, path string, opts OpenOptions
 		p: p, path: in.abs, link: in.path, dir: in.dir, release: in.release, id: in.id,
 		typ: in.typ, override: override, dec: in.decoder,
 	}
+	src.reuse = opts.Reuse
 	env := p.env(&m)
 	if in.decoder.tool == "ffmpeg" {
 		err = src.openVideo(ctx, env, opts)
@@ -220,6 +240,8 @@ func (s *Source) openImage(ctx context.Context, env Env, in admitted) error {
 func (s *Source) openStill() error {
 	s.kind = Still
 	s.stills = map[int]*EnvSource{}
+	s.kept = map[int]*keptDecode{}
+	s.noKeep = map[int]bool{}
 	s.profiled = map[int]bool{0: true}
 	info := Info{Type: s.typ, Kind: Still, Frames: len(s.hdr.scenes)}
 	for i, sc := range s.hdr.scenes {
@@ -322,7 +344,7 @@ func (s *Source) Close() error {
 	s.closed = true
 	s.release()
 	s.p.forget(s)
-	s.stills, s.frames = nil, nil
+	s.stills, s.frames, s.kept = nil, nil, nil
 	return nil
 }
 
@@ -463,6 +485,7 @@ func (s *Source) encodeStills(ctx context.Context, env Env, dir string, fr Frame
 			return nil, errors.New("images of a still cannot be written as one animation")
 		}
 	}
+	s.dropKeptExcept(idx)
 	srcs := make([]*EnvSource, len(idx))
 	for f, k := range idx {
 		if srcs[f], err = s.stillAt(ctx, env, k); err != nil {
@@ -479,7 +502,15 @@ func (s *Source) encodeStills(ctx context.Context, env Env, dir string, fr Frame
 		for t, enc := range encs {
 			paths[t] = filepath.Join(dir, name(t*n+f, enc.ext))
 		}
-		res, err := es.encodeStills(ctx, r, encs, paths)
+		var res []encodedFrame
+		var err error
+		used := false
+		if s.kept[idx[f]] != nil {
+			res, used, err = s.readKept(ctx, es, idx[f], r, encs, paths)
+		}
+		if !used && err == nil {
+			res, err = s.encodeFresh(ctx, es, idx[f], r, encs, paths)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("encoding still: %w", err)
 		}
@@ -491,6 +522,28 @@ func (s *Source) encodeStills(ctx context.Context, env Env, dir string, fr Frame
 		}
 	}
 	return images, nil
+}
+
+// encodeFresh decodes image k of the still, keeping the decode when the Source
+// reuses decodes. If the run that writes the kept files fails, which includes
+// a full-size decode that exceeds the caps, the encode is tried once without
+// them, and the image is then remembered as one that cannot be kept.
+func (s *Source) encodeFresh(ctx context.Context, es *EnvSource, k int, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
+	es.keep = s.planKeep(k, es)
+	res, err := es.encodeStills(ctx, r, encs, paths)
+	if es.keep == nil {
+		return res, err
+	}
+	if err == nil {
+		s.adoptKept(k, es)
+		return res, nil
+	}
+	removeKeepFiles(es.keep)
+	es.keep = nil
+	if res, err = es.encodeStills(ctx, r, encs, paths); err == nil {
+		s.noKeep[k] = true
+	}
+	return res, err
 }
 
 // animationSource returns the decode of the frames idx of the animation: the

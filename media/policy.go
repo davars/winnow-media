@@ -38,8 +38,9 @@ func (c coderRights) rights() string {
 	return "read"
 }
 
-// internalCoders are read by the operations whatever the types: the profile
-// and intermediate formats they pass between tools.
+// internalCoders are read and written by the operations whatever the types:
+// the profile and intermediate formats they pass between tools and keep in a
+// Source's scratch.
 var internalCoders = []string{"icc", "pam"}
 
 // policyCoders returns the coders a Processor of the given types reads and
@@ -59,7 +60,7 @@ func policyCoders(types []string) map[string]coderRights {
 		}
 	}
 	for _, n := range internalCoders {
-		add(n, true, false)
+		add(n, true, true)
 	}
 	for _, n := range append([]string{"info", "null"}, outputCoders...) {
 		add(n, false, true)

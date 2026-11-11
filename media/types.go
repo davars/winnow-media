@@ -27,6 +27,10 @@ type typeEntry struct {
 	// sniffed types are named by their leading bytes (sniff.go), so
 	// ImageMagick is never asked to detect them.
 	sniffed bool
+	// keptExact marks a type whose kept decode (see OpenOptions.Reuse) gives
+	// the bytes of a fresh decode. TestEveryTypeMarkedExactHasAFixture fails
+	// for a marked type without a fixture whose kept decode gives them.
+	keptExact bool
 }
 
 // typeTable is every type the library has a pinned decoder for and that has
@@ -38,14 +42,14 @@ type typeEntry struct {
 // ImageMagick reads through a delegate.
 var typeTable = map[string]typeEntry{
 	typeGIF:  {kind: kindAnimation, coders: []string{"GIF"}, sniffed: true},
-	typeWebP: {kind: kindStill | kindAnimation, coders: []string{"WEBP"}, sniffed: true},
-	typeHEIC: {kind: kindStill, coders: []string{"HEIC"}, sniffed: true},
-	typeHEIF: {kind: kindStill, coders: []string{"HEIC"}, sniffed: true},
-	typeAVIF: {kind: kindStill, coders: []string{"AVIF"}, sniffed: true},
+	typeWebP: {kind: kindStill | kindAnimation, coders: []string{"WEBP"}, sniffed: true, keptExact: true},
+	typeHEIC: {kind: kindStill, coders: []string{"HEIC"}, sniffed: true, keptExact: true},
+	typeHEIF: {kind: kindStill, coders: []string{"HEIC"}, sniffed: true, keptExact: true},
+	typeAVIF: {kind: kindStill, coders: []string{"AVIF"}, sniffed: true, keptExact: true},
 
-	"image/jpeg":                    {kind: kindStill, coders: []string{"JPEG"}},
-	"image/png":                     {kind: kindStill, coders: []string{"PNG"}},
-	"image/tiff":                    {kind: kindStill, coders: []string{"TIFF", "TIFF64"}},
+	"image/jpeg":                    {kind: kindStill, coders: []string{"JPEG"}, keptExact: true},
+	"image/png":                     {kind: kindStill, coders: []string{"PNG"}, keptExact: true},
+	"image/tiff":                    {kind: kindStill, coders: []string{"TIFF", "TIFF64"}, keptExact: true},
 	"image/bmp":                     {kind: kindStill, coders: []string{"BMP"}},
 	"image/x-tga":                   {kind: kindStill, coders: []string{"TGA"}},
 	"image/vnd.microsoft.icon":      {kind: kindStill, coders: []string{"ICO"}},
@@ -56,7 +60,7 @@ var typeTable = map[string]typeEntry{
 	"image/x-portable-arbitrarymap": {kind: kindStill, coders: []string{"PAM"}},
 	"image/g3fax":                   {kind: kindStill, coders: []string{"G3"}},
 	"image/vnd.adobe.photoshop":     {kind: kindStill, coders: []string{"PSD"}},
-	"image/jxl":                     {kind: kindStill, coders: []string{"JXL"}},
+	"image/jxl":                     {kind: kindStill, coders: []string{"JXL"}, keptExact: true},
 	"image/jp2":                     {kind: kindStill, coders: []string{"JP2"}},
 	"image/x-exr":                   {kind: kindStill, coders: []string{"EXR"}},
 	"image/x-xcf":                   {kind: kindStill, coders: []string{"XCF"}},

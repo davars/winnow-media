@@ -265,7 +265,11 @@ func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]e
 	if err == nil {
 		var report []byte
 		var uprights [][2]int
-		if report, uprights, err = splitUpright(res.Stdout); err == nil {
+		stdout := res.Stdout
+		if chk.keepOut != nil {
+			stdout, *chk.keepOut = splitKeep(stdout)
+		}
+		if report, uprights, err = splitUpright(stdout); err == nil {
 			if frames, err = parseEncoded(report, chk.signed); err == nil {
 				if err = chk.checkUpright(uprights, len(frames)); err == nil {
 					if err = chk.checkFrames(frames); err == nil && chk.uprightOut != nil && len(uprights) > 0 {

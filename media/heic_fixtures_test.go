@@ -20,6 +20,17 @@ var heicFixtures = map[string]func(t *testing.T, env Env, path string){
 	"adobe-256x96": func(t *testing.T, env Env, path string) { writeAdobeHEIC(t, env, "256x96", path) },
 	"adobe-64x64":  func(t *testing.T, env Env, path string) { writeAdobeHEIC(t, env, "64x64", path) },
 	"adobe-64x32":  func(t *testing.T, env Env, path string) { writeAdobeHEIC(t, env, "64x32", path) },
+	// A 10-bit gradient, whose depth 8-bit and 16-bit intermediates do not
+	// both hold exactly.
+	"tenbit-64x32": func(t *testing.T, env Env, path string) {
+		magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000", "-depth", "10", "-quality", "100", path)
+	},
+	// A gradient whose alpha runs from opaque to transparent.
+	"alpha-64x32": func(t *testing.T, env Env, path string) {
+		magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000",
+			"(", "-size", "64x32", "gradient:white-black", "-alpha", "copy", ")",
+			"-compose", "copy_opacity", "-composite", "-quality", "100", path)
+	},
 }
 
 // writeAdobeHEIC writes a gradient of the given size converted to Adobe RGB
