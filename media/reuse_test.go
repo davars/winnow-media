@@ -1103,3 +1103,27 @@ func TestReuseKeepsTheFilterOfAnOpaqueWebP(t *testing.T) {
 	want := encodeAll(t, openSourceOn(t, p, path, OpenOptions{Reuse: true}), Select{}, small)
 	sameBytes(t, "resized from the kept decode", encodeAll(t, src, Select{}, small), want)
 }
+
+// An Opaque encode flattens alpha onto white, so a kept decode gives the bytes
+// a fresh one does.
+func TestReuseOpaqueEncodeGivesTheFusedBytes(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	path := transparentCorner(t, "a.png")
+	for _, format := range []Format{PNG, WebP} {
+		for _, edge := range []int{1000, 24} {
+			t.Run(fmt.Sprintf("%s/%d", format, edge), func(t *testing.T) {
+				t.Parallel()
+				enc := Encoding{Format: format, MaxEdge: edge, Opaque: true}
+				plain := openSourceOn(t, p, path, OpenOptions{})
+				reuse := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+				whole := encodeAll(t, plain, Select{}, enc)
+				sameBytes(t, "first encode", encodeAll(t, reuse, Select{}, enc), whole)
+				if reuse.kept[0] == nil {
+					t.Fatal("not kept")
+				}
+				sameBytes(t, "from the kept decode", encodeAll(t, reuse, Select{}, enc), whole)
+			})
+		}
+	}
+}

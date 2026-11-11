@@ -922,3 +922,52 @@ func TestOutputsAreEightBit(t *testing.T) {
 		t.Errorf("a HEIC still gave a %s-bit PNG", got)
 	}
 }
+
+// transparentCorner writes a 48x32 PNG of opaque red whose top-left 8x8
+// corner is fully transparent.
+func transparentCorner(t *testing.T, name string) string {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, 48, 32))
+	for y := range 32 {
+		for x := range 48 {
+			if x >= 8 || y >= 8 {
+				img.SetNRGBA(x, y, color.NRGBA{255, 0, 0, 255})
+			}
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return writeFile(t, name, buf.Bytes())
+}
+
+func TestOpaqueEncodingHasNoAlphaAndWhiteWhereTransparent(t *testing.T) {
+	t.Parallel()
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	path := transparentCorner(t, "a.png")
+	probe := func(t *testing.T, file string) string {
+		return string(magick(t, env, file, "-format", "%[opaque] %[hex:p{0,0}] %[hex:p{40,20}]", "info:"))
+	}
+	for _, format := range []Format{PNG, WebP} {
+		t.Run(string(format), func(t *testing.T) {
+			t.Parallel()
+			src := openSourceOn(t, p, path, OpenOptions{})
+			for _, opaque := range []bool{false, true} {
+				dir := t.TempDir()
+				images, _, err := src.Encode(context.Background(), dir, Select{}, Encoding{Format: format, Opaque: opaque})
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := probe(t, filepath.Join(dir, images[0].Name))
+				if opaque && !strings.HasPrefix(got, "True FFFFFF FF0") {
+					t.Errorf("Opaque: %q, want an opaque image, a white corner and a red body", got)
+				}
+				if !opaque && !strings.HasPrefix(got, "False ") {
+					t.Errorf("not Opaque: %q, want an alpha channel", got)
+				}
+			}
+		})
+	}
+}

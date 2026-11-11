@@ -27,10 +27,11 @@ const (
 // (a 4000x3001 image at MaxEdge 2048 is 2048x1536), and is never upscaled; it
 // is upright, converted to sRGB when the source carries an ICC profile (an
 // image without one is left as it is), has transparency flattened onto white
-// for JPEG, carries no metadata (the converted profile is not embedded) and is
-// written at 8 bits per channel whatever the depth of the source. The sRGB
-// profile is embedded in the library and exists as a temporary dot-file in
-// the output directory only while a tool runs. Zero fields take defaults.
+// for JPEG or when Opaque is set, carries no metadata (the converted profile
+// is not embedded) and is written at 8 bits per channel whatever the depth of
+// the source. The sRGB profile is embedded in the library and exists as a
+// temporary dot-file in the output directory only while a tool runs. Zero
+// fields take defaults.
 //
 // The size is the largest within both bounds with the source's aspect ratio,
 // and is the size of the picture actually produced whatever orientation the
@@ -53,6 +54,9 @@ type Encoding struct {
 	// one file per frame. The Format must be WebP when more than one frame is
 	// selected. Several images of a still cannot be animated.
 	Animate bool
+	// Opaque flattens alpha onto white, so the output has no alpha channel.
+	// A JPEG is always opaque.
+	Opaque bool
 }
 
 // Image describes one output file a call wrote.
@@ -98,7 +102,7 @@ type encoding struct {
 	format                    Format
 	ext                       string
 	quality, maxEdge, maxArea int
-	animate                   bool
+	animate, opaque           bool
 }
 
 // region is a rectangle of a frame in pixels of the frame as shown: after a
@@ -145,7 +149,7 @@ func (r region) subject(w, h int) (int, int) {
 
 func (e Encoding) resolve() (encoding, error) {
 	out := encoding{
-		format: e.Format, quality: e.Quality, maxEdge: e.MaxEdge, maxArea: e.MaxArea, animate: e.Animate,
+		format: e.Format, quality: e.Quality, maxEdge: e.MaxEdge, maxArea: e.MaxArea, animate: e.Animate, opaque: e.Opaque,
 	}
 	if out.format == "" {
 		out.format = JPEG

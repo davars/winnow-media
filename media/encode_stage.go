@@ -239,14 +239,14 @@ func (c encodeCheck) removeOutputs() {
 // encodeArgs returns the arguments of the magick run that is the one encode
 // stage of every image output. Each frame is read inside its own parentheses
 // when there are several, oriented, converted to sRGB if it carries a
-// profile, flattened onto white for JPEG output and resized, so ImageMagick
-// never holds more than one frame at full size. The output size is fitSize of
-// the frame as ImageMagick has oriented it, computed by ImageMagick (see
-// fitExpr) so that it follows the rotation actually applied, whatever the
+// profile, flattened onto white for JPEG or opaque output and resized, so
+// ImageMagick never holds more than one frame at full size. The output size is
+// fitSize of the frame as ImageMagick has oriented it, computed by ImageMagick
+// (see fitExpr) so that it follows the rotation actually applied, whatever the
 // header said, and asked for exactly. Metadata is stripped last, after the
-// conversion that needed it, and every output is written at 8 bits per channel
-// whatever the depth of the source. The run prints one encodedFrame line per frame,
-// which parseEncoded reads.
+// conversion that needed it, and every output is written at 8 bits per
+// channel whatever the depth of the source. The run prints one encodedFrame
+// line per frame, which parseEncoded reads.
 //
 // The result carries no resource limits; Env.runMagick adds them.
 // outputFiles requires out.path to be a magick filename pattern containing
@@ -281,7 +281,7 @@ func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encode
 }
 
 // frameOps are the operators applied to a frame once it is read: orientation,
-// conversion to sRGB, flattening for JPEG and the resize.
+// conversion to sRGB, flattening for JPEG or opaque output and the resize.
 func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 	args := orientOps(src.orientation)
 	if !src.crop.zero() {
@@ -300,7 +300,7 @@ func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 		}
 		args = append(args, "-profile", f.convertTo)
 	}
-	if enc.format == JPEG {
+	if enc.format == JPEG || enc.opaque {
 		args = append(args, "-background", "white", "-alpha", "remove", "-alpha", "off")
 	}
 	if f.fits {

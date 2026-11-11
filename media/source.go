@@ -70,6 +70,10 @@ type Info struct {
 	// Orientation is the EXIF orientation 1 to 8 the header read reported or
 	// OpenOptions gave; 0 when neither did.
 	Orientation int
+	// OrientationGiven is set when Orientation is the one OpenOptions gave,
+	// the file's header having reported none; it is false when the file's own
+	// orientation applies or neither exists.
+	OrientationGiven bool
 	// Frames is the number of frames of an animation, the number of images
 	// of a still, or the frame count a video's container declares (0 when it
 	// declares none).
@@ -100,7 +104,7 @@ type Info struct {
 type ImageInfo struct {
 	Width, Height int
 	// Auxiliary is set for an image the decoder reports as a reduced-resolution
-	// preview or mask of another, not a page of its own.
+	// preview or a transparency mask of another, not a page of its own.
 	Auxiliary bool
 }
 
@@ -261,15 +265,23 @@ func (s *Source) openStill() error {
 		}
 		s.stills[i] = es
 		info.Images = append(info.Images, ImageInfo{
-			Width: es.shownSize()[0], Height: es.shownSize()[1], Auxiliary: sc.subfile == "REDUCEDIMAGE",
+			Width: es.shownSize()[0], Height: es.shownSize()[1], Auxiliary: auxiliarySubfile(sc.subfile),
 		})
 		if i == 0 {
 			info.Width, info.Height, info.Settled = es.shownSize()[0], es.shownSize()[1], !es.unsettled
 			info.Orientation, _ = orientationNumber(cmp.Or(ov, sc.orientation))
+			info.OrientationGiven = ov != ""
 		}
 	}
 	s.info = info
 	return nil
+}
+
+// auxiliarySubfile reports whether a TIFF subfile type, as ImageMagick prints
+// %[tiff:subfiletype], marks a reduced-resolution preview or a transparency
+// mask.
+func auxiliarySubfile(subfile string) bool {
+	return subfile == "REDUCEDIMAGE" || subfile == "MASK"
 }
 
 // shownSize is the size of the image as the header read gives it: upright when
@@ -309,9 +321,10 @@ func (s *Source) openAnimation(env Env) error {
 		total += int64(delays[i])
 	}
 	orientation, _ := orientationNumber(s.orientation)
+	given := s.applied(first.orientation) != ""
 	s.info = Info{
 		Type: s.typ, Kind: Animation, Width: s.upright[0], Height: s.upright[1], Settled: true,
-		Orientation: orientation, Frames: count, DelaysMS: delays, DurationMS: total,
+		Orientation: orientation, OrientationGiven: given, Frames: count, DelaysMS: delays, DurationMS: total,
 	}
 	return nil
 }

@@ -70,22 +70,34 @@ func tiffPages(flags ...uint32) []byte {
 	}
 	const entries = 10
 	ifdSize := 2 + 12*entries + 4
+	// A transparency mask (NewSubfileType bit 2) is 1-bit with Photometric 4,
+	// as the TIFF specification requires; any other page is 8-bit grey.
+	pixelBytes := func(flag uint32) int {
+		if flag&4 != 0 {
+			return w / 8 * h
+		}
+		return w * h
+	}
 	out := []byte("II*\x00\x08\x00\x00\x00")
+	at := 8
 	for i, flag := range flags {
-		at := 8 + i*(ifdSize+w*h)
+		bits, photometric, size := uint32(8), uint32(1), pixelBytes(flag)
+		if flag&4 != 0 {
+			bits, photometric = 1, 4
+		}
 		pixelsAt := uint32(at + ifdSize)
 		out = binary.LittleEndian.AppendUint16(out, entries)
 		for _, e := range []entry{
 			{254, 4, flag},
 			{256, 3, w},
 			{257, 3, h},
-			{258, 3, 8},
+			{258, 3, bits},
 			{259, 3, 1},
-			{262, 3, 1},
+			{262, 3, photometric},
 			{273, 4, pixelsAt},
 			{277, 3, 1},
 			{278, 3, h},
-			{279, 4, w * h},
+			{279, 4, uint32(size)},
 		} {
 			out = binary.LittleEndian.AppendUint16(out, e.tag)
 			out = binary.LittleEndian.AppendUint16(out, e.typ)
@@ -94,12 +106,13 @@ func tiffPages(flags ...uint32) []byte {
 		}
 		next := uint32(0)
 		if i < len(flags)-1 {
-			next = uint32(at + ifdSize + w*h)
+			next = uint32(at + ifdSize + size)
 		}
 		out = binary.LittleEndian.AppendUint32(out, next)
-		for j := range w * h {
+		for j := range size {
 			out = append(out, byte(j+i*40))
 		}
+		at += ifdSize + size
 	}
 	return out
 }
@@ -182,6 +195,41 @@ func TestInfoSettledPerType(t *testing.T) {
 			t.Error("an orientation was accepted for a video")
 		}
 	})
+}
+
+func TestInfoOrientationGivenSaysWhereTheOrientationCame(t *testing.T) {
+	t.Parallel()
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain.png")
+	magick(t, env, "-size", "32x24", "gradient:red-blue", plain)
+	oriented := filepath.Join(dir, "oriented.tif")
+	magick(t, env, "-size", "32x24", "gradient:red-blue", "-orient", "RightTop", oriented)
+	cases := []struct {
+		name        string
+		path        string
+		opts        OpenOptions
+		orientation int
+		given       bool
+	}{
+		{"still without one, option given", plain, OpenOptions{Orientation: 3}, 3, true},
+		{"still without one, no option", plain, OpenOptions{}, 0, false},
+		{"still with one, option given", oriented, OpenOptions{Orientation: 3}, 6, false},
+		{"still with one, no option", oriented, OpenOptions{}, 6, false},
+		{"animation, option given", writeGIF(t, solid, 2), OpenOptions{Orientation: 3}, 3, true},
+		{"animation, no option", writeGIF(t, solid, 2), OpenOptions{}, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			info := openSourceOn(t, p, c.path, c.opts).Info()
+			if info.Orientation != c.orientation || info.OrientationGiven != c.given {
+				t.Errorf("Orientation = %d, OrientationGiven = %v, want %d, %v",
+					info.Orientation, info.OrientationGiven, c.orientation, c.given)
+			}
+		})
+	}
 }
 
 func TestInfoIsASnapshot(t *testing.T) {
@@ -794,6 +842,21 @@ func TestInfoImagesMarkAuxiliaryImages(t *testing.T) {
 	}
 	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: All()}, Encoding{Format: WebP, Animate: true}); err == nil {
 		t.Error("the images of a still were written as one animation")
+	}
+}
+
+// A TIFF transparency mask is marked auxiliary as a reduced-resolution
+// image is: ImageMagick prints MASK for %[tiff:subfiletype] of a directory
+// whose NewSubfileType has the mask bit. ImageMagick writes no such
+// directory, so the file is built by tiffPages.
+func TestInfoImagesMarkATransparencyMaskAuxiliary(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	path := writeFile(t, "mask", tiffPages(0, 4))
+	info := openSourceOn(t, p, path, OpenOptions{}).Info()
+	want := []ImageInfo{{32, 24, false}, {32, 24, true}}
+	if !slices.Equal(info.Images, want) {
+		t.Errorf("Images = %v, want %v", info.Images, want)
 	}
 }
 
