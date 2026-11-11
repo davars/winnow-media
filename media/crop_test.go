@@ -43,13 +43,21 @@ func TestRegionShape(t *testing.T) {
 	}
 }
 
-// heicSource opens the rotated HEIC fixture, whose upright frame is 480x640
-// and whose stored one is 640x480, with a counting Env.
-func heicSource(t *testing.T) (*Source, func() [][]string) {
-	t.Helper()
-	env, calls := sourceEnv(t)
-	return openSource(t, env, heicFixtureFile(t, "gradient-righttop"), Hints{Still: true}), calls
+// uprightSources are 480x640 pictures held as a tag over a 640x480 frame
+// (the JPEG) or as one the decoder turns itself (the HEIC), opened with a
+// counting Env.
+var uprightSources = map[string]func(t *testing.T) (*Source, func() [][]string){
+	"heic": func(t *testing.T) (*Source, func() [][]string) {
+		env, calls := sourceEnv(t)
+		return openSource(t, env, heicFixtureFile(t, "gradient-righttop"), Hints{Still: true}), calls
+	},
+	"jpeg": func(t *testing.T) (*Source, func() [][]string) {
+		env, calls := sourceEnv(t)
+		return openSource(t, env, quadrantJPEG(t, env), Hints{Still: true}), calls
+	},
 }
+
+func heicSource(t *testing.T) (*Source, func() [][]string) { return uprightSources["heic"](t) }
 
 func regionEncoding(r region) encoding {
 	return encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000, region: r}
@@ -71,24 +79,26 @@ func TestRegionEdgesAreThoseOfTheUprightFrame(t *testing.T) {
 		{"a width the stored frame has", region{0, 0, 500, 100}, false},
 		{"the whole upright frame", region{0, 0, w, h}, true},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			src, calls := heicSource(t)
-			before := len(calls())
-			art, err := src.encode(context.Background(), 0, []encoding{regionEncoding(c.r)})
-			if c.ok {
-				if err != nil {
-					t.Fatal(err)
+		for kind, open := range uprightSources {
+			t.Run(kind+" "+c.name, func(t *testing.T) {
+				src, calls := open(t)
+				before := len(calls())
+				art, err := src.encode(context.Background(), 0, []encoding{regionEncoding(c.r)})
+				if c.ok {
+					if err != nil {
+						t.Fatal(err)
+					}
+					art[0].Cleanup()
+					return
 				}
-				art[0].Cleanup()
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), "outside") {
-				t.Fatalf("err = %v, want a refusal that the region is outside the frame", err)
-			}
-			if n := len(calls()); n != before {
-				t.Errorf("the refused call ran %d tools, want none", n-before)
-			}
-		})
+				if err == nil || !strings.Contains(err.Error(), "outside") {
+					t.Fatalf("err = %v, want a refusal that the region is outside the frame", err)
+				}
+				if n := len(calls()); n != before {
+					t.Errorf("the refused call ran %d tools, want none", n-before)
+				}
+			})
+		}
 	}
 }
 

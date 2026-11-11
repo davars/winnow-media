@@ -106,6 +106,35 @@ func TestVideoRunCropsBeforeScalingAndToneMapping(t *testing.T) {
 	}
 }
 
+// With several targets the samples are decoded for the one whose region
+// output is largest, which is not always the one whose whole-frame output is.
+func TestVideoRegionDecodeCoversTheLargestTarget(t *testing.T) {
+	forceSeek(t)
+	stub := newVideoStub()
+	stub.probe = strings.Replace(stub.probe, `"width":64,"height":48`, `"width":160,"height":120`, 1)
+	env := stub.env()
+	env.Scratch, env.Stage = testScratch, stagerIn(t.TempDir())
+	src, err := env.open(context.Background(), openRequest{
+		path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, scratch: t.TempDir(), video: &videoRequest{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	r := region{10, 10, 100, 20}
+	// On the whole 160x120 frame the first fits to 28x21, the second to
+	// 18x13; on the region, to 30x6 and 35x7.
+	a := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 30, maxArea: 600, region: r}
+	b := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 40, maxArea: 256, region: r}
+	_, _ = src.encode(context.Background(), 0, []encoding{a, b})
+	if len(stub.runs) == 0 {
+		t.Fatal("no ffmpeg run")
+	}
+	if got := vfScale(stub.runs[0]); got != "70x14" {
+		t.Errorf("ffmpeg scale = %q, want 70x14, twice the larger 35x7 output", got)
+	}
+}
+
 // ImageMagick is not asked to crop a video's samples: they are already cut.
 func TestVideoRegionIsNotCroppedAgainByTheEncode(t *testing.T) {
 	plan := newVideoPlan(videoInfo{width: 160, height: 120}, encoding{maxEdge: 64, maxArea: 4096, region: region{1, 1, 50, 50}})
