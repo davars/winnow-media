@@ -98,7 +98,12 @@ type helperResult struct {
 	// Signal is the signal that killed the tool, or 0.
 	Signal int
 	// Code is the tool's exit code when Signal is 0.
-	Code  int
+	Code int
+	// Usage is what the tool and its descendants consumed, measured by the
+	// helper: the helper's own rusage cannot be used, because a child
+	// started with CLONE_VM starts with the parent program's peak resident
+	// set.
+	Usage *Usage       `json:",omitempty"`
 	Probe *probeReport `json:",omitempty"`
 }
 
@@ -158,7 +163,7 @@ func probeSandbox(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var stderr headTailBuffer
-	res, _, err := runHelper(ctx, helperConfig{Probe: true, Fault: probeFault}, io.Discard, &stderr)
+	res, err := runHelper(ctx, helperConfig{Probe: true, Fault: probeFault}, io.Discard, &stderr)
 	if err != nil {
 		return fmt.Errorf("sandbox probe: %w (if this program never called media.Init, call it first thing in main): %s",
 			err, bytes.TrimSpace(stderr.bytes()))
@@ -174,24 +179,23 @@ func probeSandbox(ctx context.Context) error {
 
 // runHelper starts this executable as the sandbox helper with cfg and waits
 // for it. The helper's stdout and stderr go to the given writers. It returns
-// the helper's report and the helper's process state, whose rusage covers
-// the tool it waited for; the error is non-nil when the helper did not
-// deliver a report. Cancelling ctx closes the helper's lifeline, on which it
-// kills the tool and every descendant.
-func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) (helperResult, *os.ProcessState, error) {
+// the helper's report, whose Usage covers the tool; the error is non-nil
+// when the helper did not deliver a report. Cancelling ctx closes the
+// helper's lifeline, on which it kills the tool and every descendant.
+func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) (helperResult, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return helperResult{}, nil, err
+		return helperResult{}, err
 	}
 	statusR, statusW, err := os.Pipe()
 	if err != nil {
-		return helperResult{}, nil, err
+		return helperResult{}, err
 	}
 	defer func() { _ = statusR.Close() }()
 	lifeR, lifeW, err := os.Pipe()
 	if err != nil {
 		_ = statusW.Close()
-		return helperResult{}, nil, err
+		return helperResult{}, err
 	}
 	defer func() { _ = lifeW.Close() }()
 
@@ -206,7 +210,7 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 	_ = statusW.Close()
 	_ = lifeR.Close()
 	if err != nil {
-		return helperResult{}, nil, err
+		return helperResult{}, err
 	}
 	// A write error means the helper is already gone; Wait reports why.
 	_ = json.NewEncoder(lifeW).Encode(cfg)
@@ -217,11 +221,11 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 	var res helperResult
 	if decErr := json.NewDecoder(statusR).Decode(&res); decErr != nil {
 		if waitErr != nil {
-			return res, cmd.ProcessState, waitErr
+			return res, waitErr
 		}
-		return res, cmd.ProcessState, fmt.Errorf("the helper reported nothing: %w", decErr)
+		return res, fmt.Errorf("the helper reported nothing: %w", decErr)
 	}
-	return res, cmd.ProcessState, nil
+	return res, nil
 }
 
 // runTool runs one tool through the sandbox helper.
@@ -237,9 +241,9 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	defer func() { _ = os.RemoveAll(tmp) }()
 	var stdout bytes.Buffer
 	var stderr headTailBuffer
-	res, state, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
+	res, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
 	tail := bytes.TrimSpace(stderr.bytes())
-	return Result{Stdout: stdout.Bytes(), Stderr: tail, Usage: UsageOf(state)}, helperError(ctx, name, res, err, tail)
+	return Result{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, helperError(ctx, name, res, err, tail)
 }
 
 // helperError turns the outcome of one helper run into an error, or nil.
@@ -291,8 +295,8 @@ func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFra
 	defer cancel()
 	lines := &frameLines{dir: req.dir, onFrame: onFrame}
 	var stderr headTailBuffer
-	res, state, err := runHelper(ctx, cfg, stopOnError{lines, cancel}, &stderr)
-	usage := UsageOf(state)
+	res, err := runHelper(ctx, cfg, stopOnError{lines, cancel}, &stderr)
+	usage := res.Usage
 	if lines.err != nil {
 		return usage, lines.err
 	}
@@ -397,9 +401,16 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	} else {
 		res.Code = cmd.ProcessState.ExitCode()
 	}
-	if err := clearDescendants(); err != nil && res.Err == "" {
+	usage := UsageOf(cmd.ProcessState)
+	orphans, err := clearDescendants()
+	if err != nil && res.Err == "" {
 		res.Err = err.Error()
 	}
+	if usage != nil {
+		usage.CPU += orphans.CPU
+		usage.MaxRSS = max(usage.MaxRSS, orphans.MaxRSS)
+	}
+	res.Usage = usage
 	return res
 }
 
@@ -624,29 +635,35 @@ func killDescendants() {
 
 // clearDescendants kills and reaps every process below the helper until none
 // is left. Because the helper is a subreaper, orphans of the tool are among
-// them. Killing a process can orphan its children, so this repeats.
-func clearDescendants() error {
+// them. Killing a process can orphan its children, so this repeats. It
+// returns the usage of the orphans it reaped, which the tool's own rusage
+// does not cover.
+func clearDescendants() (Usage, error) {
+	var total Usage
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		pids, err := descendants()
 		if err != nil {
-			return fmt.Errorf("listing descendants: %w", err)
+			return total, fmt.Errorf("listing descendants: %w", err)
 		}
 		if len(pids) == 0 {
-			return nil
+			return total, nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%d descendant processes survived SIGKILL", len(pids))
+			return total, fmt.Errorf("%d descendant processes survived SIGKILL", len(pids))
 		}
 		for _, pid := range pids {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 		for {
 			var ws syscall.WaitStatus
-			pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+			var ru syscall.Rusage
+			pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, &ru)
 			if pid <= 0 || (err != nil && err != syscall.EINTR) {
 				break
 			}
+			total.CPU += time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+			total.MaxRSS = max(total.MaxRSS, maxRSSBytes(&ru))
 		}
 		time.Sleep(2 * time.Millisecond)
 	}

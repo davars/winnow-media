@@ -320,9 +320,11 @@ func TestSandboxedRunReportsTheToolsUsage(t *testing.T) {
 		t.Fatal("no usage")
 	}
 	// The tool's own resident set and CPU, not the helper's, which is a
-	// small process that mostly waits.
-	if res.Usage.MaxRSS < mib<<20 || res.Usage.MaxRSS > (mib+100)<<20 {
-		t.Errorf("MaxRSS = %d MiB, want %d to %d", res.Usage.MaxRSS>>20, mib, mib+100)
+	// small process that mostly waits. The upper bound on the resident set is
+	// the direct run below, because the race detector's shadow memory
+	// multiplies a tool built with it.
+	if res.Usage.MaxRSS < mib<<20 {
+		t.Errorf("MaxRSS = %d MiB, want at least %d", res.Usage.MaxRSS>>20, mib)
 	}
 	if res.Usage.CPU < busy*time.Millisecond || res.Usage.CPU > (busy+600)*time.Millisecond {
 		t.Errorf("CPU = %v, want %dms to %dms", res.Usage.CPU, busy, busy+600)
@@ -336,6 +338,29 @@ func TestSandboxedRunReportsTheToolsUsage(t *testing.T) {
 	d := UsageOf(direct.ProcessState)
 	if diff := res.Usage.MaxRSS - d.MaxRSS; diff < -(20<<20) || diff > 20<<20 {
 		t.Errorf("MaxRSS through the helper %d MiB, directly %d MiB", res.Usage.MaxRSS>>20, d.MaxRSS>>20)
+	}
+}
+
+func TestSandboxedUsageExcludesTheCallingProgramsPeak(t *testing.T) {
+	p := fakeProcessor(t)
+	const held, toolMiB = 600, 2
+	buf := make([]byte, held<<20)
+	for i := 0; i < len(buf); i += 4096 {
+		buf[i] = 1
+	}
+	res, err := runFake(t, p, "alloc", strconv.Itoa(toolMiB), "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if buf[len(buf)-4096] != 1 {
+		t.Fatal("buffer lost")
+	}
+	if res.Usage == nil {
+		t.Fatal("no usage")
+	}
+	t.Logf("MaxRSS %d MiB with %d MiB held by the caller", res.Usage.MaxRSS>>20, held)
+	if res.Usage.MaxRSS > 100<<20 {
+		t.Errorf("MaxRSS = %d MiB for a %d MiB tool run by a program holding %d MiB", res.Usage.MaxRSS>>20, toolMiB, held)
 	}
 }
 
