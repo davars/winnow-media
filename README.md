@@ -25,6 +25,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/davars/winnow-media/media"
 )
@@ -39,9 +40,12 @@ func main() {
 	}
 	defer p.Close()
 
-	// dir must exist and be empty.
+	dir, err := os.MkdirTemp("", "frames") // must exist and be empty
+	if err != nil {
+		log.Fatal(err)
+	}
 	images, usage, err := p.VideoFrames(ctx, "clip.mp4",
-		media.Encoding{Format: media.WebP, MaxEdge: 1024}, 8, "out")
+		media.Encoding{Format: media.WebP, MaxEdge: 1024}, 8, dir)
 	if err != nil {
 		log.Fatal(err) // test with errors.Is for ErrUnsupportedType, ErrTooLarge
 	}
@@ -58,15 +62,15 @@ The methods of a `Processor` take one untrusted input file and write images
 into an empty directory `dir`. Each returns a `Usage` (CPU time and peak
 resident set size over every tool run of the call, also on failure). Each
 output is sized and encoded by an `Encoding` (format JPEG, WebP or PNG,
-quality, longest side, pixel area), is upright and sRGB, and carries no
-metadata.
+quality, longest side, pixel area), is upright, is converted to sRGB when
+the source carries a profile, and carries no metadata.
 
 | Operation | Accepts | Output | Purpose |
 |---|---|---|---|
 | `Still` | HEIC, HEIF | one `Image`, `still.<ext>` | The first image of the file. |
 | `AnimationFrames` | GIF, animated WebP | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Evenly spaced composited frames. |
 | `AnimationFramesAt` | GIF, animated WebP | 1 to 64 `frame-NNN.<ext>` | The frames with the given indices. |
-| `VideoFrames` | MP4, QuickTime, WebM, Matroska | up to `maxFrames` `frame-NNN.<ext>` | Samples at the centres of equal intervals of the duration; HDR is tone-mapped to SDR. |
+| `VideoFrames` | MP4, QuickTime, WebM, Matroska | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Samples at the centres of equal intervals of the duration; HDR is tone-mapped to SDR. |
 | `VideoFramesAt` | as `VideoFrames` | 1 to 64 `frame-NNN.<ext>` | The first frame at or after each given time. |
 | `VideoFrameRun` | as `VideoFrames` | 1 to 64 `frame-NNN.<ext>` | Consecutive frames from a start time, in one ffmpeg run. |
 | `ProbeVideo` | as `VideoFrames` | `VideoInfo` | Duration, rate, upright size, rotation, HDR, codec, audio and frame count, from one `ffprobe` run. |
@@ -82,14 +86,18 @@ themselves: an `Env{Run, Stage, Scratch}` supplies the `Runner`, so the caller
 decides how tools are resolved, limited and cancelled. `Env.Open` reads a
 file's headers, applies the caps and selects its frames; `Source.Encode` writes
 one WebP, PNG or JPEG per `Encoding` from that single decode, and
-`Source.EncodeFrames` writes one file per frame. `Env.EncodeRung`, `Ladder`,
-`Env.ProbeFrames`, `Env.IdentifyArtifact`, `Env.RunMagickWithCoderFallback`,
-`LimitArgs` and `DeleteExpr` serve fallback ladders and callers that build
-their own magick runs.
+`Source.EncodeFrames` writes one file per frame. `Env.Open` applies the caps
+only: the gate, sandbox and policy below belong to the `Processor`.
+
+- Decode once: `Open`, `Encode`, `EncodeFrames`.
+- Fallback ladder: `Ladder`, `EncodeRung`, `ProbeFrames`, `IdentifyArtifact`.
+- Fragments for callers that build their own magick runs: `LimitArgs`,
+  `DeleteExpr`, `RunMagickWithCoderFallback`.
 
 ## Guarantees
 
-Stated in full in the [package documentation](media/env.go)
+For `Processor` operations, stated in full in the
+[package documentation](media/env.go)
 (`go doc github.com/davars/winnow-media/media`):
 
 - **Gate.** The input must be a regular file of at most 25 MiB. Its type comes
