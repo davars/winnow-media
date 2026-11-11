@@ -267,8 +267,10 @@ func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
 				t.Errorf("output is %dx%d, want fitSize of the region, %dx%d", img.Width, img.Height, c.w, c.h)
 			}
 			ref := filepath.Join(t.TempDir(), "ref.png")
-			args := []string{"heic:" + path + "[0]", "-auto-orient",
-				"-crop", sizeAt(c.r), "+repage"}
+			args := []string{
+				"heic:" + path + "[0]", "-auto-orient",
+				"-crop", sizeAt(c.r), "+repage",
+			}
 			if c.resize != "" {
 				args = append(args, "-filter", "Lanczos", "-resize", c.resize)
 			}
