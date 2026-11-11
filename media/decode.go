@@ -614,8 +614,8 @@ func (s *Source) sourceOf(r region, enc encoding) encodeSource {
 
 // libraryTurnsPicture are the ImageMagick coders whose decoder applies the
 // file's orientation itself, so the header read already reports the upright
-// size.
-var libraryTurnsPicture = map[string]bool{"HEIC": true, "AVIF": true}
+// size. Membership is by test: TestRegionEdgesAreThoseOfTheUprightFrame proves HEIC.
+var libraryTurnsPicture = map[string]bool{"HEIC": true}
 
 // exactSize is the size of an output of enc that shows the region r.
 func exactSize(r region, enc encoding) (w, h int) {
