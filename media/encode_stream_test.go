@@ -237,9 +237,9 @@ func TestEncodeRungCompositesAOneFrameGIF(t *testing.T) {
 	}
 }
 
-// A still WebP carrying an ICC profile encodes as a one-frame animation,
-// which is how winnow passes every WebP, with the profile ProbeFrames reports
-// from its chunk list.
+// A still WebP carrying an ICC profile, passed to EncodeRung as an
+// animation, encodes as one frame with the profile ProbeFrames reports from
+// its chunk list.
 func TestEncodeRungEncodesAProfiledStillWebPAsAnAnimation(t *testing.T) {
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
