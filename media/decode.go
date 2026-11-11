@@ -948,9 +948,6 @@ func (s *Source) encodeWebPStill(ctx context.Context, r region, encs []encoding,
 	}
 	s.upright[0], s.upright[1] = uprightSize(s.stored[0], s.stored[1], orientation)
 	s.unsettled = false
-	if err := r.check(s.upright[0], s.upright[1]); err != nil {
-		return nil, err
-	}
 	var sizes [][2]int
 	if decoded != s.stored {
 		sizes = s.outputSizes(encs)

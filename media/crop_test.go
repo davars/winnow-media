@@ -116,11 +116,16 @@ func TestRegionIsRefusedWithoutRunningATool(t *testing.T) {
 }
 
 func TestStillImageRefusesARegionOutsideTheFrame(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env, calls := sourceEnv(t)
 	dir := t.TempDir()
 	_, err := env.stillRegion(context.Background(), region{400, 0, 100, 100}, decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), pngEncoding(), dir)
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("err = %v, want a refusal that the region is outside the 480x640 frame", err)
+	}
+	for _, call := range calls() {
+		if slices.Contains(call, "-crop") {
+			t.Errorf("the refused call ran %q", call)
+		}
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("the refused call left %d files", len(entries))
