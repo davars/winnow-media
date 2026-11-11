@@ -32,7 +32,10 @@ import (
 
 func main() {
 	ctx := context.Background()
-	p, err := media.NewProcessor(ctx, media.Config{})
+	p, err := media.NewProcessor(ctx, media.Config{
+		Types: []string{"video/mp4", "image/jpeg"}, // nil: every type of media.Types()
+		Caps:  media.Caps{MaxInputBytes: 64 << 20, MaxFramePixels: 100_000_000},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,14 +68,14 @@ the source carries a profile, and carries no metadata.
 
 | Operation | Accepts | Output | Purpose |
 |---|---|---|---|
-| `Still` | HEIC, HEIF | one `Image`, `still.<ext>` | The first image of the file. |
-| `AnimationFrames` | GIF, animated WebP | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Evenly spaced composited frames. |
-| `AnimationFramesAt` | GIF, animated WebP | 1 to 64 `frame-NNN.<ext>` | The frames with the given indices. |
+| `Still` | any type of `Types()` that content identifies, other than GIF, animated WebP and video | one `Image`, `still.<ext>` | The first image of the file. |
+| `AnimationFrames` | GIF, WebP | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Evenly spaced composited frames. |
+| `AnimationFramesAt` | GIF, WebP | 1 to 64 `frame-NNN.<ext>` | The frames with the given indices. |
 | `VideoFrames` | MP4, QuickTime, WebM, Matroska | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Samples at the centres of equal intervals of the duration; HDR is tone-mapped to SDR. |
 | `VideoFramesAt` | as `VideoFrames` | 1 to 64 `frame-NNN.<ext>` | The first frame at or after each given time. |
 | `VideoFrameRun` | as `VideoFrames` | 1 to 64 `frame-NNN.<ext>` | Consecutive frames from a start time, in one ffmpeg run. |
 | `ProbeVideo` | as `VideoFrames` | `VideoInfo` | Duration, rate, upright size, rotation, HDR, codec, audio and frame count, from one `ffprobe` run. |
-| `ProbeAnimation` | GIF, animated WebP | `AnimationInfo` | Frame count, canvas size and display delays, from the headers. |
+| `ProbeAnimation` | GIF, WebP | `AnimationInfo` | Frame count, canvas size and display delays, from the headers. |
 
 `Image` records its file `Name`, size, source frame index (`Frame`) and
 position in the source (`TimeMS`). Every operation runs the same gate and caps
@@ -98,11 +101,14 @@ For `Processor` operations, stated in full in the
 [package documentation](media/env.go)
 (`go doc github.com/davars/winnow-media/media`):
 
-- **Gate.** The input must be a regular file of at most 25 MiB. Its type comes
-  from its leading bytes, never its name, and the decoder is pinned to it.
-- **Caps.** Frame size, pixel count, frame count, decoded pixels, stream
-  count and duration are bounded; a refusal wraps `ErrTooLarge` and names the
-  cap and the values. They were set from [measurements](docs/measurements.md).
+- **Gate.** The input must be a regular file within `Caps.MaxInputBytes`. Its
+  type comes from its bytes, never its name (it is read through an
+  extensionless link), must be in `Config.Types`, and the decoder is pinned to
+  it. The coder allow-list of the generated policy is built from `Types`, so
+  content cannot choose another.
+- **Caps.** Input size, pixel counts and frame count are bounded by
+  `Config.Caps`, and side length, stream count and duration by constants (see
+  the `Caps` doc comment); a refusal wraps `ErrTooLarge`.
 - **Sandbox.** Every tool runs through a helper (the program's own executable,
   started again) that sets `no_new_privs`, resource limits and a seccomp filter
   denying sockets, and kills what the tool leaves behind. It needs Linux 5.11
@@ -116,6 +122,19 @@ For `Processor` operations, stated in full in the
 
 The sandbox does not confine files: a deployment for hostile input supplies
 that (see the package documentation).
+
+## Types and caps
+
+`Types()` lists the media types the library has a pinned decoder for: those
+ImageMagick reads with a built-in coder, and video. SVG, MVG, MSL,
+PostScript, EPS, PDF and text are never among them. TGA, ICO, G3 and DNG are
+in the list but are not identified from content; no operation decodes them
+yet, since none takes a type from the caller. `Config.Types` narrows the set;
+nil is all of it. `Config.Caps` sets the limits that turn input away. A zero
+`Caps` is the library's ceilings, not values measured for any host, so a
+deployment for hostile input sets its own. The `Caps` doc comment lists them;
+[the measurements](docs/measurements.md) record the values a small deployment
+chose.
 
 ## Resources
 

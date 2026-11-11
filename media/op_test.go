@@ -13,6 +13,7 @@ import (
 	"image/gif"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -419,11 +420,8 @@ func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 	heic := writeHEIC(t)
 	gif := writeGIF(t, solid, 2)
 	rec := record(p)
-	garbage := filepath.Join(t.TempDir(), "garbage")
-	if err := os.WriteFile(garbage, []byte("not any media"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	webm := writeFile(t, "clip.webm", ebmlHeader("webm"))
+	garbage := writeFile(t, "garbage", []byte("not any media"))
 
 	nonEmpty := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonEmpty, "leftover"), nil, 0o600); err != nil {
@@ -458,7 +456,6 @@ func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 		{"unknown format", still, heic, Encoding{Format: "gif"}, t.TempDir(), false},
 		{"type not accepted", still, gif, Encoding{}, t.TempDir(), true},
 		{"video to still", still, webm, Encoding{}, t.TempDir(), true},
-		{"unrecognized content", still, garbage, Encoding{}, t.TempDir(), true},
 		{"missing source", still, filepath.Join(t.TempDir(), "absent"), Encoding{}, t.TempDir(), false},
 		{"dir not empty", still, heic, Encoding{}, nonEmpty, false},
 		{"dir missing", still, heic, Encoding{}, absent, false},
@@ -466,6 +463,7 @@ func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 		{"frames: too few", framesN(-1), gif, Encoding{}, t.TempDir(), false},
 		{"frames: too many", framesN(65), gif, Encoding{}, t.TempDir(), false},
 		{"frames: type not accepted", framesN(0), heic, Encoding{}, t.TempDir(), true},
+		{"frames: unrecognized content", framesN(0), garbage, Encoding{}, t.TempDir(), true},
 		{"frames: dir not empty", framesN(0), gif, Encoding{}, nonEmpty, false},
 	}
 	for _, c := range cases {
@@ -865,18 +863,22 @@ func TestGoldenArgv(t *testing.T) {
 			if err := c.run(p, input, out); err != nil {
 				t.Fatal(err)
 			}
-			checkGolden(t, c.name, goldenArgv(rec.calls, input, out))
+			checkGolden(t, c.name, goldenArgv(rec.calls, out))
 		})
 	}
 }
 
+// neutralLinkDir matches the directory of the extensionless link a Processor
+// reads its input through.
+var neutralLinkDir = regexp.MustCompile(`/[^\s:]*/tmp/in-[A-Za-z0-9]+`)
+
 // goldenArgv renders the recorded invocations with the input and output
 // directories replaced by placeholders.
-func goldenArgv(calls [][]string, input, out string) string {
+func goldenArgv(calls [][]string, out string) string {
 	var b strings.Builder
 	for _, call := range calls {
 		for _, arg := range call {
-			arg = strings.ReplaceAll(arg, filepath.Dir(input), "$IN")
+			arg = neutralLinkDir.ReplaceAllLiteralString(arg, "$IN")
 			arg = strings.ReplaceAll(arg, out, "$OUT")
 			b.WriteString(strconv.Quote(arg))
 			b.WriteByte('\n')

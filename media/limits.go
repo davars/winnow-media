@@ -3,6 +3,7 @@ package media
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -22,13 +23,14 @@ var ErrTooLarge = errors.New("input too large")
 // for it with errors.Is.
 var ErrTimeLimit = errors.New("time limit exceeded")
 
-// The caps below are the one place the limits are stated; the ImageMagick
-// policy ceilings are derived from them. Each was set from measurements of the
-// largest inputs it admits, made with internal/cmd/measure on a 12-CPU x86_64
-// host (see docs/measurements.md).
+// The bomb ceilings below hold whatever Caps a Processor is given. The caps
+// of the Env methods, which take no Config, are the values of maxInputBytes,
+// maxFramePixels, maxReturnedPixels, maxDecodedPixels and maxAnimationFrames;
+// each was set from measurements of the largest inputs it admits, made with
+// internal/cmd/measure on a 12-CPU x86_64 host (see docs/measurements.md).
 const (
-	// maxInputBytes is the largest input file, inclusive. It is a requirement
-	// of the callers, not a measurement.
+	// maxInputBytes is the Env methods' largest input file, inclusive. It is a
+	// requirement of the callers, not a measurement.
 	maxInputBytes = 25 << 20
 	// maxDimension is the largest width or height of any frame or stream. For
 	// a still it applies to the frame actually decoded, after any
@@ -105,10 +107,13 @@ var composeTimeout time.Duration
 // image is created, clones inherit it, and it is checked when pixels are next
 // accessed, so it bounds neither a process nor a run of several images.
 const (
-	policyArea       = "512MP"
+	policyAreaMP     = 512
 	policyDimension  = "65536"
 	policyListLength = "2048"
 )
+
+// policyArea is the area ceiling as ImageMagick spells it.
+var policyArea = strconv.Itoa(policyAreaMP) + "MP"
 
 // MemoryProfile names the ImageMagick memory limits the Env methods hold a
 // run to: the memory and map limits, between which the pixel cache spills
@@ -164,9 +169,9 @@ func (s sceneHeader) canvas() (int, int) {
 // before any pixel is decoded. Frames of an animation are never reduced, so
 // their header sizes are the decoded sizes; a still is capped by
 // checkStillSize on the size its decode produces.
-func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
-	if animated && len(scenes) > maxAnimationFrames {
-		return tooLarge("animation has %d frames, the limit is %d", len(scenes), maxAnimationFrames)
+func checkSceneHeaders(scenes []sceneHeader, animated bool, c caps) error {
+	if animated && len(scenes) > c.frames {
+		return tooLarge("animation has %d frames, the limit is %d", len(scenes), c.frames)
 	}
 	var cw, ch int
 	for i, s := range scenes {
@@ -175,51 +180,51 @@ func checkSceneHeaders(scenes []sceneHeader, animated bool) error {
 			if d[0] > maxDimension || d[1] > maxDimension {
 				return tooLarge("frame %d is %dx%d, the limit is %d on each side", i, d[0], d[1], maxDimension)
 			}
-			if px := int64(d[0]) * int64(d[1]); px > maxFramePixels {
-				return tooLarge("frame %d has %d pixels, the limit is %d", i, px, int64(maxFramePixels))
+			if px := int64(d[0]) * int64(d[1]); px > c.framePixels {
+				return tooLarge("frame %d has %d pixels, the limit is %d", i, px, c.framePixels)
 			}
 		}
 		cw, ch = max(cw, w), max(ch, h)
 	}
 	// The compositor allocates the largest width by the largest height, which
 	// no single scene need reach; each side is already within maxDimension.
-	if px := int64(cw) * int64(ch); px > maxFramePixels {
-		return tooLarge("composite canvas has %d pixels, the limit is %d", px, int64(maxFramePixels))
+	if px := int64(cw) * int64(ch); px > c.framePixels {
+		return tooLarge("composite canvas has %d pixels, the limit is %d", px, c.framePixels)
 	}
 	if animated {
-		if total := int64(len(scenes)) * int64(cw) * int64(ch); total > maxDecodedPixels {
+		if total := int64(len(scenes)) * int64(cw) * int64(ch); total > c.decodedPixels {
 			return tooLarge("animation has %d frames of %dx%d, %d pixels to decode, the limit is %d",
-				len(scenes), cw, ch, total, int64(maxDecodedPixels))
+				len(scenes), cw, ch, total, c.decodedPixels)
 		}
 	}
 	return nil
 }
 
 // checkStillSize refuses a still whose decoded frame, of size decoded, has a
-// side over maxDimension or more than maxFramePixels pixels. stored is the
+// side over maxDimension or more than c.framePixels pixels. stored is the
 // size the file declares; it differs from decoded when the decode reduces it,
 // and the error says both.
-func checkStillSize(stored, decoded [2]int) error {
+func checkStillSize(stored, decoded [2]int, c caps) error {
 	for _, side := range decoded {
 		if side > maxDimension {
 			return tooLarge("still decodes at %dx%d (stored %dx%d), the limit is %d on each side",
 				decoded[0], decoded[1], stored[0], stored[1], maxDimension)
 		}
 	}
-	if px := int64(decoded[0]) * int64(decoded[1]); px > maxFramePixels {
+	if px := int64(decoded[0]) * int64(decoded[1]); px > c.framePixels {
 		return tooLarge("still decodes at %dx%d, %d pixels (stored %dx%d), the limit is %d",
-			decoded[0], decoded[1], px, stored[0], stored[1], int64(maxFramePixels))
+			decoded[0], decoded[1], px, stored[0], stored[1], c.framePixels)
 	}
 	return nil
 }
 
 // checkReturnedPixels refuses a call that would return count frames of a
-// cw x ch canvas totalling more than maxReturnedPixels.
-func checkReturnedPixels(count, cw, ch int) error {
+// cw x ch canvas totalling more than c.returnedPixels.
+func checkReturnedPixels(count, cw, ch int, c caps) error {
 	area := int64(cw) * int64(ch)
-	if total := int64(count) * area; total > maxReturnedPixels {
+	if total := int64(count) * area; total > c.returnedPixels {
 		return tooLarge("%d frames of %dx%d are %d pixels to return, the limit is %d; at most %d frames fit",
-			count, cw, ch, total, int64(maxReturnedPixels), max(0, int64(maxReturnedPixels)/area))
+			count, cw, ch, total, c.returnedPixels, max(0, c.returnedPixels/area))
 	}
 	return nil
 }

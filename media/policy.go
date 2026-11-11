@@ -38,10 +38,14 @@ func (c coderRights) rights() string {
 	return "read"
 }
 
-// policyCoders returns the coders the operations read and write, keyed by
-// upper-case coder name: the decoders their inputs are pinned to and the
-// coders each spec lists besides.
-func policyCoders(specs ...spec) map[string]coderRights {
+// internalCoders are read by the operations whatever the types: the profile
+// and intermediate formats they pass between tools.
+var internalCoders = []string{"icc", "pam"}
+
+// policyCoders returns the coders a Processor of the given types reads and
+// writes, keyed by upper-case coder name: the coders of the types, the
+// internal ones and the output formats.
+func policyCoders(types []string) map[string]coderRights {
 	coders := map[string]coderRights{}
 	add := func(name string, read, write bool) {
 		name = strings.ToUpper(name)
@@ -49,27 +53,25 @@ func policyCoders(specs ...spec) map[string]coderRights {
 		c.read, c.write = c.read || read, c.write || write
 		coders[name] = c
 	}
-	for _, s := range specs {
-		for _, in := range s.inputs {
-			if in.decoder.tool == "magick" {
-				add(in.decoder.name, true, false)
-			}
+	for _, typ := range types {
+		for _, c := range typeTable[typ].coders {
+			add(c, true, false)
 		}
-		for _, n := range s.reads {
-			add(n, true, false)
-		}
-		for _, n := range s.writes {
-			add(n, false, true)
-		}
+	}
+	for _, n := range internalCoders {
+		add(n, true, false)
+	}
+	for _, n := range append([]string{"info"}, outputCoders...) {
+		add(n, false, true)
 	}
 	return coders
 }
 
 // processorPolicy returns the rules of the policy a Processor with the
-// resolved resources r installs, in the order they are written: resource
-// ceilings, delegates denied, every coder denied and then the used ones
-// allowed, indirect reads denied.
-func processorPolicy(r Resources) []policyRule {
+// resolved resources r and the resolved types installs, in the order they are
+// written: resource ceilings, delegates denied, every coder denied and then
+// the used ones allowed, indirect reads denied.
+func processorPolicy(r Resources, types []string) []policyRule {
 	rules := []policyRule{
 		{domain: "resource", name: "memory", value: magickSize(r.Memory)},
 		{domain: "resource", name: "map", value: magickSize(r.Map)},
@@ -83,7 +85,7 @@ func processorPolicy(r Resources) []policyRule {
 		{domain: "delegate", rights: "none", pattern: "*"},
 		{domain: "coder", rights: "none", pattern: "*"},
 	}
-	coders := policyCoders(stillSpec, animationSpec, videoSpec)
+	coders := policyCoders(types)
 	names := make([]string, 0, len(coders))
 	for n := range coders {
 		names = append(names, n)

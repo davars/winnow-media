@@ -6,6 +6,11 @@ how they were taken and what each justified. The constants that state them
 (`media/limits.go`, `media/sandbox_linux.go`, `media/op_video.go`) link here.
 Figures that are projections, not measurements, are marked as such.
 
+The input size (25 MiB), frame (52 million pixels), returned (64 million) and
+decoded (900 million) pixel values below are the caps of the `Env` methods and
+a deployment's choice for `Config.Caps`; the ceilings a zero `Caps` has are in
+the `Caps` doc comment.
+
 ## Method
 
 `internal/cmd/measure` generates the largest inputs the operations accept
@@ -44,7 +49,7 @@ On the reference host, with `measure`:
   measured with. A caller with a time budget chooses a smaller count from the
   fields of `ProbeVideo`.
 
-On the three Raspberry Pi 5 nodes, the still caps (a side of 16384 and 52
+On the three Raspberry Pi 5 nodes, the still values (a side of 16384 and 52
 million pixels):
 
 - Every format passes at 52 MP with at least 34% time and 39% memory
@@ -63,7 +68,7 @@ Animations:
 - The header read holds about 62 KiB per frame: 10000 frames of a GIF peaked
   at 624 MiB in ImageMagick. This is why the frame count is capped at 2000, a
   structural bound below the policy's list length of 2048.
-- The caps `maxReturnedPixels` (64 million) and `maxDecodedPixels` (900
+- The values `maxReturnedPixels` (64 million) and `maxDecodedPixels` (900
   million) keep an animation within a 30 s budget per call on a Raspberry Pi
   5. The worst admitted GIF, 225 frames of 2000x2000 with 16 returned (64 MP
   returned, 900 MP decoded), took 27.8 s there, and 16 frames of 2000x2000

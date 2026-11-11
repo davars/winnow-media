@@ -108,6 +108,9 @@ type openRequest struct {
 	// pick chooses the frames of an animation from their count, as indices in
 	// ascending order without repeats; nil takes them from hints.
 	pick func(sourceFrames int) ([]int, error)
+	// scenes are the headers the gate already read, for a file it named by
+	// ImageMagick's detection; readSource reads none then.
+	scenes []sceneHeader
 	// scratch is the directory for decoded frames; "" takes Env.Scratch.
 	scratch string
 	// webpProfileFromTool leaves the profile of a still WebP unread: the
@@ -162,10 +165,13 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 	if h.route == routeStill && req.hints.Still {
 		selector = "[0]"
 	}
-	if coder != "" {
+	switch {
+	case coder != "" && req.scenes != nil:
+		h.ref, h.scenes = coder+":"+req.path, req.scenes
+	case coder != "":
 		h.ref = coder + ":" + req.path
 		h.scenes, err = identifyHeaders(ctx, e, h.ref+selector, true)
-	} else {
+	default:
 		var ref string
 		h.scenes, ref, err = identifyWithFallback(ctx, e, req.path, selector, req.hints.MediaType)
 		h.ref = strings.TrimSuffix(ref, selector)
@@ -179,14 +185,14 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 	if h.route != routeStill {
 		// Frames of an animation are never decoded at a reduced size, so the
 		// header sizes are the decoded sizes.
-		if err := checkSceneHeaders(h.scenes, true); err != nil {
+		if err := checkSceneHeaders(h.scenes, true, e.capValues()); err != nil {
 			return headerRead{}, err
 		}
 	} else if first := h.scenes[0]; !reducible(first.format) {
 		// Nothing reduces this decode, so the cap is known now. It must run
 		// before completeProfile, which can decode the whole image.
 		stored := [2]int{first.width, first.height}
-		if err := checkStillSize(stored, stored); err != nil {
+		if err := checkStillSize(stored, stored, e.capValues()); err != nil {
 			return headerRead{}, err
 		}
 	}
@@ -394,7 +400,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 		return nil, fmt.Errorf("selected %d frames of a one-frame file", len(s.selected))
 	}
 	if req.caps && hdr.route != routeStill {
-		if err := checkReturnedPixels(len(s.selected), s.layout.cw, s.layout.ch); err != nil {
+		if err := checkReturnedPixels(len(s.selected), s.layout.cw, s.layout.ch, e.capValues()); err != nil {
 			return nil, err
 		}
 	}
@@ -894,7 +900,7 @@ func (s *Source) encodeStills(ctx context.Context, r region, encs []encoding, pa
 			return nil, err
 		}
 	}
-	if err := checkStillSize(s.stored, decoded); err != nil {
+	if err := checkStillSize(s.stored, decoded, s.env.capValues()); err != nil {
 		return nil, err
 	}
 	if s.softRef != "" && slices.ContainsFunc(encs, func(e encoding) bool { return !s.fits(r, e) }) {

@@ -180,33 +180,6 @@ type decoder struct {
 	name string
 }
 
-// spec is the internal description of one operation: the media types it
-// accepts, the decoder each is read with, the tools it runs and the
-// ImageMagick coders it uses besides its input decoders.
-type spec struct {
-	inputs []acceptedInput
-	tools  []string
-	// reads and writes name the ImageMagick coders the operation reads and
-	// writes itself besides its input decoders: its output formats, the
-	// "info" coder its encode reports through, and the intermediates it passes
-	// between tools.
-	reads, writes []string
-}
-
-type acceptedInput struct {
-	mediaType string
-	decoder   decoder
-}
-
-func (s spec) decoderFor(mediaType string) (decoder, error) {
-	for _, in := range s.inputs {
-		if in.mediaType == mediaType {
-			return in.decoder, nil
-		}
-	}
-	return decoder{}, fmt.Errorf("%w: %s", ErrUnsupportedType, mediaType)
-}
-
 // inDir runs fn, which writes into dir, and empties dir again if it fails.
 func inDir(dir string, fn func() ([]Image, error)) ([]Image, error) {
 	images, err := fn()

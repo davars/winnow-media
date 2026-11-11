@@ -15,18 +15,6 @@ import (
 	"strings"
 )
 
-var videoSpec = spec{
-	inputs: []acceptedInput{
-		{typeMP4, decoder{"ffmpeg", "mov"}},
-		{typeMOV, decoder{"ffmpeg", "mov"}},
-		{typeWebM, decoder{"ffmpeg", "matroska"}},
-		{typeMKV, decoder{"ffmpeg", "matroska"}},
-	},
-	tools:  []string{"ffprobe", "ffmpeg", "magick"},
-	reads:  []string{"pam"},
-	writes: append([]string{"info"}, outputCoders...),
-}
-
 // hdrToneMap linearizes HDR video, converts its primaries to BT.709,
 // tone-maps it and returns it to BT.709 transfer and matrix, leaving the pixel
 // format to the caller. The 203 nit reference white is the BT.2408 level for
@@ -188,8 +176,10 @@ func videoDecoderOf(path string) (decoder, bool) {
 	if err != nil {
 		return decoder{}, false
 	}
-	dec, err := videoSpec.decoderFor(mediaType)
-	return dec, err == nil
+	if e := typeTable[mediaType]; e.kind == kindVideo {
+		return e.decoderFor(""), true
+	}
+	return decoder{}, false
 }
 
 // sniffedVideoDecoder returns videoDecoderOf path, or the unnamed decoder,

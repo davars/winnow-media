@@ -34,26 +34,6 @@ const profileName = ".srgb2014.icc"
 // coder from the file extension, so JPEG files are handled by "jpg".
 var outputCoders = []string{"jpeg", "jpg", "png", "webp"}
 
-var stillSpec = spec{
-	inputs: []acceptedInput{
-		{typeHEIC, decoder{"magick", "heic"}},
-		{typeHEIF, decoder{"magick", "heic"}},
-	},
-	tools:  []string{"magick"},
-	reads:  []string{"icc"},
-	writes: append([]string{"info"}, outputCoders...),
-}
-
-var animationSpec = spec{
-	inputs: []acceptedInput{
-		{typeGIF, decoder{"magick", "gif"}},
-		{typeWebP, decoder{"magick", "webp"}},
-	},
-	tools:  []string{"magick", webpFramesTool},
-	reads:  []string{"icc", "pam"},
-	writes: append([]string{"info"}, outputCoders...),
-}
-
 // listLengthRefusal is what ImageMagick reports when an image list exceeds the
 // policy's list-length ceiling.
 const listLengthRefusal = "list length exceeds limit"
@@ -67,6 +47,8 @@ type sceneHeader struct {
 	canvasH       int
 	orientation   string
 	format        string // ImageMagick's coder name for the file, as %m
+	// subfile is the TIFF subfile type, read only by the gate.
+	subfile string
 	// soft is set when the frame is palette-based or declares alpha, which
 	// picks the resize filter.
 	soft bool
@@ -129,11 +111,17 @@ func fullSoft(ctx context.Context, env Env, ref string) (bool, error) {
 // before any frame is held, and a read that reaches the time limit with one
 // wrapping ErrTimeLimit.
 func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) ([]sceneHeader, error) {
+	return identifyHeadersAs(ctx, env, inputRef, ping, sceneHeaderFormat)
+}
+
+// identifyHeadersAs is identifyHeaders reading format, which must be
+// sceneHeaderFormat or gateHeaderFormat.
+func identifyHeadersAs(ctx context.Context, env Env, inputRef string, ping bool, format string) ([]sceneHeader, error) {
 	args := []string{"identify"}
 	if ping {
 		args = append(args, "-ping")
 	}
-	args = append(args, "-format", sceneHeaderFormat, inputRef)
+	args = append(args, "-format", format, inputRef)
 	res, err := env.runMagick(ctx, args...)
 	if err != nil {
 		if !errors.Is(err, ErrTimeLimit) && strings.Contains(err.Error(), listLengthRefusal) {
@@ -149,6 +137,11 @@ func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) (
 // report the profiles; %r and %A are the image class and alpha the coder
 // declares.
 const sceneHeaderFormat = "%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|END\n"
+
+// gateHeaderFormat is sceneHeaderFormat with the TIFF subfile type, which
+// the gate reads from the header run that names an unnamed file's coder. A
+// coder without the property prints a warning and an empty field.
+const gateHeaderFormat = "%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|%[tiff:subfiletype]|END\n"
 
 // declaresSoft reports whether a frame is palette-based or has alpha, from
 // the image class %r and the alpha trait %A. Gray is never a palette:
@@ -170,7 +163,7 @@ func parseSceneHeaders(out []byte) ([]sceneHeader, error) {
 	var scenes []sceneHeader
 	for _, line := range strings.Split(trimmed, "\n") {
 		f := strings.Split(line, "|")
-		if len(f) != 11 || f[10] != "END" {
+		if (len(f) != 11 && len(f) != 12) || f[len(f)-1] != "END" {
 			return nil, fmt.Errorf("identify line %q missing fields", line)
 		}
 		var nums [5]int
@@ -181,11 +174,15 @@ func parseSceneHeaders(out []byte) ([]sceneHeader, error) {
 			}
 			nums[i] = n
 		}
-		scenes = append(scenes, sceneHeader{
+		scene := sceneHeader{
 			delayCS: nums[0], hasICC: profileListHasICC(f[1]),
 			width: nums[1], height: nums[2], canvasW: nums[3], canvasH: nums[4],
 			format: f[6], orientation: f[7], soft: declaresSoft(f[8], f[9]),
-		})
+		}
+		if len(f) == 12 {
+			scene.subfile = f[10]
+		}
+		scenes = append(scenes, scene)
 	}
 	return scenes, nil
 }

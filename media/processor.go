@@ -2,9 +2,11 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/davars/winnow-media/tool"
 )
@@ -31,9 +33,13 @@ const (
 // guarantees that span the operations (the gate, the caps, the sandbox, the
 // policy) are in the package documentation.
 type Processor struct {
-	dir   string
-	res   Resources
-	tools map[string]string
+	dir  string
+	res  Resources
+	caps caps
+	// types is the resolved Config.Types, sorted; accepts is it as a set.
+	types   []string
+	accepts map[string]bool
+	tools   map[string]string
 	// start runs one process: the sandbox helper, or the direct runner.
 	start runner
 	run   Runner
@@ -60,8 +66,9 @@ type Processor struct {
 // than Linux on amd64 or arm64, unless cfg.Unsandboxed is set.
 //
 // It is an error if cfg.Resources has a negative field or a TimeLimit that is
-// not a whole number of seconds of at least one, or if cfg.Dir is not an
-// existing directory.
+// not a whole number of seconds of at least one, if cfg.Caps has a negative
+// field or one above its ceiling, if cfg.Types names a type Types does not
+// list, or if cfg.Dir is not an existing directory.
 func NewProcessor(ctx context.Context, cfg Config) (*Processor, error) {
 	return newProcessor(ctx, cfg, nil)
 }
@@ -73,16 +80,24 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
+	limits, err := cfg.Caps.resolve()
+	if err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
+	types, err := resolveTypes(cfg.Types)
+	if err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
 	start := runner(directRunner)
 	if !cfg.Unsandboxed {
 		if err := sandboxAvailable(); err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
 		}
-		limits := rlimitsFor(res)
-		if err := probeSandbox(ctx, limits); err != nil {
+		rl := rlimitsFor(res)
+		if err := probeSandbox(ctx, rl); err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
 		}
-		start = sandboxRunner(limits)
+		start = sandboxRunner(rl)
 	}
 	if wrap != nil {
 		start = wrap(start)
@@ -113,10 +128,14 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	p := &Processor{dir: dir, res: res, tools: tools, start: start}
+	accepts := make(map[string]bool, len(types))
+	for _, typ := range types {
+		accepts[typ] = true
+	}
+	p := &Processor{dir: dir, res: res, caps: limits, types: types, accepts: accepts, tools: tools, start: start}
 	p.run = p.runTool
 	p.compose = p.composeFrames
-	rules := processorPolicy(res)
+	rules := processorPolicy(res, types)
 	if err := p.install(rules); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
@@ -203,9 +222,10 @@ type meter struct{ usage Usage }
 
 // env returns an Env that runs through the Processor and adds each run to m.
 func (p *Processor) env(m *meter) Env {
-	res := p.res
+	res, limits := p.res, p.caps
 	return Env{
 		resources: &res,
+		caps:      &limits,
 		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
 			res, err := p.run(ctx, name, args...)
 			m.add(res.Usage)
@@ -226,10 +246,15 @@ func (m *meter) add(u *Usage) {
 	}
 }
 
-// admitted is an input that passed the gate.
+// admitted is an input that passed the gate. path names it by a neutral link
+// in the Processor's directory, which release removes.
 type admitted struct {
 	path, dir string
 	decoder   decoder
+	// scenes are the headers of the first image, read by the gate for a file
+	// it named by ImageMagick's detection; nil otherwise.
+	scenes  []sceneHeader
+	release func()
 }
 
 // request is the open request of an operation on the admitted input, which
@@ -237,7 +262,7 @@ type admitted struct {
 func (in admitted) request(h Hints, pick func(int) ([]int, error), stream bool) openRequest {
 	return openRequest{
 		path: in.path, hints: h, dec: in.decoder, pinned: true, caps: true,
-		pick: pick, scratch: in.dir, stream: stream,
+		scenes: in.scenes, pick: pick, scratch: in.dir, stream: stream,
 	}
 }
 
@@ -252,19 +277,26 @@ func (e Env) encodeAnimationFrames(ctx context.Context, r region, in admitted, e
 	return src.encodeFiles(ctx, r, enc, in.dir)
 }
 
+// accepted says what an operation takes: the kind of type, and, when typ is
+// not empty, the type the caller names for bytes that name none themselves.
+type accepted struct {
+	kind mediaKind
+	typ  string
+}
+
 // admit checks everything about an operation's input and output directory
-// that can be checked without running a tool. The input's type comes from its
-// leading bytes; neither its name nor any claim of the caller is consulted.
-func (p *Processor) admit(s spec, path, dir string) (admitted, error) {
-	in, err := p.admitInput(s, path)
-	if err != nil {
-		return admitted{}, err
-	}
-	dir, err = filepath.Abs(dir)
+// that can be checked before pixels are read. The input's type comes from its
+// bytes; neither its name nor any claim of the caller is consulted.
+func (p *Processor) admit(ctx context.Context, m *meter, a accepted, path, dir string) (admitted, error) {
+	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return admitted{}, err
 	}
 	if err := requireEmptyDir(dir); err != nil {
+		return admitted{}, err
+	}
+	in, err := p.admitInput(ctx, m, a, path)
+	if err != nil {
 		return admitted{}, err
 	}
 	in.dir = dir
@@ -272,8 +304,14 @@ func (p *Processor) admit(s spec, path, dir string) (admitted, error) {
 }
 
 // admitInput is admit for an operation that writes no files: it checks the
-// input alone, and the result has no dir.
-func (p *Processor) admitInput(s spec, path string) (admitted, error) {
+// input alone, and the result has no dir. The input must be a regular file
+// within Caps.MaxInputBytes; its type must be one of Config.Types that the
+// operation reads. A GIF, WebP, ISO base media or EBML file is typed by its
+// leading bytes before any tool runs, and every animation and video type is
+// of that kind. Other content is named by one header read under the generated
+// policy, which allows only the coders of Config.Types, so the content can
+// select no other.
+func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path string) (admitted, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return admitted{}, err
@@ -285,35 +323,135 @@ func (p *Processor) admitInput(s spec, path string) (admitted, error) {
 	if !info.Mode().IsRegular() {
 		return admitted{}, fmt.Errorf("source %s is not a regular file", path)
 	}
-	if info.Size() > maxInputBytes {
-		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), int64(maxInputBytes))
+	if info.Size() > p.caps.inputBytes {
+		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
 	}
-	mediaType, err := sniffFile(path)
+	typ, err := sniffFile(path)
+	named := err == nil
+	if err != nil && !errors.Is(err, errUnnamed) {
+		return admitted{}, err
+	}
+	if named && a.typ != "" && a.typ != typ {
+		return admitted{}, unrecognized(fmt.Sprintf("the bytes are %s, not %s", typ, a.typ))
+	}
+	if !named {
+		typ = a.typ
+	}
+	if typ == "" && a.kind&kindStill == 0 {
+		return admitted{}, errUnnamed
+	}
+	if typ != "" {
+		if err := p.checkType(typ, a.kind); err != nil {
+			return admitted{}, err
+		}
+		if typ == typeWebP && a.kind&kindAnimation == 0 && webpAnimated(path) {
+			return admitted{}, unrecognized("an animated WebP is read by the animation operations")
+		}
+	}
+	link, release, err := p.neutralLink(path)
 	if err != nil {
 		return admitted{}, err
 	}
-	dec, err := s.decoderFor(mediaType)
-	if err != nil {
-		return admitted{}, err
+	in := admitted{path: link, release: release}
+	if typ == "" {
+		var coder string
+		if typ, coder, in.scenes, err = p.detectType(ctx, m, link, a.kind); err != nil {
+			release()
+			return admitted{}, err
+		}
+		in.decoder = typeTable[typ].decoderFor(coder)
+		return in, nil
 	}
-	return admitted{path: path, decoder: dec}, nil
+	in.decoder = typeTable[typ].decoderFor("")
+	return in, nil
 }
 
-// Still decodes the first image of a HEIC or HEIF file and writes it to dir
+// checkType refuses a type the Processor was not configured with, or one the
+// operation does not read, with ErrUnsupportedType.
+func (p *Processor) checkType(typ string, kind mediaKind) error {
+	if !p.accepts[typ] {
+		return unrecognized(typ)
+	}
+	if typeTable[typ].kind&kind == 0 {
+		return unrecognized(typ + " is not read by this operation")
+	}
+	return nil
+}
+
+// neutralLink makes an extensionless link to path in a new directory of the
+// Processor's, so that no tool is given the file's name. release removes it.
+func (p *Processor) neutralLink(path string) (link string, release func(), err error) {
+	dir, err := os.MkdirTemp(p.tmpDir(), "in-")
+	if err != nil {
+		return "", nil, err
+	}
+	release = func() { _ = os.RemoveAll(dir) }
+	link = filepath.Join(dir, "input")
+	if err := os.Symlink(path, link); err != nil {
+		release()
+		return "", nil, err
+	}
+	return link, release, nil
+}
+
+// detectType reads the headers of the first image of the file link names
+// under the Processor's policy. It returns the type the coder that read them
+// maps to, which must be one the operation accepts, the coder, and the
+// headers, which the operation then does not read again. A TIFF whose first
+// image is a reduced-resolution subfile, as the preview of a camera raw
+// file is, is refused: the file's own type is not TIFF.
+func (p *Processor) detectType(ctx context.Context, m *meter, link string, kind mediaKind) (typ, coder string, scenes []sceneHeader, err error) {
+	scenes, err = identifyHeadersAs(ctx, p.env(m), link+"[0]", true, gateHeaderFormat)
+	if err != nil {
+		if msg := err.Error(); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
+			(strings.Contains(msg, "security policy") || strings.Contains(msg, "no decode delegate")) {
+			return "", "", nil, unrecognized("content no supported coder reads: " + firstLine(msg))
+		}
+		return "", "", nil, err
+	}
+	coder = scenes[0].format
+	typ, ok := coderTypes[coder]
+	if !ok {
+		return "", "", nil, unrecognized(fmt.Sprintf("ImageMagick coder %q", coder))
+	}
+	if err := p.checkType(typ, kind); err != nil {
+		return "", "", nil, err
+	}
+	if scenes[0].subfile == "REDUCEDIMAGE" {
+		return "", "", nil, unrecognized("the file's first image is a reduced-resolution preview, as in a camera raw file; name its type")
+	}
+	return typ, coder, scenes, nil
+}
+
+// firstLine returns s up to its first newline.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
+}
+
+// Still decodes the first image of a file of any type in Config.Types other
+// than GIF and video, and of a WebP that is not animated, and writes it to dir
 // as still.<ext> in the encoding's format. The output is upright, converted
 // to sRGB when the source carries an ICC profile, flattened onto white for
 // JPEG and free of metadata.
 //
 // The type is taken from the file's bytes, not its name. dir must exist and
 // be empty. Every argument is validated, and the input checked against the
-// size caps, before any tool runs: a type the operation does not accept gives
-// an error wrapping ErrUnsupportedType, and an input over a cap one wrapping
-// ErrTooLarge. A tool run that reaches ImageMagick's time limit gives an error
-// wrapping ErrTimeLimit. On failure Still removes what it wrote, leaving dir empty.
-// Usage covers every tool run of the call, including those of a failed one.
+// size caps, before pixels are read: a type the operation does not accept
+// gives an error wrapping ErrUnsupportedType, and an input over a cap one
+// wrapping ErrTooLarge. A tool run that reaches ImageMagick's time limit
+// gives an error wrapping ErrTimeLimit. On failure Still removes what it
+// wrote, leaving dir empty. Usage covers every tool run of the call,
+// including those of a failed one.
 func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir string) (Image, Usage, error) {
+	return p.still(ctx, path, "", enc, dir)
+}
+
+// still is Still for bytes that name no type themselves, which the caller
+// may name as typ.
+func (p *Processor) still(ctx context.Context, path, typ string, enc Encoding, dir string) (Image, Usage, error) {
 	var ec encoding
-	images, usage, err := p.operate("still", stillSpec, path, dir,
+	images, usage, err := p.operate(ctx, "still", accepted{kindStill, typ}, path, dir,
 		func() (err error) { ec, err = enc.resolve(); return err },
 		func(env Env, in admitted) ([]Image, error) {
 			src, err := env.open(ctx, in.request(Hints{Still: true}, nil, false))
@@ -330,9 +468,9 @@ func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir st
 	return images[0], usage, nil
 }
 
-// AnimationFrames decodes a GIF or animated WebP file, composites its frames,
-// samples up to maxFrames of them evenly and writes each to dir as
-// frame-NNN.<ext>. A sampled frame identical to the one before it after
+// AnimationFrames decodes a GIF or WebP file whose type is in Config.Types,
+// composites its frames, samples up to maxFrames of them evenly and writes
+// each to dir as frame-NNN.<ext>. A sampled frame identical to the one before it after
 // resizing is dropped and the files are numbered consecutively from 0;
 // Image.Frame is the index of the source frame a file shows. Output is as
 // for Still.
@@ -345,7 +483,7 @@ func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir st
 func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encoding, maxFrames int, dir string) ([]Image, Usage, error) {
 	var ec encoding
 	var frames int
-	return p.operate("animation frames", animationSpec, path, dir,
+	return p.operate(ctx, "animation frames", accepted{kind: kindAnimation}, path, dir,
 		func() (err error) {
 			if ec, err = enc.resolve(); err != nil {
 				return err
@@ -361,9 +499,10 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 }
 
 // VideoFrames decodes up to maxFrames still images from an MP4, QuickTime,
-// WebM or Matroska file and writes them to dir as frame-NNN.<ext>. The
-// samples are the centres of equal intervals of the duration of the video
-// stream flagged default (else the first), ignoring attached pictures; fewer
+// WebM or Matroska file whose type is in Config.Types and writes them to dir
+// as frame-NNN.<ext>. The samples are the centres of equal intervals of the
+// duration of the video stream flagged default (else the first), ignoring
+// attached pictures; fewer
 // when the stream has fewer frames, targets that coincide are merged, and a
 // clip of unknown duration gives one sample at 0. A video that yields no frame
 // at any of those times, as when its only frame precedes a duration the
@@ -392,7 +531,7 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 func (p *Processor) VideoFrames(ctx context.Context, path string, enc Encoding, maxFrames int, dir string) ([]Image, Usage, error) {
 	var ec encoding
 	var frames int
-	return p.operate("video frames", videoSpec, path, dir,
+	return p.operate(ctx, "video frames", accepted{kind: kindVideo}, path, dir,
 		func() (err error) {
 			if ec, err = enc.resolve(); err != nil {
 				return err
@@ -407,19 +546,20 @@ func (p *Processor) VideoFrames(ctx context.Context, path string, enc Encoding, 
 
 // operate runs a Processor operation that writes into dir. check validates
 // the caller's arguments and runs first, then path and dir are admitted
-// against s, all before any tool runs. body runs in dir with an Env that
+// against a, all before pixels are read. body runs in dir with an Env that
 // meters its tool runs; dir is emptied again if it fails. Every error is
-// prefixed with name, and the Usage returned covers body's runs even when it
-// fails.
-func (p *Processor) operate(name string, s spec, path, dir string, check func() error, body func(Env, admitted) ([]Image, error)) ([]Image, Usage, error) {
+// prefixed with name, and the Usage returned covers body's runs and the type
+// detection's, even when the call fails.
+func (p *Processor) operate(ctx context.Context, name string, a accepted, path, dir string, check func() error, body func(Env, admitted) ([]Image, error)) ([]Image, Usage, error) {
 	if err := check(); err != nil {
 		return nil, Usage{}, fmt.Errorf("%s: %w", name, err)
 	}
-	in, err := p.admit(s, path, dir)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("%s: %w", name, err)
-	}
 	var m meter
+	in, err := p.admit(ctx, &m, a, path, dir)
+	if err != nil {
+		return nil, m.usage, fmt.Errorf("%s: %w", name, err)
+	}
+	defer in.release()
 	images, err := inDir(in.dir, func() ([]Image, error) { return body(p.env(&m), in) })
 	if err != nil {
 		return nil, m.usage, fmt.Errorf("%s: %w", name, err)

@@ -207,3 +207,13 @@ func headerWithOrientation(out []byte, name string) []byte {
 	}
 	return []byte(strings.Join(lines, "\n"))
 }
+
+// envTestCaps are the caps of the Env methods, for tests of the cap checks at
+// those values; a zero Config has only the library ceilings.
+var envTestCaps = Caps{
+	MaxInputBytes:     maxInputBytes,
+	MaxFramePixels:    maxFramePixels,
+	MaxReturnedPixels: maxReturnedPixels,
+	MaxDecodedPixels:  maxDecodedPixels,
+	MaxFrames:         maxAnimationFrames,
+}

@@ -9,6 +9,17 @@ import (
 
 // Config configures a Processor.
 type Config struct {
+	// Types are the media types the Processor accepts, each listed by
+	// Types(); naming any other is an error, as is an empty non-nil slice.
+	// Nil means every type in Types(). An input of another type is refused
+	// with ErrUnsupportedType, and the generated ImageMagick policy allows no
+	// coder that reads one, except those the operations read themselves (the
+	// ICC and PAM intermediates). image/heic, image/heif and image/avif are
+	// all named or none, since one decoder reads all three.
+	Types []string
+	// Caps turn away inputs that are too large; the zero value is the
+	// library ceilings, which suit a deployment for trusted input only.
+	Caps Caps
 	// Resources bounds the tools a Processor runs; the zero value uses the
 	// defaults documented at Resources.
 	Resources Resources
@@ -21,6 +32,85 @@ type Config struct {
 	// filter, rlimits or subreaper. The gate, caps, environment, policy and
 	// Resources' policy values and tool flags still apply.
 	Unsandboxed bool
+}
+
+// Caps are the limits that turn an input away with ErrTooLarge, each the
+// deployment's choice. A zero field is the library ceiling; a negative field,
+// or one above its ceiling, is an error from NewProcessor. The ceilings are
+// what the library can bear, not values measured for any host: a deployment
+// for hostile input sets its own. Independently of Caps, a frame or stream
+// wider or taller than 16384 pixels, a video container with more than 32
+// streams and a video stream longer than six hours are refused.
+type Caps struct {
+	// MaxInputBytes is the largest input file, inclusive. No ceiling.
+	MaxInputBytes int64
+	// MaxFramePixels is the most pixels of one frame, or of an animation's
+	// canvas; a still counts as it is decoded, after any reduction. Ceiling:
+	// 16384 squared (268,435,456), the most a side limit of 16384 admits.
+	MaxFramePixels int64
+	// MaxReturnedPixels bounds the frames an animation call returns times the
+	// canvas area. No ceiling.
+	MaxReturnedPixels int64
+	// MaxDecodedPixels bounds all the frames of an animation times its canvas
+	// area, which are decoded whatever the call returns. No ceiling.
+	MaxDecodedPixels int64
+	// MaxFrames is the most frames an animation may hold. Ceiling: 2000.
+	MaxFrames int
+}
+
+// caps is Caps resolved: no field is zero.
+type caps struct {
+	inputBytes, framePixels, returnedPixels, decodedPixels int64
+	frames                                                 int
+}
+
+// ceilingCaps are the library ceilings, which a zero Caps resolves to.
+var ceilingCaps = caps{
+	inputBytes:     math.MaxInt64,
+	framePixels:    maxDimension * maxDimension,
+	returnedPixels: math.MaxInt64,
+	decodedPixels:  math.MaxInt64,
+	frames:         maxAnimationFrames,
+}
+
+// envCaps are the caps of the Env methods, which take no Config.
+var envCaps = caps{
+	inputBytes:     maxInputBytes,
+	framePixels:    maxFramePixels,
+	returnedPixels: maxReturnedPixels,
+	decodedPixels:  maxDecodedPixels,
+	frames:         maxAnimationFrames,
+}
+
+// resolve returns c with zero fields at their ceilings, or an error for a
+// negative field or one above its ceiling.
+func (c Caps) resolve() (caps, error) {
+	out := ceilingCaps
+	for _, f := range []struct {
+		name    string
+		v       int64
+		ceiling int64
+		dst     *int64
+	}{
+		{"MaxInputBytes", c.MaxInputBytes, ceilingCaps.inputBytes, &out.inputBytes},
+		{"MaxFramePixels", c.MaxFramePixels, ceilingCaps.framePixels, &out.framePixels},
+		{"MaxReturnedPixels", c.MaxReturnedPixels, ceilingCaps.returnedPixels, &out.returnedPixels},
+		{"MaxDecodedPixels", c.MaxDecodedPixels, ceilingCaps.decodedPixels, &out.decodedPixels},
+		{"MaxFrames", int64(c.MaxFrames), int64(ceilingCaps.frames), nil},
+	} {
+		switch {
+		case f.v < 0:
+			return caps{}, fmt.Errorf("caps: %s is negative: %d", f.name, f.v)
+		case f.v > f.ceiling:
+			return caps{}, fmt.Errorf("caps: %s %d is above the ceiling %d", f.name, f.v, f.ceiling)
+		case f.v == 0:
+		case f.dst != nil:
+			*f.dst = f.v
+		default:
+			out.frames = int(f.v)
+		}
+	}
+	return out, nil
 }
 
 // Resources bounds what a Processor's tools may use. A zero field means the

@@ -60,7 +60,7 @@ func TestLowMemoryFlagsAndPolicyAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules := processorPolicy(r)
+	rules := processorPolicy(r, Types())
 	for name, want := range map[string]string{"memory": "512MiB", "map": "1GiB"} {
 		if got := flagValue(t, flags, name); got != want {
 			t.Errorf("flag %s = %s, want %s", name, got, want)

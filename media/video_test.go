@@ -880,8 +880,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		_, err = videoSpec.decoderFor(mt)
-		return err == nil
+		return typeTable[mt].kind == kindVideo
 	}
 	entries := map[string]func(t *testing.T, src string) (sampled, error){
 		"VideoFrames": func(t *testing.T, src string) (sampled, error) {

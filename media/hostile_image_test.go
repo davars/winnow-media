@@ -219,7 +219,7 @@ func TestAnimationAtTheFrameCapDecodesWithinTheBounds(t *testing.T) {
 }
 
 func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	bounds := refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}
 	for name, side := range map[string][2]int{
 		"one pixel row over the cap": {8000, 6501},
@@ -232,7 +232,7 @@ func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
 }
 
 func TestWebPOfMaximumDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	requireAnimationRefusals(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, losslessWebP(16383, 16383))
 }
 
@@ -247,7 +247,7 @@ func TestLosslessWebPFixtureIsOneColour(t *testing.T) {
 }
 
 func TestHEICDeclaringHugeDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	original, err := os.ReadFile(filepath.Join("testdata", "heic", "gradient-righttop.heic"))
 	if err != nil {
 		t.Fatal(err)
@@ -292,7 +292,7 @@ func reachCompositor(t *testing.T, p *Processor) func() int {
 // bounds the decode of one frame at the frame cap, and TestAnimationAtTheFrameCapDecodesWithinTheBounds
 // that of the most frames, not 16 frames of 4 megapixels.
 func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	cases := []struct {
 		name          string
 		w, h, n, want int
@@ -324,7 +324,7 @@ func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 }
 
 func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	data := oneColourGIF(t, 2000, 2001, 16)
 	indices := func(n int) []int {
 		out := make([]int, n)
@@ -439,7 +439,7 @@ func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
 	t.Parallel()
 	data := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
 	t.Run("ProbeAnimation", func(t *testing.T) {
-		p := requireProcessor(t)
+		p := requireProcessorWith(t, Config{Caps: envTestCaps})
 		info, _, err := p.ProbeAnimation(context.Background(), writeFile(t, "wide.gif", data))
 		if errors.Is(err, ErrTooLarge) {
 			return
@@ -510,12 +510,12 @@ func TestHeaderReadMapsTheListLengthCeilingToErrTooLarge(t *testing.T) {
 }
 
 // A GIF without a logical screen is composited on the extent of its frames,
-// which scanGIF bounds before any canvas is allocated.
+// whose sides scanGIF bounds before any canvas is allocated.
 func TestScanGIFBoundsTheExtentOfAZeroLogicalScreen(t *testing.T) {
 	t.Parallel()
 	wide := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
-	if _, err := scanGIF(wide, 10); !errors.Is(err, ErrTooLarge) {
-		t.Errorf("scanGIF of a 268 MP extent: err = %v, want ErrTooLarge", err)
+	if l, err := scanGIF(wide, 10); err != nil || l.width != maxDimension || l.height != maxDimension {
+		t.Errorf("scanGIF of a %d-side extent = %dx%d, %v; its pixel count is the header read's to bound", maxDimension, l.width, l.height, err)
 	}
 	over := gifWithFrames(t, 0, 0, [][4]int{{maxDimension, 0, 2, 1}})
 	if _, err := scanGIF(over, 10); !errors.Is(err, ErrTooLarge) {

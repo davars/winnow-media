@@ -80,12 +80,12 @@ func TestStillCapRefusalNamesBothSizes(t *testing.T) {
 	t.Parallel()
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{10000, 7308}, upright: [2]int{10000, 7308}}
 	// A target of 9000 reduces by nothing: 8*2*9000/10000 rounds above 8.
-	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 9000, maxArea: 81_000_000}}))
+	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 9000, maxArea: 81_000_000}}), envCaps)
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "10000x7308") {
 		t.Fatalf("err = %v", err)
 	}
 	big := &Source{jpeg: true, reduce: true, stored: [2]int{20000, 16000}, upright: [2]int{20000, 16000}}
-	err = checkStillSize(big.stored, big.decodedSize([]encoding{{maxEdge: 5000, maxArea: 25_000_000}}))
+	err = checkStillSize(big.stored, big.decodedSize([]encoding{{maxEdge: 5000, maxArea: 25_000_000}}), envCaps)
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "stored 20000x16000") {
 		t.Fatalf("err = %v, want both sizes", err)
 	}
@@ -108,7 +108,7 @@ func TestStillSideCapAppliesAfterReduction(t *testing.T) {
 	}
 	// Reduced, but still over the side cap.
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{60000, 100}, upright: [2]int{60000, 100}}
-	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 20000, maxArea: 1 << 40}}))
+	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 20000, maxArea: 1 << 40}}), envCaps)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -138,7 +138,7 @@ func TestStillCapsOnNonReducibleFormats(t *testing.T) {
 // the size its header declares and admits one at the cap.
 func TestProcessorStillCapsOnHEIC(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	original, err := os.ReadFile(filepath.Join("testdata", "heic", "gradient-righttop.heic"))
 	if err != nil {
 		t.Fatal(err)

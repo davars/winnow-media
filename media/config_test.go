@@ -23,7 +23,7 @@ func TestDefaultResourcesAreTheFormerConstants(t *testing.T) {
 		t.Errorf("defaults = %+v, want %+v", got, want)
 	}
 	var rules []string
-	for _, r := range processorPolicy(got) {
+	for _, r := range processorPolicy(got, Types()) {
 		if r.domain == "resource" {
 			rules = append(rules, r.name+"="+r.value)
 		}

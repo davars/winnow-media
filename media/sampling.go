@@ -55,11 +55,12 @@ type AnimationInfo struct {
 // runs of the call, including those of a failed one. A caller with a time
 // budget chooses its count of samples (at most 64 per call) from the fields.
 func (p *Processor) ProbeVideo(ctx context.Context, path string) (VideoInfo, Usage, error) {
-	in, err := p.admitInput(videoSpec, path)
-	if err != nil {
-		return VideoInfo{}, Usage{}, fmt.Errorf("probe video: %w", err)
-	}
 	var m meter
+	in, err := p.admitInput(ctx, &m, accepted{kind: kindVideo}, path)
+	if err != nil {
+		return VideoInfo{}, m.usage, fmt.Errorf("probe video: %w", err)
+	}
+	defer in.release()
 	v, err := runVideoProbe(ctx, p.env(&m), in.decoder, in.path, probeEntriesWithCodec)
 	if err == nil {
 		err = checkVideoInfo(v)
@@ -91,11 +92,12 @@ func (p *Processor) ProbeVideo(ctx context.Context, path string) (VideoInfo, Usa
 // AnimationFrames sizes its output from the decoded frame. Usage is as for
 // ProbeVideo.
 func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationInfo, Usage, error) {
-	in, err := p.admitInput(animationSpec, path)
-	if err != nil {
-		return AnimationInfo{}, Usage{}, fmt.Errorf("probe animation: %w", err)
-	}
 	var m meter
+	in, err := p.admitInput(ctx, &m, accepted{kind: kindAnimation}, path)
+	if err != nil {
+		return AnimationInfo{}, m.usage, fmt.Errorf("probe animation: %w", err)
+	}
+	defer in.release()
 	hdr, err := p.env(&m).readSource(ctx, in.request(Hints{}, nil, false))
 	if err != nil {
 		return AnimationInfo{}, m.usage, fmt.Errorf("probe animation: %w", err)
@@ -124,7 +126,7 @@ func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationI
 func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding, timesMS []int64, dir string) ([]Image, Usage, error) {
 	var ec encoding
 	var times []int64
-	return p.operate("video frames at", videoSpec, path, dir,
+	return p.operate(ctx, "video frames at", accepted{kind: kindVideo}, path, dir,
 		func() (err error) {
 			if ec, err = enc.resolve(); err != nil {
 				return err
@@ -168,7 +170,7 @@ func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding
 // before it is dropped.
 func (p *Processor) VideoFrameRun(ctx context.Context, path string, enc Encoding, startMS int64, count int, dir string) ([]Image, Usage, error) {
 	var ec encoding
-	return p.operate("video frame run", videoSpec, path, dir,
+	return p.operate(ctx, "video frame run", accepted{kind: kindVideo}, path, dir,
 		func() (err error) {
 			if ec, err = enc.resolve(); err != nil {
 				return err
@@ -201,7 +203,7 @@ func (p *Processor) VideoFrameRun(ctx context.Context, path string, enc Encoding
 func (p *Processor) AnimationFramesAt(ctx context.Context, path string, enc Encoding, indices []int, dir string) ([]Image, Usage, error) {
 	var ec encoding
 	var selected []int
-	return p.operate("animation frames at", animationSpec, path, dir,
+	return p.operate(ctx, "animation frames at", accepted{kind: kindAnimation}, path, dir,
 		func() (err error) {
 			if ec, err = enc.resolve(); err != nil {
 				return err

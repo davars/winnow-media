@@ -149,7 +149,7 @@ func TestEncodeTimeLimitThroughTheProcessorPolicy(t *testing.T) {
 	p := requireProcessor(t)
 	src := writeBigPNG(t, requireMagick(t))
 	out := filepath.Join(t.TempDir(), "out.jpg")
-	rules := processorPolicy(defaultResources())
+	rules := processorPolicy(defaultResources(), Types())
 	for i, r := range rules {
 		if r.domain == "resource" && r.name == "time" {
 			rules[i].value = "1"

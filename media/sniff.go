@@ -20,6 +20,7 @@ const (
 	typeWebP = "image/webp"
 	typeHEIC = "image/heic"
 	typeHEIF = "image/heif"
+	typeAVIF = "image/avif"
 	typeMP4  = "video/mp4"
 	typeMOV  = "video/quicktime"
 	typeWebM = "video/webm"
@@ -29,6 +30,11 @@ const (
 func unrecognized(what string) error {
 	return fmt.Errorf("%w: %s", ErrUnsupportedType, what)
 }
+
+// errUnnamed is what sniff returns for leading bytes that name no container:
+// the content is left to ImageMagick's detection. Every other sniff error
+// refuses a file that does name one.
+var errUnnamed = unrecognized("unrecognized content")
 
 // sniffFile returns the media type of the file at path from its leading
 // bytes alone.
@@ -59,7 +65,7 @@ func sniff(b []byte) (string, error) {
 	case len(b) >= 8 && string(b[4:8]) == "ftyp":
 		return sniffFtyp(b)
 	}
-	return "", unrecognized("unrecognized content")
+	return "", errUnnamed
 }
 
 func brandSet(brands ...string) map[string]bool {
@@ -103,6 +109,11 @@ func sniffFtyp(b []byte) (string, error) {
 		if heic && !avif {
 			return typeHEIF, nil
 		}
+		if avif && !heic {
+			return typeAVIF, nil
+		}
+	case major == "avif":
+		return typeAVIF, nil
 	case major == "qt  ":
 		return typeMOV, nil
 	case mp4Brands[major]:
@@ -230,8 +241,8 @@ func videoRouteOf(path string) (videoRoute, decoder) {
 	}
 	mediaType, err := sniff(buf)
 	if err == nil {
-		if dec, err := videoSpec.decoderFor(mediaType); err == nil {
-			return routeSniffed, dec
+		if e := typeTable[mediaType]; e.kind == kindVideo {
+			return routeSniffed, e.decoderFor("")
 		}
 		return routeNotVideo, decoder{}
 	}

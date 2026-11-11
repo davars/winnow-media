@@ -8,7 +8,7 @@
 // Processor.AnimationFrames, Processor.VideoFrames and their
 // AnimationFramesAt, VideoFramesAt and VideoFrameRun variants, and the probes
 // ProbeVideo and ProbeAnimation) run the tools themselves, for untrusted
-// input: a Processor checks the file's size and type before any tool runs,
+// input: a Processor checks the file's size and type before pixels are read,
 // pins the decoder to the type found, and runs the tools with a fixed
 // environment under a generated ImageMagick policy that it has read back from
 // the tool. The rest of the package, reached through an Env, decides
@@ -45,35 +45,37 @@
 //
 // # The gate
 //
-// Before any tool runs, a Processor operation checks that the input is a
-// regular file of at most 25 MiB and takes its type from the file's leading
-// bytes: GIF, WebP, HEIC and HEIF, MP4 and QuickTime, WebM and Matroska. The
-// name and any claim of the caller are never consulted; a file that is not of
-// a type the operation accepts gives an error wrapping ErrUnsupportedType,
-// which names the type found. The decoder is then pinned to that type, so no
-// tool picks a format from content. The accepted types, decoder pins and tools
-// of each operation are not part of the API.
+// Before pixels are read, a Processor operation checks that the input is a
+// regular file of at most Config.Caps.MaxInputBytes and takes its type from
+// its bytes alone. A GIF, WebP, ISO base media file (HEIC, HEIF, AVIF, MP4,
+// QuickTime) or EBML file (WebM, Matroska) is typed by its leading bytes
+// before any tool runs, and so is every animation and video type: other
+// content is refused by those operations without a tool run. For Still, other
+// content is named by the one header read that the decode needs, under the
+// generated policy, and the coder it reports is looked up in the table of
+// Types. The input is read through an extensionless link in the Processor's
+// private directory, so no tool is given the file's name or can let it choose
+// the format; the decoder is then pinned to the type found.
+//
+// The type must be in Config.Types and be read by the operation, else the
+// call gives an error wrapping ErrUnsupportedType, which names the type
+// found. SVG, MVG, MSL, PostScript, EPS, PDF and text are never in Types:
+// ImageMagick reads them through delegates or with external-reference or
+// scripting semantics. Some types in Types are not identified from content
+// and are decoded only when the caller names them (see Types), and a TIFF
+// whose first image is a reduced-resolution preview, as in a camera raw file,
+// is refused.
 //
 // # The caps
 //
 // Image headers are read without decoding pixels (-ping), here and in
 // Env.Open, and an input is refused with an error wrapping ErrTooLarge, naming
-// the cap and the values, when:
-//
-//   - a frame is wider or taller than 16384 pixels or has more than 52 million;
-//   - an animation's canvas (the largest width by the largest height over its
-//     frames) has more than 52 million pixels;
-//   - an animation has more than 2000 frames, or more than 900 million pixels
-//     to decode (all frames times the canvas);
-//   - a video stream is wider or taller than 16384 or longer than six hours
-//     (the stream's duration, else the container's), or a video container
-//     holds more than 32 streams.
-//
-// AnimationFrames and AnimationFramesAt also refuse a call whose returned
-// frames times the canvas exceed 64 million pixels; the message names the
-// largest count that fits. The frame caps apply to a still as it is decoded,
-// not as it is stored (see Env.Open); a refusal names both sizes. Where the
-// numbers come from is recorded in docs/measurements.md.
+// the cap and the values, when it is over a limit of Config.Caps, whose doc
+// comment states each limit and its ceiling. The frame caps apply to a still
+// as it is decoded, not as it is stored (see Env.Open); a refusal names both
+// sizes. The Env methods take no Config and hold to fixed caps (25 MiB, 52
+// million pixels per frame, 64 million returned, 900 million decoded, 2000
+// frames). Where the numbers come from is recorded in docs/measurements.md.
 //
 // # The sandbox
 //
@@ -128,9 +130,11 @@
 // call returns (a killed process, or a helper killed after its wait delay, can
 // leave it). There is no PATH, HOME or XDG_CONFIG_HOME, so no configuration
 // file of the caller's can widen the policy. The generated policy.xml is
-// derived from the coders each operation uses: it denies every delegate and
-// every coder, then allows the used coders for reading, writing or both,
-// denies @ indirect reads and sets ceilings on memory, map, disk, area, width,
+// derived from Config.Types: it denies every delegate and every coder, then
+// allows the coders of those types and those the operations use themselves
+// (the profile and intermediate formats, the output formats) for reading,
+// writing or both, so that content can name no other coder. It also denies
+// @ indirect reads and sets ceilings on memory, map, disk, area, width,
 // height, list length, time and threads. The memory, map, disk, time and thread
 // ceilings are those of the Processor's Resources.
 //
@@ -225,6 +229,8 @@ type Env struct {
 
 	// resources, when set, replaces Memory: a Processor's resolved Resources.
 	resources *Resources
+	// caps, when set, replaces the Env methods' caps: a Processor's.
+	caps *caps
 
 	// compose runs the frame compositor; it is set only by a Processor.
 	compose composer
@@ -236,6 +242,14 @@ func (e Env) limits() (Resources, error) {
 		return *e.resources, nil
 	}
 	return e.Memory.resources()
+}
+
+// capValues returns the caps the Env's opens are held to.
+func (e Env) capValues() caps {
+	if e.caps != nil {
+		return *e.caps
+	}
+	return envCaps
 }
 
 // threads is the thread count of the Env's ffmpeg and ffprobe runs; an

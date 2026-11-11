@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,26 +142,21 @@ func TestVideoFramesRefusals(t *testing.T) {
 	}
 }
 
-func TestVideoSpecPins(t *testing.T) {
+func TestVideoTypePins(t *testing.T) {
 	t.Parallel()
 	pins := map[string]string{}
-	for _, in := range videoSpec.inputs {
-		pins[in.mediaType] = in.decoder.tool + ":" + in.decoder.name
+	for typ, e := range typeTable {
+		if e.kind&kindVideo != 0 {
+			dec := e.decoderFor("")
+			pins[typ] = dec.tool + ":" + dec.name
+		}
 	}
 	want := map[string]string{
 		"video/mp4": "ffmpeg:mov", "video/quicktime": "ffmpeg:mov",
 		"video/webm": "ffmpeg:matroska", "video/x-matroska": "ffmpeg:matroska",
 	}
-	if len(pins) != len(want) {
-		t.Errorf("pins = %v", pins)
-	}
-	for k, v := range want {
-		if pins[k] != v {
-			t.Errorf("pin for %s = %q, want %q", k, pins[k], v)
-		}
-	}
-	if !slices.Equal(videoSpec.tools, []string{"ffprobe", "ffmpeg", "magick"}) {
-		t.Errorf("tools = %v", videoSpec.tools)
+	if !maps.Equal(pins, want) {
+		t.Errorf("pins = %v, want %v", pins, want)
 	}
 }
 
@@ -542,7 +538,7 @@ func TestVideoFramesGoldenArgv(t *testing.T) {
 				if _, _, err := p.VideoFrames(context.Background(), input, c.enc, 3, out); err != nil {
 					t.Fatal(err)
 				}
-				checkGolden(t, c.name+"-"+path.name, goldenArgv(rec.calls, input, out))
+				checkGolden(t, c.name+"-"+path.name, goldenArgv(rec.calls, out))
 			})
 		}
 	}

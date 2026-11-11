@@ -106,7 +106,22 @@ func TestRunnerRefusesDangerousCoders(t *testing.T) {
 	}
 }
 
-func TestMVGGivenToOperationsIsUnsupportedWithoutRunningATool(t *testing.T) {
+// onlyTypeDetection fails the test unless the recorded runs are at most the
+// one header read that names the input's coder, which is all a refusal may
+// cost.
+func onlyTypeDetection(t *testing.T, rec *recorder) {
+	t.Helper()
+	if len(rec.calls) > 1 {
+		t.Errorf("%d tool runs, want at most the header read: %q", len(rec.calls), rec.calls)
+	}
+	for _, call := range rec.calls {
+		if !slices.Contains(call, "-ping") || !slices.Contains(call, gateHeaderFormat) {
+			t.Errorf("run %q is not the gate's header read", call)
+		}
+	}
+}
+
+func TestMVGGivenToOperationsIsUnsupportedWithoutDecoding(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
@@ -119,12 +134,10 @@ func TestMVGGivenToOperationsIsUnsupportedWithoutRunningATool(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
 		}
 	}
-	if n := rec.count(); n != 0 {
-		t.Errorf("%d tool runs", n)
-	}
+	onlyTypeDetection(t, rec)
 }
 
-func TestPNGNamedGIFIsUnsupportedWithoutRunningATool(t *testing.T) {
+func TestPNGNamedGIFIsUnsupportedWithoutDecoding(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
@@ -137,9 +150,7 @@ func TestPNGNamedGIFIsUnsupportedWithoutRunningATool(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
 		}
 	}
-	if n := rec.count(); n != 0 {
-		t.Errorf("%d tool runs", n)
-	}
+	onlyTypeDetection(t, rec)
 }
 
 func zipBytes(t *testing.T) []byte {
@@ -194,7 +205,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 			}
 			for _, call := range rec.calls {
 				if !slices.ContainsFunc(call, func(a string) bool {
-					return strings.HasPrefix(a, "gif:"+path) || strings.HasPrefix(a, out)
+					return strings.HasPrefix(a, "gif:") || strings.HasPrefix(a, out)
 				}) {
 					t.Errorf("run %q neither pins the gif decoder nor reads an output", call)
 				}
@@ -205,7 +216,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 
 func TestInputSizeCap(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	rec := record(p)
 	header := gifBytes(1, 1)
 	over := writeFile(t, "big.gif", header)
@@ -234,7 +245,7 @@ func TestInputSizeCap(t *testing.T) {
 
 func TestHeaderCapRefusesBeforeDecoding(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	for name, g := range map[string][]byte{
 		"too wide":        gifBytes(maxDimension+1, 10),
 		"too tall":        gifBytes(10, maxDimension+1),
@@ -286,6 +297,7 @@ func TestCheckSceneHeaders(t *testing.T) {
 		{"height over cap", frames(1, 1, maxDimension+1), false, true},
 		{"canvas width over cap", []sceneHeader{{width: 10, height: 10, canvasW: maxDimension + 1, canvasH: 10}}, false, true},
 		{"frame pixels over cap", frames(1, 5311, 9791), false, true},
+		{"frame over cap, small canvas", []sceneHeader{{width: 8000, height: 6501, canvasW: 10, canvasH: 10}}, false, true},
 		{"frame pixels at cap", frames(1, 8000, 6500), false, false},
 		{"decoded pixels at cap", frames(900, 1000, 1000), true, false},
 		{"decoded pixels one row over", frames(900, 1000, 1001), true, true},
@@ -299,7 +311,7 @@ func TestCheckSceneHeaders(t *testing.T) {
 		{"decoded pixels use largest canvas", append(frames(1000, 10, 10), sceneHeader{width: 1000, height: 1000, canvasW: 1000, canvasH: 1000}), true, true},
 	}
 	for _, c := range cases {
-		err := checkSceneHeaders(c.scenes, c.animated)
+		err := checkSceneHeaders(c.scenes, c.animated, envCaps)
 		if got := errors.Is(err, ErrTooLarge); got != c.tooLarge || (err != nil && !got) {
 			t.Errorf("%s: err = %v, want ErrTooLarge = %v", c.name, err, c.tooLarge)
 		}
@@ -331,7 +343,7 @@ func TestCheckReturnedPixels(t *testing.T) {
 		{"64 frames one row over", 64, 1000, 1001, true, "at most 63 frames fit"},
 	}
 	for _, c := range cases {
-		err := checkReturnedPixels(c.count, c.w, c.h)
+		err := checkReturnedPixels(c.count, c.w, c.h, envCaps)
 		if got := errors.Is(err, ErrTooLarge); got != c.refused || (err != nil && !got) {
 			t.Errorf("%s: err = %v, want refused = %v", c.name, err, c.refused)
 		}
@@ -416,7 +428,7 @@ func manyFrameGIF(w, h, n int) []byte { return gifFrames(w, h, 1, 1, n) }
 
 func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Caps: envTestCaps})
 	cases := map[string][]byte{
 		"too many frames":       manyFrameGIF(1, 1, maxAnimationFrames+1),
 		"too many total pixels": manyFrameGIF(1000, 1000, 901),

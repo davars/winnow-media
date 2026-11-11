@@ -98,7 +98,7 @@ func TestEffectiveResources(t *testing.T) {
   Throttle: 0
   Time: 5 minutes
 `
-	want := processorPolicy(defaultResources())
+	want := processorPolicy(defaultResources(), Types())
 	limits := parseResourceList([]byte(listed))
 	if err := checkEffectiveResources(limits, want); err != nil {
 		t.Errorf("matching limits refused: %v", err)
@@ -146,7 +146,8 @@ func TestResourceNumber(t *testing.T) {
 func TestProcessorPolicyContents(t *testing.T) {
 	t.Parallel()
 	var coders []string
-	for _, r := range processorPolicy(defaultResources()) {
+	types := []string{"image/gif", "image/webp", "image/heic", "image/heif", "video/mp4"}
+	for _, r := range processorPolicy(defaultResources(), types) {
 		if r.domain == "coder" && r.pattern != "*" {
 			coders = append(coders, r.pattern+"="+r.rights)
 		}
@@ -158,7 +159,7 @@ func TestProcessorPolicyContents(t *testing.T) {
 	if !slices.Equal(coders, want) {
 		t.Errorf("coder rules %v, want %v", coders, want)
 	}
-	if got, again := policyXML(processorPolicy(defaultResources())), policyXML(processorPolicy(defaultResources())); string(got) != string(again) {
+	if got, again := policyXML(processorPolicy(defaultResources(), Types())), policyXML(processorPolicy(defaultResources(), Types())); string(got) != string(again) {
 		t.Error("policy XML is not deterministic")
 	}
 }
@@ -170,7 +171,7 @@ func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != string(policyXML(processorPolicy(defaultResources()))) {
+	if string(data) != string(policyXML(processorPolicy(defaultResources(), Types()))) {
 		t.Error("installed policy differs from the generated one")
 	}
 	if info, err := os.Stat(p.tmpDir()); err != nil || !info.IsDir() {
@@ -186,7 +187,7 @@ func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
 
 func TestProcessorPolicyDeniesEverythingFirst(t *testing.T) {
 	t.Parallel()
-	rules := processorPolicy(defaultResources())
+	rules := processorPolicy(defaultResources(), Types())
 	index := func(domain, pattern string) int {
 		for i, r := range rules {
 			if r.domain == domain && r.pattern == pattern && r.rights == "none" {
