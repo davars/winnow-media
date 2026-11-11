@@ -1,0 +1,129 @@
+name: pr-commands
+
+# Commands the repository owner comments on a pull request that targets main:
+#
+#   /fast-forward  moves main to the pull request's head commit, unchanged.
+#                  It refuses unless every check on that commit has passed and
+#                  main is an ancestor of it.
+#   /rebase        rebases the pull request's branch onto main, force-pushes
+#                  it and starts CI on it (a push made with the workflow's
+#                  token does not start workflows itself).
+#
+# Comments from anyone else are ignored. The workflow always runs as it is on
+# main, so a pull request cannot change what these commands do.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: pr-commands
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PR: ${{ github.event.issue.number }}
+
+jobs:
+  fast-forward:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/fast-forward' &&
+      github.event.comment.user.login == github.repository_owner
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Check the pull request and its checks
+        id: check
+        run: |
+          set -euo pipefail
+          fail() { echo "reason=$1" >> "$GITHUB_OUTPUT"; echo "::error::$1"; exit 1; }
+          view=$(gh pr view "$PR" --json state,baseRefName,headRefOid,statusCheckRollup)
+          [ "$(jq -r .state <<<"$view")" = OPEN ] || fail "the pull request is not open"
+          [ "$(jq -r .baseRefName <<<"$view")" = main ] || fail "the pull request does not target main"
+          head=$(jq -r .headRefOid <<<"$view")
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          # A check run passes as SUCCESS, NEUTRAL or SKIPPED, a commit status
+          # as SUCCESS; anything else, including one still running, refuses.
+          total=$(jq '.statusCheckRollup | length' <<<"$view")
+          failing=$(jq -r '.statusCheckRollup[]
+            | select((.conclusion // .state) as $s | ["SUCCESS","NEUTRAL","SKIPPED"] | index($s) | not)
+            | "\(.name // .context): \(.conclusion // .state // .status)"' <<<"$view")
+          [ "$total" -gt 0 ] || fail "no checks have run on $head"
+          [ -z "$failing" ] || fail "checks on $head have not all passed: $(tr '\n' ';' <<<"$failing")"
+          git fetch --quiet origin "refs/pull/$PR/head"
+          [ "$(git rev-parse FETCH_HEAD)" = "$head" ] || fail "the pull request's head moved while checking"
+          git merge-base --is-ancestor origin/main "$head" || fail "main is not an ancestor of $head; comment /rebase first"
+
+      - name: Move main to the head commit
+        env:
+          HEAD_SHA: ${{ steps.check.outputs.head }}
+        run: git push origin "$HEAD_SHA:refs/heads/main"
+
+      - name: Report a refusal
+        if: failure()
+        env:
+          REASON: ${{ steps.check.outputs.reason }}
+        run: |
+          gh pr comment "$PR" --body "Not fast-forwarded: ${REASON:-the push to main failed; see the run}. $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  rebase:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/rebase' &&
+      github.event.comment.user.login == github.repository_owner
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rebase the branch onto main
+        id: rebase
+        env:
+          # The rebased commits keep their authors; the commenter commits them.
+          GIT_COMMITTER_NAME: ${{ github.event.comment.user.login }}
+          GIT_COMMITTER_EMAIL: ${{ github.event.comment.user.id }}+${{ github.event.comment.user.login }}@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          fail() { echo "reason=$1" >> "$GITHUB_OUTPUT"; echo "::error::$1"; exit 1; }
+          view=$(gh pr view "$PR" --json state,baseRefName,headRefName,headRefOid,isCrossRepository)
+          [ "$(jq -r .state <<<"$view")" = OPEN ] || fail "the pull request is not open"
+          [ "$(jq -r .baseRefName <<<"$view")" = main ] || fail "the pull request does not target main"
+          [ "$(jq -r .isCrossRepository <<<"$view")" = false ] || fail "the branch is in another repository"
+          branch=$(jq -r .headRefName <<<"$view")
+          head=$(jq -r .headRefOid <<<"$view")
+          git fetch --quiet origin "refs/heads/$branch"
+          [ "$(git rev-parse FETCH_HEAD)" = "$head" ] || fail "the branch moved while checking"
+          if git merge-base --is-ancestor origin/main "$head"; then
+            echo "result=already on main at $(git rev-parse --short origin/main)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git checkout --quiet --detach "$head"
+          if ! git rebase origin/main; then
+            conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            git rebase --abort
+            fail "rebasing onto main conflicts in: $conflicts"
+          fi
+          git push --force-with-lease="refs/heads/$branch:$head" origin "HEAD:refs/heads/$branch"
+          gh workflow run ci.yml --ref "$branch"
+          echo "result=rebased onto main at $(git rev-parse --short origin/main), now $(git rev-parse --short HEAD); CI started" >> "$GITHUB_OUTPUT"
+
+      - name: Report the result
+        if: always()
+        env:
+          RESULT: ${{ steps.rebase.outputs.result }}
+          REASON: ${{ steps.rebase.outputs.reason }}
+        run: |
+          if [ -n "$RESULT" ]; then msg="Branch $RESULT."; else msg="Not rebased: ${REASON:-see the run}."; fi
+          gh pr comment "$PR" --body "$msg $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
