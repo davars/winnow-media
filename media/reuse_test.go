@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // encodeAll encodes sel at targets from src into a new directory and returns
@@ -22,6 +23,7 @@ func encodeAll(t *testing.T, src *Source, sel Select, targets ...Encoding) map[s
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireKeptAgrees(t, src)
 	out := map[string][]byte{}
 	for _, im := range images {
 		out[im.Name] = mustRead(t, filepath.Join(dir, im.Name))
@@ -247,6 +249,7 @@ func reusedAfterFirst(t *testing.T, p *Processor, path string, enc Encoding) *So
 	if src.kept[0] == nil {
 		t.Fatal("the decode was not kept")
 	}
+	requireKeptAgrees(t, src)
 	return src
 }
 
@@ -1125,5 +1128,167 @@ func TestReuseOpaqueEncodeGivesTheFusedBytes(t *testing.T) {
 				sameBytes(t, "from the kept decode", encodeAll(t, reuse, Select{}, enc), whole)
 			})
 		}
+	}
+}
+
+// requireKeptAgrees fails unless KeptBytes is what the disk budget counts.
+func requireKeptAgrees(t *testing.T, src *Source) {
+	t.Helper()
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if got, want := src.keptTotal.Load(), src.keptBytes(); got != want {
+		t.Errorf("KeptBytes = %d, the budget counts %d", got, want)
+	}
+}
+
+// keptFileSizes is the sum of the sizes on disk of the files src keeps.
+func keptFileSizes(t *testing.T, src *Source) int64 {
+	t.Helper()
+	var n int64
+	for _, kd := range src.kept {
+		for _, path := range []string{kd.pam, kd.icc} {
+			if path == "" {
+				continue
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n += info.Size()
+		}
+	}
+	return n
+}
+
+func TestKeptBytesIsTheSizeOfTheKeptFiles(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
+	if got := src.KeptBytes(); got != 0 {
+		t.Errorf("KeptBytes before an Encode = %d, want 0", got)
+	}
+	encodeAll(t, src, Select{}, Encoding{Format: PNG, MaxEdge: 64})
+	if src.kept[0] == nil || src.kept[0].icc == "" {
+		t.Fatal("no kept decode with a profile")
+	}
+	want := keptFileSizes(t, src)
+	if got := src.KeptBytes(); got != want || got <= 0 {
+		t.Errorf("KeptBytes = %d, want %d", got, want)
+	}
+	if got := src.KeptBytes(); got != src.keptBytes() {
+		t.Errorf("KeptBytes = %d, the budget counts %d", got, src.keptBytes())
+	}
+}
+
+func TestKeptBytesFollowsEviction(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	path := writeFile(t, "pages.tif", tiffPages(0, 0, 0))
+	enc := Encoding{Format: PNG, MaxEdge: 16}
+	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	encodeAll(t, src, Select{Frames: Indices(0, 1)}, enc)
+	two := src.KeptBytes()
+	if want := keptFileSizes(t, src); two != want || len(src.kept) != 2 {
+		t.Fatalf("KeptBytes = %d with %d kept, want %d with 2", two, len(src.kept), want)
+	}
+	encodeAll(t, src, Select{Frames: Indices(1)}, enc)
+	one := src.KeptBytes()
+	if want := keptFileSizes(t, src); one != want || one >= two {
+		t.Errorf("after eviction KeptBytes = %d, want %d (below %d)", one, want, two)
+	}
+}
+
+func TestKeptBytesIsZeroWithoutReuseAndAfterClose(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	path := heicFixtureFile(t, "adobe-256x96")
+	enc := Encoding{Format: PNG, MaxEdge: 64}
+	plain := openSourceOn(t, p, path, OpenOptions{})
+	encodeAll(t, plain, Select{}, enc)
+	if got := plain.KeptBytes(); got != 0 {
+		t.Errorf("KeptBytes without Reuse = %d, want 0", got)
+	}
+	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	encodeAll(t, src, Select{}, enc)
+	if src.KeptBytes() == 0 {
+		t.Fatal("nothing kept")
+	}
+	if err := src.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := src.KeptBytes(); got != 0 {
+		t.Errorf("KeptBytes after Close = %d, want 0", got)
+	}
+	requireKeptAgrees(t, src)
+}
+
+func TestKeptBytesIsSafeDuringEncodes(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
+	enc := Encoding{Format: WebP, MaxEdge: 48}
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			sel := Select{Region: Region{X: i * 10, Y: i, Width: 60, Height: 40}}
+			if _, _, err := src.Encode(context.Background(), t.TempDir(), sel, enc); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				if n := src.KeptBytes(); n < 0 {
+					t.Error(n)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if got, want := src.KeptBytes(), keptFileSizes(t, src); got != want {
+		t.Errorf("KeptBytes = %d, want %d", got, want)
+	}
+}
+
+func TestKeptBytesDoesNotWaitForAnEncode(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	src := reusedAfterFirst(t, p, heicFixtureFile(t, "adobe-256x96"), Encoding{Format: PNG, MaxEdge: 64})
+	want := src.KeptBytes()
+	if want == 0 {
+		t.Fatal("nothing kept")
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	inner := p.run
+	var once sync.Once
+	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
+		once.Do(func() { close(entered) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return inner(ctx, name, args...)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := src.Encode(context.Background(), t.TempDir(), Select{Region: Region{X: 3, Y: 2, Width: 50, Height: 40}}, Encoding{Format: PNG, MaxEdge: 32})
+		done <- err
+	}()
+	<-entered
+	got := make(chan int64, 1)
+	go func() { got <- src.KeptBytes() }()
+	select {
+	case n := <-got:
+		if n != want {
+			t.Errorf("KeptBytes during an Encode = %d, want %d", n, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("KeptBytes waits for the running Encode")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

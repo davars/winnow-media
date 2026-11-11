@@ -302,6 +302,7 @@ func (s *Source) adoptKept(k int, es *EnvSource) {
 		return
 	}
 	s.kept[k] = kd
+	s.syncKept()
 }
 
 // recordKept returns the record of the kept decode kp's run wrote. Its error
@@ -358,8 +359,9 @@ func (s *Source) recordKept(kp *keepPlan, es *EnvSource) (*keptDecode, error) {
 	return kd, nil
 }
 
-// dropKept deletes the kept decode of image k.
-func (s *Source) dropKept(k int) {
+// removeKept deletes the files of the kept decode of image k and forgets it,
+// leaving keptTotal to the caller.
+func (s *Source) removeKept(k int) {
 	kd := s.kept[k]
 	if kd == nil {
 		return
@@ -371,14 +373,25 @@ func (s *Source) dropKept(k int) {
 	delete(s.kept, k)
 }
 
+// dropKept deletes the kept decode of image k.
+func (s *Source) dropKept(k int) {
+	s.removeKept(k)
+	s.syncKept()
+}
+
 // dropKeptExcept deletes the kept decodes of the images not in idx.
 func (s *Source) dropKeptExcept(idx []int) {
 	for k := range s.kept {
 		if !slices.Contains(idx, k) {
-			s.dropKept(k)
+			s.removeKept(k)
 		}
 	}
+	s.syncKept()
 }
+
+// syncKept stores keptBytes for KeptBytes. Every change to s.kept ends in it,
+// under s.mu.
+func (s *Source) syncKept() { s.keptTotal.Store(s.keptBytes()) }
 
 // keptBytes is the disk the kept decodes and their profiles hold.
 func (s *Source) keptBytes() int64 {

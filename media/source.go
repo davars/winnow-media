@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Kind is how a Source's frames are read.
@@ -51,7 +52,7 @@ type OpenOptions struct {
 	// Reuse, as is a type or image whose kept decode would not be exact (more
 	// than 16 bits a channel, floating-point samples, a colorspace a PAM
 	// does not carry) or that does not fit. Animations and videos ignore
-	// Reuse.
+	// Reuse. Source.KeptBytes reports what is held.
 	Reuse bool
 }
 
@@ -143,6 +144,9 @@ type Source struct {
 	// reuse is OpenOptions.Reuse; kept holds the decodes it keeps, by image.
 	reuse bool
 	kept  map[int]*keptDecode
+	// keptTotal is keptBytes, stored at each change to kept for KeptBytes to
+	// read without mu.
+	keptTotal atomic.Int64
 	// noKeep holds the images no later call could keep.
 	noKeep map[int]bool
 	// profiled are the images whose profile has been read in full.
@@ -364,6 +368,16 @@ func (s *Source) Info() Info {
 	return s.info.clone()
 }
 
+// KeptBytes returns the bytes on disk the Source holds in the decodes
+// OpenOptions.Reuse keeps: their PAM files and ICC profile files, the figure
+// the disk budget counts. It is 0 for a Source opened without Reuse, before
+// the first Encode, once a kept decode is dropped and after Close. It is safe
+// to call at any time and does not wait for an Encode that is running: it
+// reports the total as of the last completed change to what is kept.
+func (s *Source) KeptBytes() int64 {
+	return s.keptTotal.Load()
+}
+
 // Close closes the input and removes the Source's scratch. It is idempotent,
 // and waits for a call that is running. Images already written are not
 // affected.
@@ -377,6 +391,7 @@ func (s *Source) Close() error {
 	s.release()
 	s.p.forget(s)
 	s.stills, s.frames, s.kept = nil, nil, nil
+	s.syncKept()
 	return s.file.Close()
 }
 
