@@ -726,12 +726,14 @@ func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
 	var fixtures []fixture
 	for _, sz := range [][2]int{{600, 401}, {1999, 1334}, {2048, 2048}} {
 		for _, orientation := range []int{0, 6} {
-			fixtures = append(fixtures, fixture{fmt.Sprintf("jpeg %dx%d/o%d", sz[0], sz[1], orientation), orientation, jpegTargets,
+			fixtures = append(fixtures, fixture{
+				fmt.Sprintf("jpeg %dx%d/o%d", sz[0], sz[1], orientation), orientation, jpegTargets,
 				func(t *testing.T, dir string) string {
 					path := filepath.Join(dir, "x.jpg")
 					magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
 					return path
-				}})
+				},
+			})
 		}
 	}
 	fixtures = append(fixtures, fixture{"tiff 16-bit with alpha and a profile", 0, tiffTargets, func(t *testing.T, dir string) string {
