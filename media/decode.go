@@ -275,8 +275,10 @@ type Source struct {
 // decoded when it is encoded, at a size that covers its targets); any other
 // image is decoded by ImageMagick, in the same run as the encode. A file of
 // several images that is neither a GIF nor a WebP is refused with
-// ErrUnsupportedType unless h.Still is set. An animation over the
-// caps is refused with ErrTooLarge before any frame is decoded. A still that
+// ErrUnsupportedType unless h.Still is set. An animation over the caps is
+// refused with ErrTooLarge before any frame is decoded. A GIF that ends
+// between blocks without its trailer is accepted; one truncated inside a
+// block, or with a frame outside the logical screen, is refused. A still that
 // no decode stage can reduce is refused here if its stored size is over the
 // caps, a WebP included, as libwebp's scaling does not bound its memory; one
 // that can be reduced is judged by Encode against its targets.
@@ -989,41 +991,28 @@ func (s *Source) decodeWebP(ctx context.Context, size [2]int) (srcFrame, stillMe
 // a target's Format must be WebP when there are several. A frame identical or
 // nearly so to the one before it is merged into its scene by the WebP writer,
 // so Artifact.Frames says which frames the file shows, each at the time it
-// starts. When each rung's count divides the count Open selected (a halving
-// ladder from 12, 16, 20, 24 or 32 does; one from 14 or 18 does not), the
-// frames of a budget are the source frames that rung selects of the whole
-// file.
+// starts. When each budget divides the count Open selected (a halving ladder
+// from 12, 16, 20, 24 or 32 does; one from 14 or 18 does not), the frames of a
+// budget are the source frames it selects of the whole file.
 //
 // A still is decoded once for all targets: in one ImageMagick run that writes
 // every target, each from a clone of the decoded image, except a WebP, which
 // webp-frames decodes once and each target is encoded from in a run of its
 // own. A still is refused with ErrTooLarge, before any pixel is decoded, when
 // the frame the decode yields for these targets has a side over 16384 or more
-// than 52 million pixels. A JPEG is decoded at a reduced size (-define
-// jpeg:size) when the largest target is far smaller: the smallest eighth of
-// the stored size that covers twice every target in both dimensions. It is
-// then judged at the reduced size, and its output size is computed in Go from
-// the header's size and orientation, because ImageMagick would round each side
-// of the reduced frame separately. A header read made with the hint confirms
-// the size the decoder will produce, since a lossless JPEG ignores it; when it
-// differs from the computed size the JPEG is decoded and judged unreduced, as
+// than 52 million pixels. A JPEG is decoded at a reduced size when the largest
+// target is far smaller (the smallest eighth of the stored size that covers
+// twice every target in both dimensions) and is then judged at the reduced
+// size; a lossless JPEG, which ignores the reduction, is judged unreduced, as
 // is any other still, at its stored size. One target that needs no resize
 // makes the decode full-size for all targets of the call.
 //
-// A still WebP is always decoded by webp-frames still, at twice the largest
-// target in the stored aspect, never upscaled, when every target needs a
-// resize and that is at most 7/8 of the stored size on both sides, and at the
-// stored size otherwise. The frame carries no orientation tag, so the
-// orientation is the hint if there is one, else the first EXIF directory when
-// it settles it, else what ImageMagick's read of the whole image reports. The
-// package's reading of the EXIF declines, and asks ImageMagick, when an entry
-// before the orientation has a type outside 1 to 12, a count of 2^31 or more or
-// is a pointer to another directory, when the orientation is not a single
-// SHORT of 1 to 8, and when the file has an XMP chunk, which ImageMagick also
-// reads an orientation from. The metadata comes from the tool, which reads it
-// as ImageMagick does, through libwebp's mux: a file whose chunks the mux
-// refuses has no EXIF and no profile for ImageMagick, is decoded all the same,
-// and so is oriented as stored.
+// A still WebP is decoded by webp-frames at twice the largest target, never
+// upscaled, when every target needs a resize and that is at most 7/8 of the
+// stored size on both sides, and at the stored size otherwise. The decoded
+// frame carries no orientation tag, so the orientation is the hint if there is
+// one, else the file's first EXIF directory when it settles it, else what
+// ImageMagick's read of the whole image reports.
 //
 // A video's samples are read by the first Encode, once per seek or by one
 // select decode as Processor.VideoFrames does, at the size its targets need; a
@@ -1260,8 +1249,16 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 		return images, nil
 	}
 
-	// The compositor waits for each batch to be consumed, so the directory
-	// holds about one batch.
+	// The compositor writes each selected frame as an uncompressed PAM file
+	// and waits for each batch to be consumed before writing more, so the
+	// directory holds about one batch; Open, which keeps every frame until
+	// Close, sets inFlight to all of them instead. ImageMagick encodes a batch
+	// per run, of at most encodeBatchPixels input pixels. The GIF compositor
+	// first checks the block structure (frame count, every frame inside the
+	// logical screen), composites as -coalesce does and stops after the last
+	// selected frame. The animated WebP compositor runs libwebp's animation
+	// decoder, which composites one frame at a time; it is told the canvas
+	// and frame count of the header read and refuses a file that differs.
 	var pending []encodeFrame
 	var pendingPaths []string
 	flush := func() error {

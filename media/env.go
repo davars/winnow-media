@@ -34,21 +34,14 @@
 //   - Video: ffprobe, ffmpeg and ImageMagick.
 //   - Any other image: ImageMagick, in the same run as the encode.
 //
-// The compositors write each selected frame as an uncompressed PAM file and
-// wait for ImageMagick to consume it before writing more, so the directory
-// holds about one batch. ImageMagick encodes the frames in batches of at most
-// 16 million input pixels (about 256 MiB), resizing, flattening on white for
-// JPEG and stripping metadata. The GIF compositor checks the block structure
-// first (frame count, every frame inside the logical screen), composites as
-// ImageMagick's -coalesce does and stops after the last selected frame. The
-// animated WebP compositor runs libwebp's animation decoder, which composites
-// one frame at a time; it is told the canvas and frame count of the header
-// read and refuses a file that differs. An ICC profile of either is written
-// beside the frames, assigned to them and converted to sRGB; ImageMagick's own
-// decode of an animated WebP ignores the profile, as it ignores the EXIF
-// orientation, so an oriented animation is output as stored, which is why a
-// WebP with the animation flag always goes through webp-frames, even with one
-// frame.
+// A GIF or animated WebP is composited by Open onto a full canvas in
+// Env.Scratch, where every Encode reads the selected frames; a Processor
+// streams them instead, so its output directory holds only a batch at a time.
+// Each frame is assigned the ICC profile it carries (a GIF may carry several)
+// and converted to sRGB. ImageMagick's own decode of an animated WebP ignores
+// the profile, as it ignores the EXIF orientation, so an oriented animation
+// would be output as stored; this is why a WebP with the animation flag always
+// goes through webp-frames, even with one frame.
 //
 // # The gate
 //
@@ -133,11 +126,12 @@
 // of the MemoryProfile; the disk ceiling is 4 GiB whatever the profile.
 //
 // Every ffprobe and ffmpeg run opens its input with -protocol_whitelist file,
-// so a nested input cannot reach the network, and the pinned -f demuxer; for
-// mov also -enable_drefs 0, so a track's reference to an external data file is
-// not followed. Each ffmpeg run also sets -threads (4, or 2 for a source over
-// 4096x2160), -filter_threads of the same count and -max_alloc of 1 GiB;
-// ffprobe sets -threads 4 and the same -max_alloc.
+// so a nested input cannot reach the network. A Processor's runs also pin the
+// -f demuxer to the type found (for mov with -enable_drefs 0, so a track's
+// reference to an external data file is not followed); through an Env, an
+// input whose bytes name no video type is limited to the container formats
+// ffmpeg may detect, which exclude playlist and list formats that would open
+// other files. Each run also bounds ffmpeg's allocation, and its threads.
 package media
 
 import (

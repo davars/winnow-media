@@ -43,20 +43,17 @@ const (
 	// within the 1536Mi deployment limit.
 	maxFramePixels = 52_000_000
 	// maxAnimationFrames is the most frames an animation may hold. It is a
-	// structural bound, not a time bound: the header read holds about 62 KiB
-	// per frame (10000 frames of a GIF peaked at 624 MiB in ImageMagick), and
-	// the frame count stays below the policy's list length.
+	// structural bound, not a time bound: the header read holds memory per
+	// frame (docs/measurements.md), and the frame count stays below the
+	// policy's list length.
 	maxAnimationFrames = 2000
 	// maxReturnedPixels bounds the frames a call returns times the canvas
 	// area, and maxDecodedPixels bounds all frames times the canvas area.
 	// With maxAnimationFrames they keep an animation within a 30 s budget per
-	// call on a Raspberry Pi 5: the worst admitted GIF, 225 frames of
-	// 2000x2000 with 16 returned (64 MP returned, 900 MP decoded), took 27.8 s
-	// there, and 16 frames of 2000x2000 alone took 20.2 s. A returned
-	// megapixel costs about 0.28 s and a decoded one about 0.01 s. Every frame
-	// up to the last selected is decoded because frames composite onto earlier
-	// ones, and a one-colour GIF under maxInputBytes can declare tens of
-	// gigapixels, so decoding needs its own bound.
+	// call on a Raspberry Pi 5 (docs/measurements.md). Every frame up to the
+	// last selected is decoded because frames composite onto earlier ones, and
+	// a one-colour GIF under maxInputBytes can declare tens of gigapixels, so
+	// decoding needs its own bound.
 	maxReturnedPixels = 64_000_000
 	maxDecodedPixels  = 900_000_000
 	// maxStreams is the most streams, of any kind, a video container may
@@ -72,17 +69,16 @@ const (
 const (
 	// ffmpegThreads bounds the decoder's threads and the filter graph's.
 	ffmpegThreads = 4
-	// ffmpegLargeSourcePixels is the largest source, in pixels, sampled with
-	// ffmpegThreads: 4096x2160.
+	// ffmpegLargeSourcePixels is the most pixels (not the largest side) a
+	// source may have, 4096x2160, and be sampled with ffmpegThreads.
 	ffmpegLargeSourcePixels = 4096 * 2160
-	// ffmpegLargeSourceThreads replaces ffmpegThreads above that size. The
-	// HEVC decoder holds about one frame per thread plus references, so its
-	// memory is threads times frame size: an 8K 10-bit HLG source peaked at
-	// 1811 MiB with 4 threads and 1280 MiB with 2, for 28% more time.
+	// ffmpegLargeSourceThreads replaces ffmpegThreads for a source with more
+	// pixels than that. The HEVC decoder holds about one frame per thread plus
+	// references, so its memory is threads times frame size; the measurement
+	// is in docs/measurements.md.
 	ffmpegLargeSourceThreads = 2
 	// ffmpegMaxAlloc is the largest single allocation ffmpeg may make, in
-	// bytes. A 4K HDR frame needs 32 MiB, one float plane of the tone-mapping
-	// filters; 1 GiB is four times what an 8K frame needs.
+	// bytes: four times what an 8K frame needs (docs/measurements.md).
 	ffmpegMaxAlloc = 1 << 30
 )
 
@@ -115,10 +111,8 @@ var composeTimeout = consumeTimeout
 // ErrTooLarge, instead of failing inside the tool. Memory, map and disk
 // together hold the pixel cache of the frames a call returns, at
 // maxReturnedPixels, because the compositor decodes the rest outside the
-// tool; time is at least four times the longest ImageMagick operation
-// measured to complete (36 s); a Raspberry Pi 5 measured at worst about 4
-// times a 12-CPU x86_64 host (CPU 4.1 times for 4K HEVC decode, wall time 4.0
-// times for two 8000x8000 GIF frames).
+// tool; time is a multiple of the longest ImageMagick operation measured to
+// complete, with margin for a slower host (docs/measurements.md).
 const (
 	policyDisk       = "4GiB"
 	policyArea       = "512MP"
