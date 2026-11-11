@@ -41,7 +41,7 @@ func TestVideoPlanReducesTheRegion(t *testing.T) {
 	info := videoInfo{width: 1600, height: 1200, frames: 10}
 	r := region{100, 50, 400, 300}
 	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 20, maxArea: 400}
-	plan := newVideoPlan(info, r, enc)
+	plan := newVideoPlan(info, r, enc, defaultThreads)
 	if !plan.reduced || plan.fw != 40 || plan.fh != 30 {
 		t.Errorf("plan reduces to %dx%d (reduced %v), want 40x30, twice the 20x15 target", plan.fw, plan.fh, plan.reduced)
 	}
@@ -55,7 +55,7 @@ func TestVideoPlanReducesTheRegion(t *testing.T) {
 
 	// A region that needs no reduction is delivered as cut, and sized exactly.
 	enc.maxEdge, enc.maxArea = 4000, 4000*4000
-	plan = newVideoPlan(info, r, enc)
+	plan = newVideoPlan(info, r, enc, defaultThreads)
 	if plan.reduced || plan.fw != 400 || plan.fh != 300 || plan.filter != cropFilter(r) {
 		t.Errorf("plan = %+v, want the region delivered unscaled", plan)
 	}
@@ -140,7 +140,7 @@ func TestVideoRegionDecodeCoversTheLargestTarget(t *testing.T) {
 // ImageMagick is not asked to crop a video's samples: they are already cut.
 func TestVideoRegionIsNotCroppedAgainByTheEncode(t *testing.T) {
 	enc := encoding{maxEdge: 64, maxArea: 4096}
-	plan := newVideoPlan(videoInfo{width: 160, height: 120}, region{1, 1, 50, 50}, enc)
+	plan := newVideoPlan(videoInfo{width: 160, height: 120}, region{1, 1, 50, 50}, enc, defaultThreads)
 	if got := plan.source(enc); !got.crop.zero() {
 		t.Errorf("source crops %+v", got.crop)
 	}
@@ -307,12 +307,12 @@ func TestVideoSecondEncodeWithAnotherRegionDecodesAgain(t *testing.T) {
 func TestVideoPlanCoversOnlyItsOwnRegion(t *testing.T) {
 	info := videoInfo{width: 160, height: 120}
 	enc := encoding{maxEdge: 64, maxArea: 4096}
-	a := newVideoPlan(info, region{0, 0, 80, 60}, enc)
-	b := newVideoPlan(info, region{40, 30, 80, 60}, enc)
+	a := newVideoPlan(info, region{0, 0, 80, 60}, enc, defaultThreads)
+	b := newVideoPlan(info, region{40, 30, 80, 60}, enc, defaultThreads)
 	if !a.covers(a) || a.covers(b) || b.covers(a) {
 		t.Error("plans for different regions of one size cover each other")
 	}
-	whole := newVideoPlan(info, region{}, enc)
+	whole := newVideoPlan(info, region{}, enc, defaultThreads)
 	if whole.covers(a) || a.covers(whole) {
 		t.Error("a plan for a region covers one for the whole frame")
 	}
@@ -320,7 +320,7 @@ func TestVideoPlanCoversOnlyItsOwnRegion(t *testing.T) {
 
 func TestVideoFramesWithoutARegionAreSampledAsBefore(t *testing.T) {
 	info := videoInfo{width: 160, height: 120, frames: 10}
-	plan := newVideoPlan(info, region{}, encoding{maxEdge: 20, maxArea: 400})
+	plan := newVideoPlan(info, region{}, encoding{maxEdge: 20, maxArea: 400}, defaultThreads)
 	if plan.filter != "scale=40:30:flags=lanczos" || !plan.region.zero() {
 		t.Errorf("plan = %+v", plan)
 	}

@@ -734,8 +734,8 @@ func TestVideoToolRunsShareTheInputArguments(t *testing.T) {
 			joined := " " + strings.Join(call[1:], " ") + " "
 			for _, want := range []string{
 				" -max_alloc " + strconv.Itoa(ffmpegMaxAlloc) + " ",
-				" -filter_threads " + strconv.Itoa(ffmpegThreads) + " ",
-				" -threads " + strconv.Itoa(ffmpegThreads) + " -protocol_whitelist ",
+				" -filter_threads " + strconv.Itoa(defaultThreads) + " ",
+				" -threads " + strconv.Itoa(defaultThreads) + " -protocol_whitelist ",
 			} {
 				if !strings.Contains(joined, want) {
 					t.Errorf("ffmpeg call lacks %q: %q", want, call)
@@ -873,6 +873,57 @@ func TestVideoFramesUseFewerThreadsAboveFourK(t *testing.T) {
 			}
 			if ran == 0 {
 				t.Fatal("no ffmpeg call recorded")
+			}
+		})
+	}
+}
+
+// Resources.Threads reaches the probe and every ffmpeg decode of a Processor,
+// with the large-source rule as a ceiling.
+func TestVideoFramesUseTheConfiguredThreads(t *testing.T) {
+	t.Parallel()
+	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
+	for _, c := range []struct {
+		name    string
+		threads int
+		w, h    int
+		want    string
+	}{
+		{"below the large-source size", 3, 1920, 1080, "3"},
+		{"above it, more threads than the rule allows", 3, 4097, 2160, "2"},
+		{"above it, fewer threads than the rule allows", 1, 4097, 2160, "1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessorWith(t, Config{Resources: Resources{Threads: c.threads}, Unsandboxed: true})
+			probe := fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,"duration":"10"}],"format":{}}`, c.w, c.h)
+			rec := record(p)
+			rec.inner = func(_ context.Context, tool string, _ ...string) (Result, error) {
+				if tool == "ffprobe" {
+					return Result{Stdout: []byte(probe)}, nil
+				}
+				return Result{}, nil
+			}
+			_, _, _ = p.VideoFrames(context.Background(), mp4, Encoding{}, 3, t.TempDir())
+			probed, decoded := 0, 0
+			for _, call := range rec.calls {
+				joined := " " + strings.Join(call[1:], " ") + " "
+				switch call[0] {
+				case "ffprobe":
+					probed++
+					if want := " -threads " + strconv.Itoa(c.threads) + " "; !strings.Contains(joined, want) {
+						t.Errorf("ffprobe call lacks %q: %q", want, call)
+					}
+				case "ffmpeg":
+					decoded++
+					for _, want := range []string{" -filter_threads " + c.want + " ", " -threads " + c.want + " "} {
+						if !strings.Contains(joined, want) {
+							t.Errorf("ffmpeg call lacks %q: %q", want, call)
+						}
+					}
+				}
+			}
+			if probed == 0 || decoded == 0 {
+				t.Fatalf("recorded %d probes and %d decodes", probed, decoded)
 			}
 		})
 	}

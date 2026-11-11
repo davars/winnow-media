@@ -98,7 +98,7 @@ func TestEffectiveResources(t *testing.T) {
   Throttle: 0
   Time: 5 minutes
 `
-	want := processorPolicy(memoryProfiles[HighMemory])
+	want := processorPolicy(defaultResources())
 	limits := parseResourceList([]byte(listed))
 	if err := checkEffectiveResources(limits, want); err != nil {
 		t.Errorf("matching limits refused: %v", err)
@@ -114,6 +114,7 @@ func TestEffectiveResources(t *testing.T) {
 	}
 	for _, change := range []struct{ from, to string }{
 		{"Memory: 1GiB", "Memory: 3GiB"},
+		{"Memory: 1GiB", "Memory: 1.00001GiB"},
 		{"Time: 5 minutes", "Time: 6 minutes"},
 		{"Width: 65536P", "Width: 65537P"},
 		{"  Thread: 4\n", ""},
@@ -130,6 +131,7 @@ func TestResourceNumber(t *testing.T) {
 	cases := map[string]float64{
 		"1GiB": 1 << 30, "512MP": 512e6, "65536P": 65536, "2048B": 2048,
 		"5 minutes": 300, "300": 300, "4": 4,
+		"1 weeks": 7 * 86400, "2 years": 2 * 365 * 86400, "1PiB": 1 << 50, "4EiB": 1 << 62,
 	}
 	for in, want := range cases {
 		if got, err := resourceNumber(in); err != nil || got != want {
@@ -144,7 +146,7 @@ func TestResourceNumber(t *testing.T) {
 func TestProcessorPolicyContents(t *testing.T) {
 	t.Parallel()
 	var coders []string
-	for _, r := range processorPolicy(memoryProfiles[HighMemory]) {
+	for _, r := range processorPolicy(defaultResources()) {
 		if r.domain == "coder" && r.pattern != "*" {
 			coders = append(coders, r.pattern+"="+r.rights)
 		}
@@ -156,7 +158,7 @@ func TestProcessorPolicyContents(t *testing.T) {
 	if !slices.Equal(coders, want) {
 		t.Errorf("coder rules %v, want %v", coders, want)
 	}
-	if got, again := policyXML(processorPolicy(memoryProfiles[HighMemory])), policyXML(processorPolicy(memoryProfiles[HighMemory])); string(got) != string(again) {
+	if got, again := policyXML(processorPolicy(defaultResources())), policyXML(processorPolicy(defaultResources())); string(got) != string(again) {
 		t.Error("policy XML is not deterministic")
 	}
 }
@@ -168,7 +170,7 @@ func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != string(policyXML(processorPolicy(memoryProfiles[HighMemory]))) {
+	if string(data) != string(policyXML(processorPolicy(defaultResources()))) {
 		t.Error("installed policy differs from the generated one")
 	}
 	if info, err := os.Stat(p.tmpDir()); err != nil || !info.IsDir() {
@@ -184,7 +186,7 @@ func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
 
 func TestProcessorPolicyDeniesEverythingFirst(t *testing.T) {
 	t.Parallel()
-	rules := processorPolicy(memoryProfiles[HighMemory])
+	rules := processorPolicy(defaultResources())
 	index := func(domain, pattern string) int {
 		for i, r := range rules {
 			if r.domain == domain && r.pattern == pattern && r.rights == "none" {

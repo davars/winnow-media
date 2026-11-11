@@ -223,7 +223,7 @@ func probeVideo(ctx context.Context, env Env, dec decoder, path string) (videoIn
 func runVideoProbe(ctx context.Context, env Env, dec decoder, path, entries string) (videoInfo, error) {
 	args := []string{
 		"-v", "error", "-of", "json", "-show_entries", entries,
-		"-max_alloc", strconv.Itoa(ffmpegMaxAlloc), "-threads", strconv.Itoa(ffmpegThreads),
+		"-max_alloc", strconv.Itoa(ffmpegMaxAlloc), "-threads", strconv.Itoa(env.threads()),
 	}
 	args = append(args, inputArgs(dec, path)...)
 	res, err := env.Run(ctx, "ffprobe", args...)
@@ -344,7 +344,7 @@ func sampleTimesMS(v videoInfo, maxFrames int) []int64 {
 // ffmpegArgs returns the arguments every ffmpeg run starts with: no banner,
 // no stdin, errors only, and the allocation and filter-thread bounds. The
 // decoder gets the same thread count (ffmpegThreadsFor), and ffprobe is run
-// with -threads 4 and the same -max_alloc.
+// with the configured threads and the same -max_alloc.
 func ffmpegArgs(threads int) []string {
 	return []string{
 		"-hide_banner", "-nostdin", "-v", "error", "-y",
@@ -401,7 +401,7 @@ func (e Env) probeChecked(ctx context.Context, dec decoder, inputPath string) (v
 // delivered at the size decode needs, which is the largest of the encodings
 // that will be made from them, with videoReductionMargin to spare for SDR and
 // none for HDR.
-func newVideoPlan(info videoInfo, r region, decode encoding) videoPlan {
+func newVideoPlan(info videoInfo, r region, decode encoding, threads int) videoPlan {
 	w, h := r.subject(info.upright())
 	tw, th, resize := fitSize(w, h, decode.maxEdge, decode.maxArea)
 	hdr := isHDRTransfer(info.transfer)
@@ -416,7 +416,7 @@ func newVideoPlan(info videoInfo, r region, decode encoding) videoPlan {
 		fw:           rw,
 		fh:           rh,
 		reduced:      reduced,
-		threads:      ffmpegThreadsFor(info.width, info.height),
+		threads:      ffmpegThreadsFor(threads, info.width, info.height),
 		selectFrames: info.frames > 0 && int64(info.frames)*int64(info.width)*int64(info.height) <= selectLimit,
 	}
 }

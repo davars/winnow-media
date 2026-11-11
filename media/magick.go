@@ -69,35 +69,30 @@ func LimitArgs() []string { return HighMemory.LimitArgs() }
 // fresh on every call. It panics on an undefined profile; check Valid first
 // when the value comes from outside the program.
 func (p MemoryProfile) LimitArgs() []string {
-	s, err := p.settings()
+	r, err := p.resources()
 	if err != nil {
 		panic(err)
 	}
-	return []string{
-		"-limit", "memory", s.memory,
-		"-limit", "map", s.mapLimit,
-		"-limit", "area", policyArea,
-		"-limit", "list-length", policyListLength,
-		"-limit", "time", strconv.Itoa(policyTimeSeconds),
-	}
+	return r.limitArgs()
 }
 
 // Valid reports whether p is a defined profile.
 func (p MemoryProfile) Valid() bool {
-	_, ok := memoryProfiles[p]
-	return ok
+	_, err := p.resources()
+	return err == nil
 }
 
-// runMagick runs magick with args under the Env's memory profile: the limit
+// runMagick runs magick with args under the Env's resource limits: the limit
 // flags follow a leading "identify" subcommand, which must stay first, and
 // otherwise start the arguments. Every run that reads or writes an image goes
 // through it, so none reports success for a run that reached the time limit: ImageMagick
 // exits 0 then, and the error wraps ErrTimeLimit whatever the exit status.
 func (e Env) runMagick(ctx context.Context, args ...string) (Result, error) {
-	if !e.Memory.Valid() {
-		return Result{}, fmt.Errorf("unknown memory profile %d", int(e.Memory))
+	lim, err := e.limits()
+	if err != nil {
+		return Result{}, err
 	}
-	limit := e.Memory.LimitArgs()
+	limit := lim.limitArgs()
 	full := make([]string, 0, len(limit)+len(args))
 	if len(args) > 0 && args[0] == "identify" {
 		full, args = append(full, "identify"), args[1:]

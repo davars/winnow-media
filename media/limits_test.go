@@ -56,11 +56,11 @@ func TestHighMemoryIsTheZeroValueAndTheDefaultFlags(t *testing.T) {
 func TestLowMemoryFlagsAndPolicyAgree(t *testing.T) {
 	t.Parallel()
 	flags := LowMemory.LimitArgs()
-	s, err := LowMemory.settings()
+	r, err := LowMemory.resources()
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules := processorPolicy(s)
+	rules := processorPolicy(r)
 	for name, want := range map[string]string{"memory": "512MiB", "map": "1GiB"} {
 		if got := flagValue(t, flags, name); got != want {
 			t.Errorf("flag %s = %s, want %s", name, got, want)
@@ -81,13 +81,12 @@ func TestLowMemoryFlagsAndPolicyAgree(t *testing.T) {
 // assertLimited requires the magick argv that ran to carry exactly the
 // profile's limit flags, once, ahead of the rest and after a leading
 // "identify".
-func assertLimited(t *testing.T, argv []string, profile MemoryProfile) {
+func assertLimited(t *testing.T, argv []string, want []string) {
 	t.Helper()
 	rest := argv
 	if len(rest) > 0 && rest[0] == "identify" {
 		rest = rest[1:]
 	}
-	want := profile.LimitArgs()
 	if len(rest) < len(want) || !slices.Equal(rest[:len(want)], want) {
 		t.Errorf("argv %q does not start with %q", argv, want)
 	}
@@ -173,7 +172,7 @@ func TestMagickRoutesCarryTheProfile(t *testing.T) {
 					if strings.Contains(strings.ToLower(name), "identify") && argv[0] != "identify" {
 						t.Errorf("argv %q does not start with the identify subcommand", argv)
 					}
-					assertLimited(t, argv, profile)
+					assertLimited(t, argv, profile.LimitArgs())
 				}
 			})
 		}
@@ -186,8 +185,8 @@ func TestUnknownMemoryProfileIsRefused(t *testing.T) {
 	if bad.Valid() || !HighMemory.Valid() || !LowMemory.Valid() {
 		t.Error("Valid is wrong")
 	}
-	if _, err := bad.settings(); err == nil {
-		t.Error("settings accepted an unknown profile")
+	if _, err := bad.resources(); err == nil {
+		t.Error("resources accepted an unknown profile")
 	}
 	func() {
 		defer func() {
@@ -210,19 +209,20 @@ func TestUnknownMemoryProfileIsRefused(t *testing.T) {
 	if _, err := env.runEncode(context.Background(), nil, encodeCheck{}); err == nil {
 		t.Error("runEncode accepted an unknown profile")
 	}
-	if _, err := NewProcessor(context.Background(), bad); err == nil || !strings.Contains(err.Error(), "memory profile") {
-		t.Errorf("NewProcessor err = %v", err)
-	}
 }
 
-func TestProcessorInstallsTheProfile(t *testing.T) {
+func TestProcessorInstallsTheResources(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		profile       MemoryProfile
 		memory, mapLm string
 	}{{HighMemory, "1GiB", "2GiB"}, {LowMemory, "512MiB", "1GiB"}} {
 		t.Run(c.profile.String(), func(t *testing.T) {
-			p := requireProcessorWith(t, c.profile)
+			r, err := c.profile.resources()
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := requireProcessorWith(t, Config{Resources: r})
 			data, err := os.ReadFile(filepath.Join(p.dir, "policy.xml"))
 			if err != nil {
 				t.Fatal(err)
@@ -255,7 +255,7 @@ func TestProcessorInstallsTheProfile(t *testing.T) {
 			if _, _, _, err := env.IdentifyArtifact(context.Background(), filepath.Join(t.TempDir(), "none.webp")); err == nil {
 				t.Error("identify of a missing file succeeded")
 			}
-			assertLimited(t, ran, c.profile)
+			assertLimited(t, ran, c.profile.LimitArgs())
 		})
 	}
 }
@@ -310,7 +310,7 @@ func TestProcessorVideoRunsCarryTheProfile(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
 	src := sdrClip(t, requireFFmpeg(t), "160x120", 10, 4)
-	p := requireProcessorWith(t, LowMemory)
+	p := requireProcessorWith(t, Config{Resources: Resources{Memory: 512 << 20, Map: 1 << 30}})
 	rec := record(p)
 	if _, _, err := p.VideoFrames(context.Background(), src, Encoding{}, 4, t.TempDir()); err != nil {
 		t.Fatal(err)

@@ -410,7 +410,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	s.upright[0], s.upright[1] = uprightSize(s.layout.cw, s.layout.ch, s.orientation)
 	s.req = composeRequest{
 		path: req.path, dir: s.dir, selected: s.selected, inFlight: len(s.selected),
-		frames: count, width: s.layout.cw, height: s.layout.ch, consumeTimeout: composeTimeout,
+		frames: count, width: s.layout.cw, height: s.layout.ch, consumeTimeout: e.consumeTimeout(),
 	}
 	if hdr.route == routeWebP {
 		s.req.external = webpFramesTool

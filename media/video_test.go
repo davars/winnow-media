@@ -1132,7 +1132,7 @@ func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, decod
 	if err != nil {
 		return videoPlan{}, err
 	}
-	return newVideoPlan(info, region{}, decode), nil
+	return newVideoPlan(info, region{}, decode, e.threads()), nil
 }
 
 // encodeWebPPair opens a video and encodes it at two sizes of animated

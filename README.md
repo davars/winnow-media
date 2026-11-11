@@ -31,10 +31,8 @@ import (
 )
 
 func main() {
-	media.Init() // first call in main: the sandbox helper is this executable
-
 	ctx := context.Background()
-	p, err := media.NewProcessor(ctx, media.HighMemory)
+	p, err := media.NewProcessor(ctx, media.Config{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -108,7 +106,8 @@ For `Processor` operations, stated in full in the
 - **Sandbox.** Every tool runs through a helper (the program's own executable,
   started again) that sets `no_new_privs`, resource limits and a seccomp filter
   denying sockets, and kills what the tool leaves behind. It needs Linux 5.11
-  or later on amd64 or arm64; elsewhere `NewProcessor` fails.
+  or later on amd64 or arm64; elsewhere `NewProcessor` fails unless
+  `Config.Unsandboxed` runs the tools directly.
 - **Policy.** The tool's environment is fixed and ImageMagick runs under a
   generated policy that `NewProcessor` reads back and refuses unless it is the
   only one in effect.
@@ -118,20 +117,13 @@ For `Processor` operations, stated in full in the
 The sandbox does not confine files: a deployment for hostile input supplies
 that (see the package documentation).
 
-## Memory profiles
+## Resources
 
-A `MemoryProfile` sets ImageMagick's memory and map limits, the two between
-which the pixel cache spills. Set it with `NewProcessor(ctx, profile)` and
-`Env.Memory`; callers that build their own magick runs start them with
-`profile.LimitArgs()`.
-
-| Profile | memory | map | use |
-| --- | --- | --- | --- |
-| `HighMemory` (zero value) | 1 GiB | 2 GiB | a host with plenty of RAM |
-| `LowMemory` | 512 MiB | 1 GiB | a container with a memory limit |
-
-`LowMemory` is measured for one request per pod on 1536Mi pods; see
-[the measurements](docs/measurements.md#memory-profiles).
+`Config.Resources` bounds the memory, map, disk, threads and time of the tools
+a `Processor` runs; the defaults and what each field reaches are in the
+`Resources` doc comment. `LowMemory` is measured for one request per 1536Mi
+pod (see [the measurements](docs/measurements.md#memory-profiles)), and
+`MemoryProfile` and `LimitArgs()` remain for callers that use an `Env`.
 
 ## Flake outputs
 
@@ -193,9 +185,10 @@ separate contents list.
 
 ## Rules for consumers
 
-- **Call `media.Init()` first in `main` and in `TestMain`,** before flags,
-  servers or anything with side effects: the `Processor` starts the program
-  again as its sandbox helper.
+- **Importing `media` is the setup.** Its package `init` runs the importing
+  binary as the sandbox helper or frame compositor when a `WINNOW_MEDIA_*`
+  marker is set in its environment, and does nothing otherwise; no call in
+  `main` or `TestMain` is needed.
 - **No `nixpkgs.follows` on this input.** The tools must come from this
   flake's own locked nixpkgs; following the consumer's would change the
   binaries underneath the library.

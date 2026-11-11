@@ -67,12 +67,10 @@ const (
 
 // The ffmpeg decode limits.
 const (
-	// ffmpegThreads bounds the decoder's threads and the filter graph's.
-	ffmpegThreads = 4
 	// ffmpegLargeSourcePixels is the most pixels (not the largest side) a
-	// source may have, 4096x2160, and be sampled with ffmpegThreads.
+	// source may have, 4096x2160, and be sampled with Resources.Threads.
 	ffmpegLargeSourcePixels = 4096 * 2160
-	// ffmpegLargeSourceThreads replaces ffmpegThreads for a source with more
+	// ffmpegLargeSourceThreads caps the thread count for a source with more
 	// pixels than that. The HEVC decoder holds about one frame per thread plus
 	// references, so its memory is threads times frame size; the measurement
 	// is in docs/measurements.md.
@@ -83,51 +81,41 @@ const (
 )
 
 // ffmpegThreadsFor returns the thread count for sampling a width x height
-// source. The stored size is used because rotation leaves the product alone.
-func ffmpegThreadsFor(width, height int) int {
+// source, given the configured threads. The stored size is used because
+// rotation leaves the product alone.
+func ffmpegThreadsFor(threads, width, height int) int {
 	if width*height > ffmpegLargeSourcePixels {
-		return ffmpegLargeSourceThreads
+		return min(threads, ffmpegLargeSourceThreads)
 	}
-	return ffmpegThreads
+	return threads
 }
 
-// policyTimeSeconds is the ImageMagick policy's time ceiling, the longest
-// ImageMagick works on any one image: the clock starts when an image is
-// created, clones inherit it, and it is checked when pixels are next
-// accessed, so it bounds neither a process nor a run of several images. A
-// compositor waits this long for ImageMagick to consume a frame it wrote.
-const policyTimeSeconds = 300
-
-// consumeTimeout is how long a compositor waits for a written frame to be
-// consumed before it fails.
-const consumeTimeout = policyTimeSeconds * time.Second
-
-// composeTimeout is the timeout the operations give a compositor; tests lower
-// it.
-var composeTimeout = consumeTimeout
+// composeTimeout, when not zero, replaces the time limit as how long a
+// compositor waits for a written frame to be consumed; tests lower it.
+var composeTimeout time.Duration
 
 // The ImageMagick policy ceilings. Width and height sit above maxDimension
 // so that the header read reaches the checks in this package, which report
 // ErrTooLarge, instead of failing inside the tool. Memory, map and disk
 // together hold the pixel cache of the frames a call returns, at
 // maxReturnedPixels, because the compositor decodes the rest outside the
-// tool; time is a multiple of the longest ImageMagick operation measured to
-// complete, with margin for a slower host (docs/measurements.md).
+// tool. The default time limit, the longest ImageMagick works on any one
+// image, is a multiple of the longest operation measured to complete, with
+// margin for a slower host (docs/measurements.md): the clock starts when an
+// image is created, clones inherit it, and it is checked when pixels are next
+// accessed, so it bounds neither a process nor a run of several images.
 const (
-	policyDisk       = "4GiB"
 	policyArea       = "512MP"
 	policyDimension  = "65536"
 	policyListLength = "2048"
-	policyThreads    = "4"
 )
 
-// MemoryProfile names the ImageMagick memory limits a run is held to: the
-// memory and map limits, between which the pixel cache spills (memory, then
-// map, then disk). The same profile produces a Processor's policy.xml and the
-// -limit flags of every magick run the Env methods make, so a value means the
-// same on both paths. Callers that build their own magick runs start them with
-// profile.LimitArgs(). The zero value is HighMemory. NewProcessor and the Env
-// methods return an error for an undefined value, and LimitArgs panics.
+// MemoryProfile names the ImageMagick memory limits the Env methods hold a
+// run to: the memory and map limits, between which the pixel cache spills
+// (memory, then map, then disk). Callers that build their own magick runs
+// start them with profile.LimitArgs(). The zero value is HighMemory. The Env
+// methods return an error for an undefined value, and LimitArgs panics. A
+// Processor takes Resources instead.
 type MemoryProfile int
 
 const (
@@ -149,20 +137,15 @@ func (p MemoryProfile) String() string {
 	return fmt.Sprintf("MemoryProfile(%d)", int(p))
 }
 
-// profileSettings is what a MemoryProfile sets, as ImageMagick spells it.
-type profileSettings struct{ memory, mapLimit string }
-
-var memoryProfiles = map[MemoryProfile]profileSettings{
-	HighMemory: {memory: "1GiB", mapLimit: "2GiB"},
-	LowMemory:  {memory: "512MiB", mapLimit: "1GiB"},
-}
-
-func (p MemoryProfile) settings() (profileSettings, error) {
-	s, ok := memoryProfiles[p]
-	if !ok {
-		return profileSettings{}, fmt.Errorf("unknown memory profile %d", int(p))
+// resources is the Resources a profile stands for, with defaults filled in.
+func (p MemoryProfile) resources() (Resources, error) {
+	switch p {
+	case HighMemory:
+		return defaultResources(), nil
+	case LowMemory:
+		return Resources{Memory: 512 << 20, Map: 1 << 30}.withDefaults(), nil
 	}
-	return s, nil
+	return Resources{}, fmt.Errorf("unknown memory profile %d", int(p))
 }
 
 func tooLarge(format string, args ...any) error {

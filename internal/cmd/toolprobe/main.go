@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/davars/winnow-media/media"
+	_ "github.com/davars/winnow-media/media" // links the library, as a consumer does
 	"github.com/davars/winnow-media/tool"
 )
 
 func main() {
-	media.Init()
 	p, err := tool.Resolve("magick")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

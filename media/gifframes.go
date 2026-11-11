@@ -19,8 +19,8 @@ import (
 	"time"
 )
 
-// compositorEnv marks a process as the GIF compositor. The sandbox helper
-// starts the consumer's own executable with it as the tool; Init runs the
+// compositorEnv marks a process as the GIF compositor. The Processor starts
+// the consumer's own executable with it as the tool; the package init runs the
 // compositor and never returns.
 const compositorEnv = "WINNOW_MEDIA_COMPOSITOR"
 
@@ -369,7 +369,7 @@ type composeRequest struct {
 	// inFlight is the most frames the compositor leaves unconsumed in dir.
 	inFlight int
 	// consumeTimeout is how long the compositor waits for a frame to be
-	// consumed; zero means the package's consumeTimeout.
+	// consumed; zero means defaultTimeLimit.
 	consumeTimeout time.Duration
 	// external names the tool that composites the frames, or is empty for
 	// the GIF compositor of this package.
@@ -395,7 +395,7 @@ func ownMask(own []bool) string {
 func (r composeRequest) timeoutMS() string {
 	d := r.consumeTimeout
 	if d <= 0 {
-		d = consumeTimeout
+		d = defaultTimeLimit
 	}
 	return strconv.FormatInt(d.Milliseconds(), 10)
 }

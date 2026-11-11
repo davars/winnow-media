@@ -65,20 +65,21 @@ func policyCoders(specs ...spec) map[string]coderRights {
 	return coders
 }
 
-// processorPolicy returns the rules of the policy the Processor installs, in
-// the order they are written: resource ceilings, delegates denied, every
-// coder denied and then the used ones allowed, indirect reads denied.
-func processorPolicy(s profileSettings) []policyRule {
+// processorPolicy returns the rules of the policy a Processor with the
+// resolved resources r installs, in the order they are written: resource
+// ceilings, delegates denied, every coder denied and then the used ones
+// allowed, indirect reads denied.
+func processorPolicy(r Resources) []policyRule {
 	rules := []policyRule{
-		{domain: "resource", name: "memory", value: s.memory},
-		{domain: "resource", name: "map", value: s.mapLimit},
-		{domain: "resource", name: "disk", value: policyDisk},
+		{domain: "resource", name: "memory", value: magickSize(r.Memory)},
+		{domain: "resource", name: "map", value: magickSize(r.Map)},
+		{domain: "resource", name: "disk", value: magickSize(r.Disk)},
 		{domain: "resource", name: "area", value: policyArea},
 		{domain: "resource", name: "width", value: policyDimension},
 		{domain: "resource", name: "height", value: policyDimension},
 		{domain: "resource", name: "list-length", value: policyListLength},
-		{domain: "resource", name: "time", value: strconv.Itoa(policyTimeSeconds)},
-		{domain: "resource", name: "thread", value: policyThreads},
+		{domain: "resource", name: "time", value: r.seconds()},
+		{domain: "resource", name: "thread", value: strconv.Itoa(r.Threads)},
 		{domain: "delegate", rights: "none", pattern: "*"},
 		{domain: "coder", rights: "none", pattern: "*"},
 	}
@@ -217,9 +218,10 @@ var resourceUnits = map[string]float64{
 	"": 1, "B": 1, "P": 1,
 	"KP": 1e3, "MP": 1e6, "GP": 1e9, "TP": 1e12,
 	"KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
-	"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40,
+	"PB": 1e15, "EB": 1e18,
+	"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40, "PiB": 1 << 50, "EiB": 1 << 60,
 	"second": 1, "seconds": 1, "minute": 60, "minutes": 60, "hour": 3600, "hours": 3600,
-	"day": 86400, "days": 86400,
+	"day": 86400, "days": 86400, "week": 7 * 86400, "weeks": 7 * 86400, "year": 365 * 86400, "years": 365 * 86400,
 }
 
 // resourceNumber converts a limit such as "1GiB", "512MP" or "5 minutes" to
@@ -241,9 +243,15 @@ func resourceNumber(s string) (float64, error) {
 	return n * unit, nil
 }
 
+// listedPrecision is the relative rounding of a listed limit: ImageMagick
+// prints six significant digits, so 3000 MiB reads back as 2.92969GiB, which
+// is above the 2.9296875GiB written.
+const listedPrecision = 5e-6
+
 // checkEffectiveResources requires each resource rule in want to read back
-// at or below the quantity written. ImageMagick lowers some limits to fit the
-// host (threads to its CPUs), and a lower limit is still within the ceiling.
+// at or below the quantity written, to the precision the listing has.
+// ImageMagick lowers some limits to fit the host (threads to its CPUs), and a
+// lower limit is still within the ceiling.
 func checkEffectiveResources(limits map[string]string, want []policyRule) error {
 	for _, r := range want {
 		if r.domain != "resource" {
@@ -261,7 +269,7 @@ func checkEffectiveResources(limits map[string]string, want []policyRule) error 
 		if err != nil {
 			return err
 		}
-		if g > w {
+		if g > w*(1+listedPrecision) {
 			return fmt.Errorf("resource %s is %q, above the ceiling %q", r.name, got, r.value)
 		}
 	}

@@ -121,7 +121,7 @@ func (s *Source) decodeVideo(ctx context.Context, r region, encs []encoding) err
 			decode, best = enc, tw*th
 		}
 	}
-	plan := newVideoPlan(v.info, r, decode)
+	plan := newVideoPlan(v.info, r, decode, s.env.threads())
 	if v.decoded && v.plan.covers(plan) {
 		return nil
 	}

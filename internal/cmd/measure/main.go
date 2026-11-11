@@ -50,7 +50,6 @@ type row struct {
 }
 
 func main() {
-	media.Init()
 	var (
 		only        = flag.String("only", "", "run the input with this name")
 		genOnly     = flag.Bool("gen-only", false, "generate inputs and stop")
@@ -136,7 +135,7 @@ func generate(ctx context.Context, dir string, specs []inputSpec) error {
 }
 
 func measure(ctx context.Context, dir string, specs []inputSpec, repeat int) ([]row, error) {
-	p, err := media.NewProcessor(ctx, media.HighMemory)
+	p, err := media.NewProcessor(ctx, media.Config{})
 	if err != nil {
 		return nil, err
 	}

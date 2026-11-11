@@ -5,6 +5,7 @@ package media
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +19,14 @@ import (
 
 // fakeProcessor returns a Processor whose only tool, "tool", is the test
 // binary playing a media tool, run through the real sandbox helper.
-func fakeProcessor(t *testing.T) *Processor {
+func fakeProcessor(t *testing.T) *Processor { return fakeProcessorWith(t, Resources{}) }
+
+func fakeProcessorWith(t *testing.T, r Resources) *Processor {
 	t.Helper()
+	r, err := r.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +35,7 @@ func fakeProcessor(t *testing.T) *Processor {
 	if err := os.Mkdir(p.tmpDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	p.start = sandboxRunner(rlimitsFor(r))
 	p.run = p.runTool
 	return p
 }
@@ -77,8 +85,9 @@ func TestSandboxLeavesOtherSystemCallsAlone(t *testing.T) {
 	}
 }
 
-func TestSandboxAppliesEachLimitToTheTool(t *testing.T) {
-	p := fakeProcessor(t)
+// toolLimits parses the limits the fake tool prints from /proc/self/limits.
+func toolLimits(t *testing.T, p *Processor) map[string][2]uint64 {
+	t.Helper()
 	res, err := runFake(t, p, "limits")
 	if err != nil {
 		t.Fatal(err)
@@ -100,10 +109,15 @@ func TestSandboxAppliesEachLimitToTheTool(t *testing.T) {
 			seen[name] = [2]uint64{cur, hard}
 		}
 	}
+	return seen
+}
+
+func TestSandboxAppliesEachLimitToTheTool(t *testing.T) {
+	seen := toolLimits(t, fakeProcessor(t))
 	for name, w := range map[string]uint64{
-		"Max cpu time":      sandboxCPUSeconds,
-		"Max address space": sandboxAddressSize,
-		"Max file size":     sandboxFileSize,
+		"Max cpu time":      300,
+		"Max address space": 8 << 30,
+		"Max file size":     5 << 30,
 		"Max open files":    sandboxOpenFiles,
 	} {
 		if got := seen[name]; got[0] != w || got[1] != w {
@@ -121,6 +135,51 @@ func TestSandboxAppliesEachLimitToTheTool(t *testing.T) {
 	// Tasks of the user may have changed since the helper counted them.
 	if got[0] < processHeadroom || got[0] > base+processHeadroom+10000 {
 		t.Errorf("Max processes = %d, not near the user's %d tasks plus %d", got[0], base, processHeadroom)
+	}
+}
+
+// The sandbox's CPU, address space and file size limits follow Resources, in
+// the tool's runs and in the probe's report.
+func TestSandboxLimitsFollowResources(t *testing.T) {
+	t.Parallel()
+	r := Resources{Memory: 1 << 30, Map: 1 << 30, Disk: 2 << 30, TimeLimit: 100 * time.Second}
+	want := map[string]uint64{
+		"Max cpu time":      100,
+		"Max address space": 7 << 30,
+		"Max file size":     5 << 29,
+	}
+	seen := toolLimits(t, fakeProcessorWith(t, r))
+	for name, w := range want {
+		if got := seen[name]; got[0] != w || got[1] != w {
+			t.Errorf("tool: %s = %v, want %d for both", name, got, w)
+		}
+	}
+
+	limits := rlimitsFor(Resources{}.withDefaults())
+	if got := rlimitsFor(r.withDefaults()); got == limits || got != (rlimits{CPU: 100, Address: 7 << 30, FileSize: 5 << 29}) {
+		t.Errorf("rlimitsFor = %+v", got)
+	}
+	res, err := runHelper(context.Background(), helperConfig{Probe: true, Limits: rlimitsFor(r.withDefaults())}, io.Discard, io.Discard)
+	if err != nil || res.Probe == nil {
+		t.Fatalf("probe: %v", err)
+	}
+	for name, w := range map[string]uint64{limitCPU: 100, limitAddress: 7 << 30, limitFileSize: 5 << 29} {
+		if got := res.Probe.Limits[name]; got[0] != w || got[1] != w {
+			t.Errorf("probe: limit %s = %v, want %d", name, got, w)
+		}
+	}
+	if err := probeSandbox(context.Background(), rlimitsFor(r.withDefaults())); err != nil {
+		t.Errorf("probe under custom resources: %v", err)
+	}
+	// A probe that reads back the defaults does not satisfy custom limits.
+	report := *res.Probe
+	report.Limits = map[string][2]uint64{}
+	for k, v := range res.Probe.Limits {
+		report.Limits[k] = v
+	}
+	report.Limits[limitCPU] = [2]uint64{300, 300}
+	if err := checkProbe(&report, rlimitsFor(r.withDefaults())); err == nil {
+		t.Error("a CPU limit above the one asked for was accepted")
 	}
 }
 
@@ -364,32 +423,21 @@ func TestSandboxedUsageExcludesTheCallingProgramsPeak(t *testing.T) {
 	}
 }
 
-func TestNewProcessorRequiresInit(t *testing.T) {
-	initCalled.Store(false)
-	defer initCalled.Store(true)
-	start := time.Now()
-	_, err := NewProcessor(context.Background(), HighMemory)
-	if err == nil || !strings.Contains(err.Error(), "media.Init") {
-		t.Fatalf("err = %v, want one that says to call media.Init", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Errorf("refusal took %v", time.Since(start))
-	}
-}
+var defaultLimits = rlimitsFor(defaultResources())
 
 func TestProbeRefusesWhenAGuardIsMissing(t *testing.T) {
 	defer func() { probeFault = "" }()
-	if err := probeSandbox(context.Background()); err != nil {
+	if err := probeSandbox(context.Background(), defaultLimits); err != nil {
 		t.Fatalf("probe of an intact sandbox: %v", err)
 	}
 	faults := map[string]string{"filter": "socket is not denied"}
-	for _, l := range sandboxLimits() {
+	for _, l := range defaultLimits.specs() {
 		faults["limit:"+l.name] = "limit " + l.name + " reads back"
 	}
 	for fault, want := range faults {
 		t.Run(fault, func(t *testing.T) {
 			probeFault = fault
-			err := probeSandbox(context.Background())
+			err := probeSandbox(context.Background(), defaultLimits)
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Errorf("err = %v, want one containing %q", err, want)
 			}
@@ -405,7 +453,7 @@ func TestCheckProbe(t *testing.T) {
 			Limits:          map[string][2]uint64{},
 			ProcessBase:     100,
 		}
-		for _, l := range sandboxLimits() {
+		for _, l := range defaultLimits.specs() {
 			v := l.value
 			if l.name == limitProcesses {
 				v = 100 + processHeadroom
@@ -414,10 +462,10 @@ func TestCheckProbe(t *testing.T) {
 		}
 		return r
 	}
-	if err := checkProbe(good()); err != nil {
+	if err := checkProbe(good(), defaultLimits); err != nil {
 		t.Fatalf("intact report: %v", err)
 	}
-	if err := checkProbe(nil); err == nil {
+	if err := checkProbe(nil, defaultLimits); err == nil {
 		t.Error("nil report accepted")
 	}
 	for name, mutate := range map[string]func(*probeReport){
@@ -425,20 +473,20 @@ func TestCheckProbe(t *testing.T) {
 		"socket other errno":  func(r *probeReport) { r.SocketErrno = int(syscall.EAFNOSUPPORT) },
 		"socketpair allowed":  func(r *probeReport) { r.SocketpairErrno = 0 },
 		"limit missing":       func(r *probeReport) { delete(r.Limits, limitCPU) },
-		"soft unlimited":      func(r *probeReport) { r.Limits[limitAddress] = [2]uint64{^uint64(0), sandboxAddressSize} },
-		"hard unlimited":      func(r *probeReport) { r.Limits[limitFileSize] = [2]uint64{sandboxFileSize, ^uint64(0)} },
+		"soft unlimited":      func(r *probeReport) { r.Limits[limitAddress] = [2]uint64{^uint64(0), defaultLimits.Address} },
+		"hard unlimited":      func(r *probeReport) { r.Limits[limitFileSize] = [2]uint64{defaultLimits.FileSize, ^uint64(0)} },
 		"processes too high":  func(r *probeReport) { r.Limits[limitProcesses] = [2]uint64{1 << 20, 1 << 20} },
 		"open files too high": func(r *probeReport) { r.Limits[limitOpenFiles] = [2]uint64{4096, 4096} },
 	} {
 		r := good()
 		mutate(r)
-		if err := checkProbe(r); err == nil {
+		if err := checkProbe(r, defaultLimits); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	r := good()
 	r.Limits[limitCPU] = [2]uint64{1, 1}
-	if err := checkProbe(r); err != nil {
+	if err := checkProbe(r, defaultLimits); err != nil {
 		t.Errorf("a stricter inherited limit refused: %v", err)
 	}
 }
@@ -592,5 +640,57 @@ func TestComposeRemovesItsRunDirectoryOnSuccess(t *testing.T) {
 	}
 	if got := dirNames(t, p.tmpDir()); len(got) != 0 {
 		t.Errorf("the Processor's temporary directory holds %v after the run", got)
+	}
+}
+
+func TestNewProcessorProbesUnderItsResources(t *testing.T) {
+	t.Parallel()
+	p := requireProcessorWith(t, Config{Resources: Resources{Memory: 256 << 20, Map: 512 << 20, TimeLimit: 100 * time.Second}})
+	if _, err := p.run(context.Background(), "magick", "-version"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Unsandboxed starts no helper: the tool keeps the limits of its parent.
+func TestUnsandboxedRunsToolsWithoutTheSandbox(t *testing.T) {
+	t.Parallel()
+	requireTools(t, "magick", "ffmpeg", "ffprobe")
+	var base runner
+	p, err := newProcessor(context.Background(), Config{Unsandboxed: true, Dir: t.TempDir()}, func(next runner) runner {
+		base = next
+		return next
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	var out strings.Builder
+	if _, err := base(context.Background(), runSpec{Tool: sh, Args: []string{"-c", `while read -r l; do case "$l" in "Max address space"*) echo "$l";; esac; done </proc/self/limits`}, Env: []string{}, Dir: t.TempDir()}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	own, err := os.ReadFile("/proc/self/limits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range lines(own) {
+		if strings.HasPrefix(l, "Max address space") && strings.TrimSpace(out.String()) != strings.TrimSpace(l) {
+			t.Errorf("the tool's address-space limit %q is not its parent's %q", strings.TrimSpace(out.String()), l)
+		}
+	}
+}
+
+// A failure the helper reports itself says so, as one in starting the helper
+// does.
+func TestSandboxedFailuresNameTheHelper(t *testing.T) {
+	t.Parallel()
+	p := fakeProcessor(t)
+	p.tools["missing"] = filepath.Join(t.TempDir(), "no-such-tool")
+	_, err := p.run(context.Background(), "missing")
+	if err == nil || !strings.Contains(err.Error(), "sandbox helper: starting the tool") {
+		t.Errorf("err = %v, want one that names the sandbox helper and the failed start", err)
 	}
 }

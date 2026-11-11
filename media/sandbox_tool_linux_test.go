@@ -3,9 +3,12 @@
 package media
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
@@ -54,6 +57,33 @@ func fakeTool(args []string) {
 		wg.Wait()
 		check(exec.Command(self, "--tool", "noop").Run())
 		fmt.Println("ok")
+	case "direct-parent":
+		// Runs a long sleep through the direct runner and exits, without
+		// waiting, once it has started.
+		sh, err := exec.LookPath("sh")
+		check(err)
+		sleep, err := exec.LookPath("sleep")
+		check(err)
+		go func() {
+			_, _ = directRunner(context.Background(), runSpec{
+				Tool: sh, Env: []string{},
+				Args: []string{"-c", "echo $$ > " + args[1] + "; exec " + sleep + " 600"},
+			}, io.Discard, io.Discard)
+		}()
+		for {
+			if b, err := os.ReadFile(args[1]); err == nil && strings.HasSuffix(string(b), "\n") {
+				os.Exit(0)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	case "ignore-sigchld":
+		// With SIGCHLD ignored the kernel reaps children, and Wait has no exit
+		// status to report.
+		sh, err := exec.LookPath("sh")
+		check(err)
+		signal.Ignore(syscall.SIGCHLD)
+		res, err := directRunner(context.Background(), runSpec{Tool: sh, Args: []string{"-c", "exit 0"}, Env: []string{}}, io.Discard, io.Discard)
+		fmt.Printf("err=%v code=%d\n", err != nil, res.Code)
 	case "limits":
 		b, err := os.ReadFile("/proc/self/limits")
 		check(err)

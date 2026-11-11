@@ -21,11 +21,12 @@ import (
 	"unsafe"
 )
 
-// The sandbox's limits. Each sits above the largest value measured for any
-// tool run within the Processor's caps (internal/cmd/measure on a 12-CPU
+// The sandbox's fixed limits. Each sits above the largest value measured for
+// any tool run within the Processor's caps (internal/cmd/measure on a 12-CPU
 // x86_64 host, with per-process peaks sampled from /proc; see
 // docs/measurements.md), so a tool within the caps never meets one; they
-// bound a tool that escapes them.
+// bound a tool that escapes them. The CPU, address space and file size limits
+// derive from Resources (rlimitsFor).
 const (
 	limitCPU       = "cpu"
 	limitAddress   = "as"
@@ -33,17 +34,6 @@ const (
 	limitOpenFiles = "nofile"
 	limitProcesses = "nproc"
 
-	// sandboxCPUSeconds is the heaviest measured single process, scaled to
-	// the slowest host with a safety margin (docs/measurements.md).
-	sandboxCPUSeconds = 210
-	// sandboxAddressSize is a multiple of the worst address-space peak
-	// measured, with room for the per-thread arenas that grow with a host's
-	// CPU count.
-	sandboxAddressSize = 8 << 30
-	// sandboxFileSize: ImageMagick's disk ceiling (4 GiB) stops it first;
-	// this is that plus a quarter, so it catches only a tool that ignores
-	// the policy.
-	sandboxFileSize = 5 << 30
 	// sandboxOpenFiles is a multiple of the most descriptors measured.
 	sandboxOpenFiles = 1024
 	// processHeadroom is how many tasks beyond the user's current number a
@@ -64,13 +54,13 @@ type limitSpec struct {
 	value    uint64
 }
 
-// sandboxLimits lists the limits except the process limit's value, which
-// depends on the user's current tasks.
-func sandboxLimits() []limitSpec {
+// specs lists the limits except the process limit's value, which depends on
+// the user's current tasks.
+func (l rlimits) specs() []limitSpec {
 	return []limitSpec{
-		{limitCPU, syscall.RLIMIT_CPU, sandboxCPUSeconds},
-		{limitAddress, syscall.RLIMIT_AS, sandboxAddressSize},
-		{limitFileSize, syscall.RLIMIT_FSIZE, sandboxFileSize},
+		{limitCPU, syscall.RLIMIT_CPU, l.CPU},
+		{limitAddress, syscall.RLIMIT_AS, l.Address},
+		{limitFileSize, syscall.RLIMIT_FSIZE, l.FileSize},
 		{limitOpenFiles, syscall.RLIMIT_NOFILE, sandboxOpenFiles},
 		{limitProcesses, rlimitNproc, 0},
 	}
@@ -85,6 +75,8 @@ type helperConfig struct {
 	Args  []string
 	Env   []string
 	Dir   string
+	// Limits are the resource limits the helper applies to itself.
+	Limits rlimits
 	// Fault makes the helper skip one guard so that tests can check that the
 	// Processor notices: "filter" or "limit:<name>".
 	Fault string
@@ -121,8 +113,8 @@ type probeReport struct {
 }
 
 // checkProbe returns an error unless r shows the socket calls denied and
-// every limit set, no higher than the Processor asked for.
-func checkProbe(r *probeReport) error {
+// every limit set, no higher than limits (and the fixed ones).
+func checkProbe(r *probeReport, limits rlimits) error {
 	if r == nil {
 		return errors.New("the helper did not report")
 	}
@@ -134,7 +126,7 @@ func checkProbe(r *probeReport) error {
 			return fmt.Errorf("%s is not denied: errno %d, want %d", c.name, c.errno, int(syscall.EPERM))
 		}
 	}
-	for _, l := range sandboxLimits() {
+	for _, l := range limits.specs() {
 		got, ok := r.Limits[l.name]
 		if !ok {
 			return fmt.Errorf("limit %s not reported", l.name)
@@ -159,19 +151,18 @@ var probeFault string
 
 // probeSandbox starts the helper in probe mode and refuses unless the
 // sandbox it applied to itself is the one the Processor asks for.
-func probeSandbox(ctx context.Context) error {
+func probeSandbox(ctx context.Context, limits rlimits) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var stderr headTailBuffer
-	res, err := runHelper(ctx, helperConfig{Probe: true, Fault: probeFault}, io.Discard, &stderr)
+	res, err := runHelper(ctx, helperConfig{Probe: true, Limits: limits, Fault: probeFault}, io.Discard, &stderr)
 	if err != nil {
-		return fmt.Errorf("sandbox probe: %w (if this program never called media.Init, call it first thing in main): %s",
-			err, bytes.TrimSpace(stderr.bytes()))
+		return fmt.Errorf("sandbox probe: %w: %s", err, bytes.TrimSpace(stderr.bytes()))
 	}
 	if res.Err != "" {
 		return fmt.Errorf("sandbox probe: %s", res.Err)
 	}
-	if err := checkProbe(res.Probe); err != nil {
+	if err := checkProbe(res.Probe, limits); err != nil {
 		return fmt.Errorf("sandbox probe: %w", err)
 	}
 	return nil
@@ -228,95 +219,27 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 	return res, nil
 }
 
-// runTool runs one tool through the sandbox helper.
-func (p *Processor) runTool(ctx context.Context, name string, args ...string) (Result, error) {
-	path, ok := p.tools[name]
-	if !ok {
-		return Result{}, fmt.Errorf("unknown tool %q", name)
-	}
-	tmp, err := p.runTempDir()
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	var stdout bytes.Buffer
-	var stderr headTailBuffer
-	res, err := runHelper(ctx, helperConfig{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
-	tail := bytes.TrimSpace(stderr.bytes())
-	return Result{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, helperError(ctx, name, res, err, tail)
-}
-
-// helperError turns the outcome of one helper run into an error, or nil.
-func helperError(ctx context.Context, name string, res helperResult, err error, tail []byte) error {
-	switch {
-	case ctx.Err() != nil:
-		return fmt.Errorf("%s: %w: %s", name, ctx.Err(), tail)
-	case err != nil:
-		return fmt.Errorf("%s: sandbox helper: %w: %s", name, err, tail)
-	case res.Err != "":
-		return fmt.Errorf("%s: sandbox helper: %s: %s", name, res.Err, tail)
-	case res.Signal != 0:
-		return fmt.Errorf("%s: killed by signal: %s: %s", name, syscall.Signal(res.Signal), tail)
-	case res.Code != 0:
-		return fmt.Errorf("%s: exit status %d: %s", name, res.Code, tail)
-	}
-	return nil
-}
-
-// composeFrames runs a frame compositor as the sandbox helper's tool, under
-// the same limits and filter as any tool: the GIF compositor, which is this
-// executable started again with compositorEnv set, or the external tool the
-// request names. onFrame is called, in order, with the path of each frame as
-// the compositor finishes it; if it fails the compositor is stopped and its
-// error returned. The usage returned covers the compositor.
-func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
-	tmp, err := p.runTempDir()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	cfg := helperConfig{Args: req.args(), Dir: p.dir}
-	name := "gif compositor"
-	if req.external != "" {
-		path, ok := p.tools[req.external]
-		if !ok {
-			return nil, fmt.Errorf("unknown tool %q", req.external)
-		}
-		cfg.Tool, cfg.Env, name = path, p.environ(tmp), req.external
-	} else {
-		exe, err := os.Executable()
+// sandboxRunner returns the runner that runs each process through the
+// sandbox helper under limits. Its Usage is what the helper measured for the
+// tool and its descendants.
+func sandboxRunner(limits rlimits) runner {
+	return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
+		res, err := runHelper(ctx, helperConfig{
+			Tool: spec.Tool, Args: spec.Args, Env: spec.Env, Dir: spec.Dir, Limits: limits,
+		}, stdout, stderr)
 		if err != nil {
-			return nil, err
+			err = fmt.Errorf("sandbox helper: %w", err)
 		}
-		cfg.Tool, cfg.Env = exe, []string{compositorEnv + "=1"}
+		out := res.toolResult()
+		if out.Err != "" {
+			out.Err = "sandbox helper: " + out.Err
+		}
+		return out, err
 	}
-	parent := ctx
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	lines := &frameLines{dir: req.dir, onFrame: onFrame}
-	var stderr headTailBuffer
-	res, err := runHelper(ctx, cfg, stopOnError{lines, cancel}, &stderr)
-	usage := res.Usage
-	if lines.err != nil {
-		return usage, lines.err
-	}
-	return usage, helperError(parent, name, res, err, bytes.TrimSpace(stderr.bytes()))
 }
 
-// stopOnError is a writer that calls stop when its writes fail, so that a
-// producer whose output is refused is cancelled instead of left running with
-// nobody reading it.
-type stopOnError struct {
-	w    io.Writer
-	stop func()
-}
-
-func (s stopOnError) Write(p []byte) (int, error) {
-	n, err := s.w.Write(p)
-	if err != nil {
-		s.stop()
-	}
-	return n, err
+func (r helperResult) toolResult() toolResult {
+	return toolResult{Err: r.Err, Signal: r.Signal, Code: r.Code, Usage: r.Usage}
 }
 
 // helperMain is the sandbox helper: it applies the sandbox to itself, runs
@@ -363,12 +286,12 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	if err := setSubreaper(); err != nil {
 		return helperResult{Err: err.Error()}
 	}
-	base, err := applySandbox(cfg.Fault)
+	base, err := applySandbox(cfg.Fault, cfg.Limits)
 	if err != nil {
 		return helperResult{Err: err.Error()}
 	}
 	if cfg.Probe {
-		return helperResult{Probe: readProbe(base)}
+		return helperResult{Probe: readProbe(base, cfg.Limits)}
 	}
 
 	// The parent closing its end of the lifeline, or dying, is the signal to
@@ -425,7 +348,7 @@ func setSubreaper() error {
 // applySandbox sets no_new_privs, the limits and the seccomp filter on the
 // calling process and returns the process base the process limit used. fault
 // names a guard to skip, for tests.
-func applySandbox(fault string) (uint64, error) {
+func applySandbox(fault string, limits rlimits) (uint64, error) {
 	const prSetNoNewPrivs = 38
 	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0); e != 0 {
 		return 0, fmt.Errorf("setting no_new_privs: %w", e)
@@ -434,7 +357,7 @@ func applySandbox(fault string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("counting the user's tasks: %w", err)
 	}
-	for _, l := range sandboxLimits() {
+	for _, l := range limits.specs() {
 		if fault == "limit:"+l.name {
 			continue
 		}
@@ -460,7 +383,7 @@ func applySandbox(fault string) (uint64, error) {
 	return base, nil
 }
 
-func readProbe(base uint64) *probeReport {
+func readProbe(base uint64, limits rlimits) *probeReport {
 	r := &probeReport{Limits: map[string][2]uint64{}, ProcessBase: base}
 	if fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0); err != nil {
 		r.SocketErrno = int(err.(syscall.Errno))
@@ -473,7 +396,7 @@ func readProbe(base uint64) *probeReport {
 		_ = syscall.Close(fds[0])
 		_ = syscall.Close(fds[1])
 	}
-	for _, l := range sandboxLimits() {
+	for _, l := range limits.specs() {
 		var rl syscall.Rlimit
 		if err := syscall.Getrlimit(l.resource, &rl); err == nil {
 			r.Limits[l.name] = [2]uint64{rl.Cur, rl.Max}

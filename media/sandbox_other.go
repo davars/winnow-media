@@ -5,6 +5,7 @@ package media
 import (
 	"context"
 	"errors"
+	"io"
 )
 
 func sandboxAvailable() error {
@@ -13,12 +14,10 @@ func sandboxAvailable() error {
 
 func helperMain() {}
 
-func probeSandbox(context.Context) error { return sandboxAvailable() }
+func probeSandbox(context.Context, rlimits) error { return sandboxAvailable() }
 
-func (p *Processor) runTool(context.Context, string, ...string) (Result, error) {
-	return Result{}, sandboxAvailable()
-}
-
-func (p *Processor) composeFrames(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
-	return nil, sandboxAvailable()
+func sandboxRunner(rlimits) runner {
+	return func(context.Context, runSpec, io.Writer, io.Writer) (toolResult, error) {
+		return toolResult{}, sandboxAvailable()
+	}
 }

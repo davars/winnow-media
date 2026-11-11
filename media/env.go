@@ -77,32 +77,41 @@
 //
 // # The sandbox
 //
+// Importing this package installs a package init that runs the importing
+// binary as the library's sandbox helper or frame compositor when a
+// WINNOW_MEDIA_* marker is set in its environment, and does nothing
+// otherwise; a program, or a test binary, needs no setup call.
+//
 // Every tool a Processor runs goes through a helper: the program's own
-// executable, started again with a marker in its environment (see Init). The
-// helper sets no_new_privs and these limits (soft and hard): CPU 210 s,
-// address space 8 GiB, file size 5 GiB, open files 1024, and tasks the user's
-// current count plus 512. It installs a seccomp filter, in pure Go, that makes
-// socket and socketpair fail with EPERM, kills a process using another
-// system-call ABI (32-bit or x32) and allows everything else. It becomes a
-// child subreaper, runs the tool as its child, and after the tool exits kills
-// and reaps every process left under it, orphans included. A tool killed by a
-// signal is reported as an error. Cancelling the context closes the helper's
-// lifeline, on which it kills the tool and its descendants; a killed helper
-// takes the tool with it.
+// executable, started again with such a marker. The helper sets no_new_privs
+// and these limits (soft and hard): CPU time, address space and file size
+// derived from the Processor's Resources (at the defaults 300 s, 8 GiB and
+// 5 GiB: the time limit, memory plus map plus 5 GiB, and the disk limit plus a
+// quarter), open files 1024, and tasks the user's current count plus 512. It
+// installs a seccomp filter, in pure Go, that makes socket and socketpair fail
+// with EPERM, kills a process using another system-call ABI (32-bit or x32)
+// and allows everything else. It becomes a child subreaper, runs the tool as
+// its child, and after the tool exits kills and reaps every process left under
+// it, orphans included. A tool killed by a signal is reported as an error.
+// Cancelling the context closes the helper's lifeline, on which it kills the
+// tool and its descendants; a killed helper takes the tool with it.
 //
 // The tool's environment and arguments are exactly those the Processor
 // passes, and it inherits only descriptors 0, 1 and 2: the helper marks the
 // rest close-on-exec (close_range, Linux 5.11) before starting it. Nothing
 // about the helper reaches it, and the consumer gets no process-wide side
 // effect. The GIF compositor and webp-frames are tools of this kind: the first
-// is the program's own executable, started with a marker that Init
+// is the program's own executable, started with a marker its package init
 // recognises, and the second is started from the tool directory like magick;
-// their CPU and peak memory count in Usage. NewProcessor refuses to return
-// unless Init was called, and then starts the helper once in a probe mode
-// that tries socket under the filter and reads the limits back; it requires
-// the call denied and every limit set. The sandbox needs Linux 5.11 or later
-// on amd64 or arm64; elsewhere, and on an older kernel, NewProcessor returns
-// an error (the Env functions still work).
+// their CPU and peak memory count in Usage. NewProcessor starts the helper
+// once in a probe mode that tries socket under the filter and reads the limits
+// back; it requires the call denied and every limit set. The sandbox needs
+// Linux 5.11 or later on amd64 or arm64; elsewhere, and on an older kernel,
+// NewProcessor returns an error (the Env functions still work) unless
+// Config.Unsandboxed is set. That runs each tool directly, in a process group
+// that is killed with the call and when the tool exits, with no seccomp
+// filter, rlimits or subreaper; the gate, caps, environment, policy and the
+// Resources values that reach the policy and the tool flags still apply.
 //
 // Landlock is not used, so file confinement rests on the container. A
 // deployment for hostile input must supply it: its own Deployment with no
@@ -122,8 +131,8 @@
 // derived from the coders each operation uses: it denies every delegate and
 // every coder, then allows the used coders for reading, writing or both,
 // denies @ indirect reads and sets ceilings on memory, map, disk, area, width,
-// height, list length, time and threads. The memory and map ceilings are those
-// of the MemoryProfile; the disk ceiling is 4 GiB whatever the profile.
+// height, list length, time and threads. The memory, map, disk, time and thread
+// ceilings are those of the Processor's Resources.
 //
 // Every ffprobe and ffmpeg run opens its input with -protocol_whitelist file,
 // so a nested input cannot reach the network. A Processor's runs also pin the
@@ -131,7 +140,8 @@
 // reference to an external data file is not followed); through an Env, an
 // input whose bytes name no video type is limited to the container formats
 // ffmpeg may detect, which exclude playlist and list formats that would open
-// other files. Each run also bounds ffmpeg's allocation, and its threads.
+// other files. Each run also bounds ffmpeg's allocation, and its threads
+// (Resources.Threads, at most two for a source above 4096x2160).
 package media
 
 import (
@@ -210,11 +220,43 @@ type Env struct {
 	Stage   Stager
 	Scratch Scratcher
 	// Memory selects ImageMagick's memory limits; the zero value is
-	// HighMemory. A Processor sets it from its own profile.
+	// HighMemory. A Processor's Env ignores it.
 	Memory MemoryProfile
+
+	// resources, when set, replaces Memory: a Processor's resolved Resources.
+	resources *Resources
 
 	// compose runs the frame compositor; it is set only by a Processor.
 	compose composer
+}
+
+// limits returns the resource limits the Env's runs are held to.
+func (e Env) limits() (Resources, error) {
+	if e.resources != nil {
+		return *e.resources, nil
+	}
+	return e.Memory.resources()
+}
+
+// threads is the thread count of the Env's ffmpeg and ffprobe runs; an
+// undefined Memory leaves the default, and runMagick reports it.
+func (e Env) threads() int {
+	if r, err := e.limits(); err == nil {
+		return r.Threads
+	}
+	return defaultThreads
+}
+
+// consumeTimeout is how long the Env's compositor waits for a written frame
+// to be consumed.
+func (e Env) consumeTimeout() time.Duration {
+	if composeTimeout != 0 {
+		return composeTimeout
+	}
+	if r, err := e.limits(); err == nil {
+		return r.TimeLimit
+	}
+	return defaultTimeLimit
 }
 
 // composer composites the selected frames of a GIF or animated WebP in the

@@ -18,10 +18,10 @@ const (
 )
 
 // Processor runs the media operations. Every tool runs in the sandbox
-// described at NewProcessor. It owns the tools it runs, the
-// ImageMagick policy those runs obey and a private directory for both; it
-// refuses to be created unless ImageMagick reports that policy as the only
-// one in effect. A Processor is safe for concurrent use.
+// described at NewProcessor, unless Config.Unsandboxed is set. It owns the
+// tools it runs, the ImageMagick policy those runs obey and a private
+// directory for both; it refuses to be created unless ImageMagick reports that
+// policy as the only one in effect. A Processor is safe for concurrent use.
 //
 // The paths an operation takes, path and dir, may be relative. An operation
 // moves no bytes beyond reading the source and writing into its dir, where
@@ -31,10 +31,12 @@ const (
 // guarantees that span the operations (the gate, the caps, the sandbox, the
 // policy) are in the package documentation.
 type Processor struct {
-	dir    string
-	memory MemoryProfile
-	tools  map[string]string
-	run    Runner
+	dir   string
+	res   Resources
+	tools map[string]string
+	// start runs one process: the sandbox helper, or the direct runner.
+	start runner
+	run   Runner
 	// compose runs the frame compositor of a GIF or animated WebP; tests
 	// replace it.
 	compose func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
@@ -42,36 +44,48 @@ type Processor struct {
 
 // NewProcessor resolves magick, ffmpeg, ffprobe and webp-frames with the tool
 // package, checks that the sandbox every tool run goes through is in force,
-// creates a private directory with os.MkdirTemp under the system temporary
-// directory, installs a generated ImageMagick policy there and reads it back
-// with "magick -list policy" and "-list resource". It returns an error, after
+// creates a private directory with os.MkdirTemp under cfg.Dir, installs a
+// generated ImageMagick policy there and reads it back with
+// "magick -list policy" and "-list resource". It returns an error, after
 // removing the directory, unless the first policy file listed is the
 // installed one with exactly the rules written, no other file contributes a
 // rule and no resource limit reads back above the ceiling written
 // (ImageMagick may lower one, such as threads to the host's CPUs). Call Close
 // when done.
 //
-// The sandbox is a helper process (see Init) that limits the tool's
-// resources and denies it socket creation, and kills whatever the tool leaves
-// running. NewProcessor requires that Init was called, and refuses to return
-// unless the helper reports the sandbox applied. It returns an error on
-// platforms other than Linux on amd64 or arm64.
+// The sandbox is a helper process that limits the tool's resources and denies
+// it socket creation, and kills whatever the tool leaves running. NewProcessor
+// refuses to return unless the helper reports the sandbox applied, with the
+// limits derived from cfg.Resources. It returns an error on platforms other
+// than Linux on amd64 or arm64, unless cfg.Unsandboxed is set.
 //
-// profile sets ImageMagick's memory and map limits, in the policy and in the
-// flags of every run; it is an error if undefined.
-func NewProcessor(ctx context.Context, profile MemoryProfile) (*Processor, error) {
-	settings, err := profile.settings()
+// It is an error if cfg.Resources has a negative field or a TimeLimit that is
+// not a whole number of seconds of at least one, or if cfg.Dir is not an
+// existing directory.
+func NewProcessor(ctx context.Context, cfg Config) (*Processor, error) {
+	return newProcessor(ctx, cfg, nil)
+}
+
+// newProcessor is NewProcessor with wrap, when not nil, applied to the runner
+// the Processor would use; tests inject runners through it.
+func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*Processor, error) {
+	res, err := cfg.Resources.resolve()
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	if err := sandboxAvailable(); err != nil {
-		return nil, fmt.Errorf("processor: %w", err)
+	start := runner(directRunner)
+	if !cfg.Unsandboxed {
+		if err := sandboxAvailable(); err != nil {
+			return nil, fmt.Errorf("processor: %w", err)
+		}
+		limits := rlimitsFor(res)
+		if err := probeSandbox(ctx, limits); err != nil {
+			return nil, fmt.Errorf("processor: %w", err)
+		}
+		start = sandboxRunner(limits)
 	}
-	if !initCalled.Load() {
-		return nil, fmt.Errorf("processor: %w", errNoInit)
-	}
-	if err := probeSandbox(ctx); err != nil {
-		return nil, fmt.Errorf("processor: %w", err)
+	if wrap != nil {
+		start = wrap(start)
 	}
 	tools := map[string]string{}
 	for _, name := range []string{"magick", "ffmpeg", "ffprobe", webpFramesTool} {
@@ -83,18 +97,26 @@ func NewProcessor(ctx context.Context, profile MemoryProfile) (*Processor, error
 			return nil, fmt.Errorf("processor: %w", err)
 		}
 	}
-	base, err := filepath.Abs(os.TempDir())
+	parent := cfg.Dir
+	if parent == "" {
+		parent = os.TempDir()
+	}
+	if parent, err = filepath.Abs(parent); err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
+	if info, err := os.Stat(parent); err != nil {
+		return nil, fmt.Errorf("processor: Dir: %w", err)
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("processor: Dir %s is not a directory", parent)
+	}
+	dir, err := os.MkdirTemp(parent, "media-processor-")
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	dir, err := os.MkdirTemp(base, "media-processor-")
-	if err != nil {
-		return nil, fmt.Errorf("processor: %w", err)
-	}
-	p := &Processor{dir: dir, memory: profile, tools: tools}
+	p := &Processor{dir: dir, res: res, tools: tools, start: start}
 	p.run = p.runTool
 	p.compose = p.composeFrames
-	rules := processorPolicy(settings)
+	rules := processorPolicy(res)
 	if err := p.install(rules); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
@@ -181,8 +203,9 @@ type meter struct{ usage Usage }
 
 // env returns an Env that runs through the Processor and adds each run to m.
 func (p *Processor) env(m *meter) Env {
+	res := p.res
 	return Env{
-		Memory: p.memory,
+		resources: &res,
 		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
 			res, err := p.run(ctx, name, args...)
 			m.add(res.Usage)

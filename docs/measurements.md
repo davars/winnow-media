@@ -29,7 +29,7 @@ animation. `-list` prints the input names.
 
 Two hosts were used. The reference host is a 12-CPU x86_64 machine. The
 Raspberry Pi 5 figures come from three Raspberry Pi 5 nodes running the
-`LowMemory` profile, one request per 1536Mi pod.
+`LowMemory` limits (512 MiB memory, 1 GiB map), one request per 1536Mi pod.
 
 ## Caps and ceilings
 
@@ -72,8 +72,8 @@ Animations:
 
 ImageMagick policy ceilings:
 
-- The memory and map ceilings are those of the memory profile (1 and 2 GiB for
-  `HighMemory`); the disk ceiling is 4 GiB whatever the profile.
+- The memory, map and disk ceilings are those of the Processor's `Resources`
+  (1, 2 and 4 GiB by default, which `HighMemory` measured).
 - The time ceiling is at least four times the longest ImageMagick run
   measured to complete (36 s). The ffmpeg allocation limit is four times what
   an 8K frame needs (1 GiB; a 4K HDR frame needs 32 MiB, one float plane of the
@@ -108,9 +108,12 @@ The values chosen, from those peaks:
 
 - CPU 210 s: the heaviest single process, 25 s, times 4.1 (the worst CPU
   ratio measured on a Raspberry Pi 5, 4K HEVC decode), times a safety margin
-  of 2, rounded up.
+  of 2, rounded up. The limit is the Processor's `TimeLimit`, 300 s by default,
+  which is looser than this figure.
 - Address space 8 GiB: 2.4 times the worst peak (3.2 GiB), leaving room for
-  the per-thread arenas that grow with a host's CPU count.
+  the per-thread arenas that grow with a host's CPU count. The limit is the
+  Processor's `Memory` plus `Map` plus 5 GiB, 8 GiB at the defaults; the file
+  size limit is `Disk` plus a quarter, 5 GiB at the defaults.
 - Open files 1024: five times the 199 measured.
 - Tasks: 512 beyond the user's current count, against 28 measured in one tool
   (ffmpeg).
@@ -126,8 +129,8 @@ The values chosen, from those peaks:
 
 The measured model is one request per pod:
 
-- a memory limit of 1536Mi per request in flight, with the `LowMemory`
-  profile;
+- a memory limit of 1536Mi per request in flight, with `Resources` of 512 MiB
+  memory and 1 GiB map (the `LowMemory` limits);
 - scratch on a disk-backed `emptyDir` (never `medium: Memory`) with a
   `sizeLimit` of about 8Gi, holding ImageMagick's temporary directory and the
   processor's scratch. ImageMagick's pixel cache is memory-mapped there, so
