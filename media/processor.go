@@ -1,6 +1,7 @@
 package media
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -39,7 +40,11 @@ type Processor struct {
 	// types is the resolved Config.Types, sorted; accepts is it as a set.
 	types   []string
 	accepts map[string]bool
-	tools   map[string]string
+	// detect is the -format_whitelist of the probe that names a video the
+	// leading bytes do not: the demuxers of the detected types of types.
+	// Empty when there are none, which turns the probe off.
+	detect string
+	tools  map[string]string
 	// start runs one process: the sandbox helper, or the direct runner.
 	start runner
 	run   Runner
@@ -140,7 +145,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	for _, typ := range types {
 		accepts[typ] = true
 	}
-	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, tools: tools, start: start}
+	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, detect: detectedDemuxers(types), tools: tools, start: start}
 	p.run = p.runTool
 	p.compose = p.composeFrames
 	rules := processorPolicy(res, types)
@@ -302,7 +307,9 @@ type admitted struct {
 	decoder decoder
 	// scenes are the headers of every image, read by the gate for a file it
 	// named by ImageMagick's detection; nil otherwise.
-	scenes  []sceneHeader
+	scenes []sceneHeader
+	// probe is the probe that named a video the bytes did not; nil otherwise.
+	probe   *videoInfo
 	release func()
 }
 
@@ -320,10 +327,13 @@ type accepted struct {
 // that is read. The input must be a regular file within Caps.MaxInputBytes;
 // its type must be one of Config.Types that the operation reads. A GIF, WebP,
 // ISO base media or EBML file is typed by its leading bytes before any tool
-// runs, and every animation and video type is of that kind. Other content is
-// named by one header read under the generated policy, which allows only the
-// coders of Config.Types, so the content can select no other. A type the
-// caller names is used as it is, with no sniff or header read to name one.
+// runs. Other content is named by one header read under the generated policy,
+// which allows only the coders of Config.Types, so the content can select no
+// other. A file whose bytes open a known video container, or an ISO base media
+// file of no still image's brand, is first probed by ffprobe (detectVideo),
+// restricted to the demuxers of the detected types of Config.Types, and the
+// header read is the fallback if the probe refuses it. A type the caller names
+// is used as it is, with no sniff, probe or header read to name one.
 func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path string) (in admitted, err error) {
 	path, err = filepath.Abs(path)
 	if err != nil {
@@ -358,13 +368,20 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path s
 		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
 	}
 	typ := a.typ
+	var lead leadBytes
 	if typ == "" {
-		if typ, err = sniffFile(input{f: f}); err != nil && !errors.Is(err, errUnnamed) {
+		head, err := readHead(input{f: f})
+		if err != nil {
 			return admitted{}, err
 		}
-	}
-	if typ == "" && a.kind&kindStill == 0 {
-		return admitted{}, errUnnamed
+		if typ, err = sniff(head); err != nil {
+			lead.err = err
+			_, lead.looksVideo = videoContainerOf(head)
+			lead.looksVideo = lead.looksVideo && !leadsStill(head)
+			if !errors.Is(err, errUnnamed) && !errors.Is(err, errOtherBrand) {
+				return admitted{}, err
+			}
+		}
 	}
 	if typ != "" {
 		if err := p.checkType(typ, a.kind); err != nil {
@@ -385,16 +402,98 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path s
 	}
 	in = admitted{file: f, ref: ref, dir: dir, abs: path, id: idOf(info), release: release}
 	if typ == "" {
-		var coder string
-		if typ, coder, in.scenes, err = p.detectType(ctx, m, f, ref, a.kind); err != nil {
+		if err := p.admitUnnamed(ctx, m, f, ref, a, lead, &in); err != nil {
 			release()
 			return admitted{}, err
 		}
-		in.typ, in.decoder = typ, typeTable[typ].decoderFor(coder)
 		return in, nil
 	}
 	in.typ, in.decoder = typ, typeTable[typ].decoderFor("")
 	return in, nil
+}
+
+// leadBytes is what sniff made of the leading bytes of an input it named no
+// type for.
+type leadBytes struct {
+	// err is sniff's error: errUnnamed, or errOtherBrand for an ISO base media
+	// file of a brand that is not a still image's.
+	err error
+	// looksVideo is set when the bytes open a container videoContainerOf knows.
+	looksVideo bool
+}
+
+// canDetect reports whether ffprobe may name an input an operation of kind
+// reads.
+func (p *Processor) canDetect(kind mediaKind) bool {
+	return kind&kindVideo != 0 && p.detect != ""
+}
+
+// admitUnnamed types an input whose leading bytes name no type, filling in.
+// An ISO base media file of an unknown brand, and a file whose bytes open a
+// known video container, are probed as a video; any other file is never shown
+// to ffprobe, so content that is not video, such as an image ImageMagick
+// reads or refuses, costs no probe. A file the probe refuses is read as an
+// image next, except an unknown ISO base media brand, which no coder reads.
+func (p *Processor) admitUnnamed(ctx context.Context, m *meter, f *os.File, ref string, a accepted, lead leadBytes, in *admitted) error {
+	otherBrand := errors.Is(lead.err, errOtherBrand)
+	var probeErr error
+	if p.canDetect(a.kind) && (lead.looksVideo || otherBrand) {
+		probeErr = p.detectVideo(ctx, m, f, ref, !otherBrand, in)
+		if probeErr == nil || !errors.Is(probeErr, ErrUnsupportedType) {
+			return probeErr
+		}
+	}
+	if otherBrand || a.kind&kindStill == 0 {
+		return cmp.Or(probeErr, lead.err)
+	}
+	typ, coder, scenes, err := p.detectType(ctx, m, f, ref, a.kind)
+	if err != nil {
+		if probeErr != nil {
+			return fmt.Errorf("%w; and as a video: %v", err, probeErr)
+		}
+		return err
+	}
+	in.typ, in.decoder, in.scenes = typ, typeTable[typ].decoderFor(coder), scenes
+	return nil
+}
+
+// probeRefused reports whether err says that ffprobe ran to completion and
+// found no video of the whitelisted containers: it exited with the demuxer's
+// refusal, or its output had no usable video stream. A probe that was killed,
+// could not start or ran out of resources says nothing about the file, so its
+// error is not a refusal; nor is a file over a cap (ErrTooLarge).
+func probeRefused(err error) bool {
+	if errors.Is(err, ErrTooLarge) || errors.Is(err, ErrTimeLimit) {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no video stream") || strings.Contains(msg, "video stream reports size") {
+		return true
+	}
+	return strings.Contains(msg, "exit status") &&
+		(strings.Contains(msg, "Invalid data found") || strings.Contains(msg, "not on whitelist"))
+}
+
+// detectVideo asks ffprobe, in the sandbox and through the input's
+// descriptor, whether the file is a video of a detected type of
+// Config.Types, and on success fills in with its type, decoder and probe. The
+// probe may pick no demuxer outside p.detect, so what it names is one of the
+// configured types; no frame is decoded. preferMOV is set for a file with no
+// ftyp box, which the mov demuxer reads as QuickTime.
+func (p *Processor) detectVideo(ctx context.Context, m *meter, f *os.File, ref string, preferMOV bool, in *admitted) error {
+	info, err := probeDetected(ctx, p.env(m, f), p.detect, ref)
+	if err != nil {
+		if !probeRefused(err) {
+			return err
+		}
+		return unrecognized("not a video of a configured container: " + firstLine(err.Error()))
+	}
+	typ, demuxer, ok := p.detectedType(info.format, preferMOV)
+	if !ok {
+		return unrecognized(fmt.Sprintf("video container %q", info.format))
+	}
+	in.typ, in.decoder, in.probe = typ, decoder{"ffmpeg", demuxer}, &info
+	return nil
 }
 
 // checkType refuses a type the Processor was not configured with, or one the

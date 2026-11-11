@@ -35,16 +35,30 @@ func unrecognized(what string) error {
 // refuses a file that does name one.
 var errUnnamed = unrecognized("unrecognized content")
 
-// sniffFile returns the media type of the input from its leading bytes alone.
-func sniffFile(in input) (string, error) {
+// errOtherBrand is what sniff returns for an ISO base media file whose brand
+// is none it names and is not that of a still image: the container may still
+// be a video, which only a probe can say.
+var errOtherBrand = unrecognized("ISO base media brand")
+
+// readHead returns the leading bytes of the input that sniffing reads.
+func readHead(in input) ([]byte, error) {
 	r, done, err := in.open()
 	if err != nil {
-		return "", fmt.Errorf("source: %w", err)
+		return nil, fmt.Errorf("source: %w", err)
 	}
 	defer done()
 	buf, err := io.ReadAll(io.LimitReader(r, sniffBytes))
 	if err != nil {
-		return "", fmt.Errorf("source: %w", err)
+		return nil, fmt.Errorf("source: %w", err)
+	}
+	return buf, nil
+}
+
+// sniffFile returns the media type of the input from its leading bytes alone.
+func sniffFile(in input) (string, error) {
+	buf, err := readHead(in)
+	if err != nil {
+		return "", err
 	}
 	return sniff(buf)
 }
@@ -80,6 +94,12 @@ var (
 	mp4Brands  = brandSet("isom", "iso2", "iso3", "iso4", "iso5", "iso6", "mp41", "mp42",
 		"avc1", "M4V ", "dash", "3gp4", "3gp5", "3gp6", "3g2a")
 )
+
+// stillBrands are the brands of ISO base media files that hold still images,
+// camera raw or JPEG 2000 rather than video, and of the HEIF family whose
+// members sniff cannot tell apart. They are never probed as a video: ffmpeg's
+// mov demuxer reads such a file as if it had a video stream.
+var stillBrands = brandSet("mif1", "mif2", "msf1", "miaf", "heif", "avci", "avcs", "crx ", "jp2 ", "jpx ", "jpm ")
 
 func sniffFtyp(b []byte) (string, error) {
 	if len(b) < 16 {
@@ -117,7 +137,42 @@ func sniffFtyp(b []byte) (string, error) {
 	case mp4Brands[major]:
 		return typeMP4, nil
 	}
-	return "", unrecognized(fmt.Sprintf("ISO base media brand %q", major))
+	if isStillBrand(major) || slices.ContainsFunc(compatible, isStillBrand) {
+		return "", unrecognized(fmt.Sprintf("ISO base media brand %q", major))
+	}
+	return "", fmt.Errorf("%w %q", errOtherBrand, major)
+}
+
+// isStillBrand reports whether an ISO base media brand marks a file of still
+// images, whether sniff names its type or not.
+func isStillBrand(brand string) bool {
+	return stillBrands[brand] || heicBrands[brand] || avifBrands[brand]
+}
+
+// leadsStill reports whether the top-level ftyp box among the first boxes of
+// b, which may follow a free or wide box, has a brand of a still-image file.
+func leadsStill(b []byte) bool {
+	off := uint64(0)
+	for range 8 {
+		if uint64(len(b)) < off+16 {
+			return false
+		}
+		size := uint64(binary.BigEndian.Uint32(b[off:]))
+		if string(b[off+4:off+8]) == "ftyp" {
+			end := min(off+size, uint64(len(b)))
+			for at := off + 8; at+4 <= end; at += 4 {
+				if at != off+12 && isStillBrand(string(b[at:at+4])) { // 12..16 is the minor version
+					return true
+				}
+			}
+			return false
+		}
+		if size < 8 {
+			return false
+		}
+		off += size
+	}
+	return false
 }
 
 // readVint reads an EBML variable-length integer. keepMarker leaves the

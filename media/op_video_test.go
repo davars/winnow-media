@@ -86,8 +86,11 @@ func TestVideoFramesRefusals(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	var calls int
-	p.run = func(context.Context, string, ...string) (Result, error) {
+	p.run = func(_ context.Context, name string, _ ...string) (Result, error) {
 		calls++
+		if name == "ffprobe" {
+			return Result{}, errors.New("ffprobe: exit status 183: Invalid data found when processing input")
+		}
 		return Result{}, errors.New("tool run")
 	}
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
@@ -105,18 +108,21 @@ func TestVideoFramesRefusals(t *testing.T) {
 		maxFrames       int
 		dir             string
 		unsupportedType bool
+		// probes is set for input the gate shows to ffprobe, which names its
+		// container, before refusing it.
+		probes bool
 	}{
-		{"image type", gif, Encoding{}, 0, t.TempDir(), true},
-		{"audio type", audio, Encoding{}, 0, t.TempDir(), true},
-		{"unrecognized content", garbage, Encoding{}, 0, t.TempDir(), true},
-		{"max frames negative", mp4, Encoding{}, -1, t.TempDir(), false},
-		{"max frames too large", mp4, Encoding{}, 65, t.TempDir(), false},
-		{"unknown format", mp4, Encoding{Format: "gif"}, 0, t.TempDir(), false},
-		{"quality too large", mp4, Encoding{Quality: 101}, 0, t.TempDir(), false},
-		{"max edge too small", mp4, Encoding{MaxEdge: 15}, 0, t.TempDir(), false},
-		{"max area too large", mp4, Encoding{MaxArea: 100_000_001}, 0, t.TempDir(), false},
-		{"dir not empty", mp4, Encoding{}, 0, nonEmpty, false},
-		{"dir missing", mp4, Encoding{}, 0, filepath.Join(t.TempDir(), "absent"), false},
+		{"image type", gif, Encoding{}, 0, t.TempDir(), true, false},
+		{"audio type", audio, Encoding{}, 0, t.TempDir(), true, true},
+		{"unrecognized content", garbage, Encoding{}, 0, t.TempDir(), true, false},
+		{"max frames negative", mp4, Encoding{}, -1, t.TempDir(), false, false},
+		{"max frames too large", mp4, Encoding{}, 65, t.TempDir(), false, false},
+		{"unknown format", mp4, Encoding{Format: "gif"}, 0, t.TempDir(), false, false},
+		{"quality too large", mp4, Encoding{Quality: 101}, 0, t.TempDir(), false, false},
+		{"max edge too small", mp4, Encoding{MaxEdge: 15}, 0, t.TempDir(), false, false},
+		{"max area too large", mp4, Encoding{MaxArea: 100_000_001}, 0, t.TempDir(), false, false},
+		{"dir not empty", mp4, Encoding{}, 0, nonEmpty, false, false},
+		{"dir missing", mp4, Encoding{}, 0, filepath.Join(t.TempDir(), "absent"), false, false},
 	}
 	for _, entry := range videoEntries() {
 		for _, c := range cases {
@@ -124,7 +130,11 @@ func TestVideoFramesRefusals(t *testing.T) {
 				continue
 			}
 			t.Run(entry.name+"/"+c.name, func(t *testing.T) {
+				before := calls
 				err := entry.call(p, c.path, c.enc, c.maxFrames, c.dir)
+				if !c.probes && calls != before {
+					t.Errorf("%d tool runs before refusal", calls-before)
+				}
 				if err == nil {
 					t.Fatal("succeeded")
 				}
@@ -133,9 +143,6 @@ func TestVideoFramesRefusals(t *testing.T) {
 				}
 			})
 		}
-	}
-	if calls != 0 {
-		t.Errorf("%d tool runs before refusal", calls)
 	}
 	if got := dirNames(t, nonEmpty); !slices.Equal(got, []string{"leftover"}) {
 		t.Errorf("refused directory now holds %v", got)
@@ -154,6 +161,8 @@ func TestVideoTypePins(t *testing.T) {
 	want := map[string]string{
 		"video/mp4": "ffmpeg:mov", "video/quicktime": "ffmpeg:mov",
 		"video/webm": "ffmpeg:matroska", "video/x-matroska": "ffmpeg:matroska",
+		"video/x-msvideo": "ffmpeg:avi", "video/x-ms-asf": "ffmpeg:asf", "video/mpeg": "ffmpeg:mpeg",
+		"video/mp2t": "ffmpeg:mpegts", "video/x-flv": "ffmpeg:flv",
 	}
 	if !maps.Equal(pins, want) {
 		t.Errorf("pins = %v, want %v", pins, want)

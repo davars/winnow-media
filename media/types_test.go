@@ -190,6 +190,11 @@ var typeFixtures = map[string]typeFixture{
 	"video/x-matroska": {build: func(t *testing.T) string {
 		return writeClip(t, requireFFmpeg(t), ".mkv", append(testsrc("160x120", 10, 1), "-c:v", "libx264", "-pix_fmt", "yuv420p")...)
 	}},
+	typeAVI:    {build: func(t *testing.T) string { return ffClip(t, "mpeg4", "-f", "avi") }, w: 160, h: 120},
+	typeASF:    {build: func(t *testing.T) string { return ffClip(t, "wmv2", "-f", "asf") }, w: 160, h: 120},
+	typeMPEG:   {build: func(t *testing.T) string { return ffClip(t, "mpeg2video", "-f", "mpeg") }, w: 160, h: 120},
+	typeMPEGTS: {build: func(t *testing.T) string { return ffClip(t, "mpeg2video", "-f", "mpegts") }, w: 160, h: 120},
+	typeFLV:    {build: func(t *testing.T) string { return ffClip(t, "flv1", "-f", "flv") }, w: 160, h: 120},
 }
 
 func TestEveryTableTypeHasAFixture(t *testing.T) {

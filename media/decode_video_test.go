@@ -478,12 +478,11 @@ func TestOpenRefusesWhatIsNeitherImageNorVideo(t *testing.T) {
 	}
 }
 
-// The Processor's type set is the sniffed one: a container only the Env reads
-// is refused.
-func TestProcessorVideoOperationsRefuseAnAVI(t *testing.T) {
+// An AVI is read only when Config.Types names it.
+func TestProcessorVideoOperationsRefuseAnAVIOutsideTypes(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
-	p := requireProcessor(t)
+	p := requireProcessorWith(t, Config{Types: []string{typeMP4}})
 	path := filepath.Join(t.TempDir(), "input")
 	args := append(testsrc("64x48", 10, 1), "-c:v", "mpeg4", "-f", "avi", path)
 	if _, err := env.Run(context.Background(), "ffmpeg", append([]string{"-nostdin", "-v", "error", "-y"}, args...)...); err != nil {

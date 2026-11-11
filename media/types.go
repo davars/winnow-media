@@ -24,9 +24,16 @@ type typeEntry struct {
 	coders []string
 	// demuxer is the ffmpeg demuxer of a video.
 	demuxer string
+	// alsoDemuxers are other demuxers that read the type: a detected file
+	// they read is pinned to the one that read it.
+	alsoDemuxers []string
 	// sniffed types are named by their leading bytes (sniff.go), so
 	// ImageMagick is never asked to detect them.
 	sniffed bool
+	// detected video types may also be named by ffprobe, restricted to the
+	// demuxers of the configured detected types, for a file whose leading
+	// bytes name no type (see Processor.detectVideo).
+	detected bool
 	// keptExact marks a type whose kept decode (see OpenOptions.Reuse) gives
 	// the bytes of a fresh decode. TestEveryTypeMarkedExactHasAFixture fails
 	// for a marked type without a fixture whose kept decode gives them.
@@ -67,10 +74,78 @@ var typeTable = map[string]typeEntry{
 	"image/vnd.djvu":                {kind: kindStill, coders: []string{"DJVU"}},
 	"image/x-adobe-dng":             {kind: kindStill, coders: []string{"DNG"}},
 
-	typeMP4:  {kind: kindVideo, demuxer: "mov", sniffed: true},
-	typeMOV:  {kind: kindVideo, demuxer: "mov", sniffed: true},
-	typeWebM: {kind: kindVideo, demuxer: "matroska", sniffed: true},
-	typeMKV:  {kind: kindVideo, demuxer: "matroska", sniffed: true},
+	typeMP4:    {kind: kindVideo, demuxer: "mov", sniffed: true, detected: true},
+	typeMOV:    {kind: kindVideo, demuxer: "mov", sniffed: true, detected: true},
+	typeWebM:   {kind: kindVideo, demuxer: "matroska", sniffed: true},
+	typeMKV:    {kind: kindVideo, demuxer: "matroska", sniffed: true},
+	typeAVI:    {kind: kindVideo, demuxer: "avi", detected: true},
+	typeASF:    {kind: kindVideo, demuxer: "asf", detected: true},
+	typeMPEG:   {kind: kindVideo, demuxer: "mpeg", alsoDemuxers: []string{"mpegvideo"}, detected: true},
+	typeMPEGTS: {kind: kindVideo, demuxer: "mpegts", detected: true},
+	typeFLV:    {kind: kindVideo, demuxer: "flv", detected: true},
+}
+
+// The video types that no leading-bytes sniff names. WMV is ASF.
+const (
+	typeAVI    = "video/x-msvideo"
+	typeASF    = "video/x-ms-asf"
+	typeMPEG   = "video/mpeg"
+	typeMPEGTS = "video/mp2t"
+	typeFLV    = "video/x-flv"
+)
+
+// readers returns every demuxer that reads the type, its own first.
+func (e typeEntry) readers() []string {
+	return append([]string{e.demuxer}, e.alsoDemuxers...)
+}
+
+// detectedDemuxers returns the demuxers of the detected types among types,
+// sorted and without repeats, as ffmpeg's -format_whitelist takes them.
+func detectedDemuxers(types []string) string {
+	var names []string
+	for _, typ := range types {
+		if e := typeTable[typ]; e.detected {
+			names = append(names, e.readers()...)
+		}
+	}
+	slices.Sort(names)
+	return strings.Join(slices.Compact(names), ",")
+}
+
+// detectedType returns the accepted detected type that a container of ffprobe
+// format_name names, which lists the demuxer's aliases, and the demuxer of the
+// type that read it. The mov demuxer reads MP4 and QuickTime alike; preferMOV
+// says QuickTime, for a file with no ftyp box, and else it is MP4.
+func (p *Processor) detectedType(formatName string, preferMOV bool) (typ, demuxer string, ok bool) {
+	names := strings.Split(formatName, ",")
+	var found []string
+	for _, t := range p.types {
+		if e := typeTable[t]; e.detected && slices.ContainsFunc(e.readers(), func(d string) bool { return slices.Contains(names, d) }) {
+			found = append(found, t)
+		}
+	}
+	switch {
+	case len(found) == 0:
+		return "", "", false
+	case slices.Contains(names, "mov"):
+		// The one demuxer reads both: the file's own kind of ftyp, or the
+		// lack of one, says which type, and a type not configured is refused.
+		typ = typeMP4
+		if preferMOV {
+			typ = typeMOV
+		}
+		if !slices.Contains(found, typ) {
+			return "", "", false
+		}
+	default:
+		typ = found[0]
+	}
+	for _, d := range typeTable[typ].readers() {
+		if slices.Contains(names, d) {
+			return typ, d, true
+		}
+	}
+	return "", "", false
 }
 
 // coderTypes maps the %m ImageMagick reports for content its own detection
@@ -92,9 +167,10 @@ var coderTypes = func() map[string]string {
 
 // Types returns the media types the library has a pinned decoder for, sorted:
 // every type of the table, which is the default of Config.Types. SVG, MVG,
-// MSL, PostScript, EPS, PDF and text are never among them. TGA, ICO and CUR
-// (one type), G3 and DNG are not identified from content: they are decoded
-// only when the caller names the type in OpenOptions.Type. A TIFF whose first
+// MSL, PostScript, EPS, PDF and text are never among them. WMV is the ASF
+// type. TGA, ICO and CUR (one type), G3 and DNG are not identified from
+// content: they are decoded only when the caller names the type in
+// OpenOptions.Type. A TIFF whose first
 // image is a reduced-resolution preview, as in a camera raw file, is likewise
 // refused unless its type is named.
 func Types() []string {

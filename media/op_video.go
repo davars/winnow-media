@@ -106,6 +106,9 @@ type videoInfo struct {
 	// containerStartUS is the container's start time in microseconds, the
 	// origin ffmpeg's -ss counts from; 0 when unknown.
 	containerStartUS int64
+	// format is ffprobe's format_name, the demuxer and its aliases; set only
+	// by the probe that detects a container.
+	format string
 }
 
 // upright returns the dimensions the decoded frames have, which ffmpeg
@@ -139,8 +142,9 @@ type probeJSON struct {
 		} `json:"side_data_list"`
 	} `json:"streams"`
 	Format struct {
-		Duration  string `json:"duration"`
-		StartTime string `json:"start_time"`
+		Duration   string `json:"duration"`
+		StartTime  string `json:"start_time"`
+		FormatName string `json:"format_name"`
 	} `json:"format"`
 }
 
@@ -158,13 +162,14 @@ const detectedFormats = "mov,matroska,avi,mpegts,mpeg,mpegvideo,flv,asf"
 
 // inputArgs returns the arguments that open path in ffprobe or ffmpeg: the
 // file protocol only, so no nested input is opened over the network, and the
-// decoder's demuxer with its options. A decoder with no name leaves the
+// decoder's demuxer with its options, as the only format the demuxer may open
+// within the file, so that no sub-demuxer is chosen by the content. A decoder with no name leaves the
 // demuxer to ffmpeg's detection, limited to detectedFormats.
 func inputArgs(dec decoder, path string) []string {
 	if dec.name == "" {
 		return []string{"-protocol_whitelist", "file", "-format_whitelist", detectedFormats, "-i", path}
 	}
-	args := []string{"-protocol_whitelist", "file"}
+	args := []string{"-protocol_whitelist", "file", "-format_whitelist", dec.name}
 	args = append(args, demuxerOptions[dec.name]...)
 	return append(args, "-f", dec.name, "-i", path)
 }
@@ -183,11 +188,26 @@ func probeVideo(ctx context.Context, env Env, dec decoder, path string) (videoIn
 }
 
 func runVideoProbe(ctx context.Context, env Env, dec decoder, path, entries string) (videoInfo, error) {
+	return runProbe(ctx, env, entries, inputArgs(dec, path))
+}
+
+// probeDetected runs the probe on a file left to ffmpeg's detection among the
+// demuxers formats lists, and reports which demuxer read it in format.
+func probeDetected(ctx context.Context, env Env, formats, path string) (videoInfo, error) {
+	in := []string{"-protocol_whitelist", "file", "-format_whitelist", formats, "-i", path}
+	info, err := runProbe(ctx, env, probeEntries+",format_name", in)
+	if err != nil {
+		return videoInfo{}, err
+	}
+	return info, checkVideoInfo(info)
+}
+
+func runProbe(ctx context.Context, env Env, entries string, input []string) (videoInfo, error) {
 	args := []string{
 		"-v", "error", "-of", "json", "-show_entries", entries,
 		"-max_alloc", strconv.Itoa(ffmpegMaxAlloc), "-threads", strconv.Itoa(env.threads()),
 	}
-	args = append(args, inputArgs(dec, path)...)
+	args = append(args, input...)
 	res, err := env.Run(ctx, "ffprobe", args...)
 	if err != nil {
 		return videoInfo{}, fmt.Errorf("probing video: %w", err)
@@ -220,7 +240,7 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 		}
 		v := videoInfo{
 			stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer,
-			streams: len(p.Streams), codec: s.CodecName, rate: parseRate(s.RFrameRate), avgRate: parseRate(s.AvgFrameRate),
+			streams: len(p.Streams), format: p.Format.FormatName, codec: s.CodecName, rate: parseRate(s.RFrameRate), avgRate: parseRate(s.AvgFrameRate),
 		}
 		for _, o := range p.Streams {
 			if o.CodecType == "audio" {

@@ -138,9 +138,12 @@ that (see the package documentation).
 ## Types and caps
 
 `Types()` lists the media types the library has a pinned decoder for: those
-ImageMagick reads with a built-in coder, and video. SVG, MVG, MSL,
-PostScript, EPS, PDF and text are never among them. TGA, ICO, G3 and DNG are
-in the list but are not identified from content: `OpenOptions.Type` names them.
+ImageMagick reads with a built-in coder, and video: MP4, QuickTime, WebM,
+Matroska, AVI, ASF (WMV), MPEG program, elementary and transport streams, and
+FLV (the gate describes how a video is named in the
+[package documentation](media/env.go)). SVG, MVG, MSL, PostScript, EPS, PDF
+and text are never among them. TGA, ICO, G3 and DNG are in the list but are not
+identified from content: `OpenOptions.Type` names them.
 `Config.Types` narrows the set; nil is all of it. `Config.Caps` sets the limits
 that turn input away. A zero `Caps` is the library's ceilings, not values
 measured for any host, so a deployment for hostile input sets its own. The

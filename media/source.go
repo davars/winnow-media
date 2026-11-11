@@ -158,7 +158,10 @@ type Source struct {
 
 	// A video: its probe and decoder.
 	probe videoInfo
-	dec   decoder
+	// probed is the probe that named the type at the gate, if one did; Open
+	// uses it instead of probing again.
+	probed *videoInfo
+	dec    decoder
 
 	imu  sync.Mutex
 	info Info
@@ -201,6 +204,7 @@ func (p *Processor) openKinds(ctx context.Context, path string, opts OpenOptions
 		p: p, file: in.file, path: in.abs, ref: in.ref, dir: in.dir, release: in.release, id: in.id,
 		typ: in.typ, override: override, dec: in.decoder,
 	}
+	src.probed = in.probe
 	src.reuse = opts.Reuse
 	env := p.env(&m, src.file)
 	if in.decoder.tool == "ffmpeg" {
@@ -333,9 +337,14 @@ func (s *Source) openVideo(ctx context.Context, env Env, opts OpenOptions) error
 	if opts.Orientation != 0 {
 		return errors.New("orientation does not apply to a video")
 	}
-	info, err := env.probeChecked(ctx, s.dec, s.ref)
-	if err != nil {
-		return err
+	var info videoInfo
+	if s.probed != nil {
+		info = *s.probed
+	} else {
+		var err error
+		if info, err = env.probeChecked(ctx, s.dec, s.ref); err != nil {
+			return err
+		}
 	}
 	s.kind, s.probe = Video, info
 	w, h := info.upright()

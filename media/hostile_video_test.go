@@ -117,6 +117,14 @@ func TestMOVExternalDataReference(t *testing.T) {
 		t.Errorf("the demuxer followed the external reference: %q", got)
 	}
 	t.Logf("package arguments: %q, %v", got, err)
+
+	// The detection probe names no demuxer and cannot pass -enable_drefs, so
+	// it relies on the demuxer's default.
+	detect := []string{"-protocol_whitelist", "file", "-format_whitelist", p.detect, "-i", hostile}
+	got, err = frameHashes(p, detect)
+	if err == nil && got == want {
+		t.Errorf("the detection arguments followed the external reference: %q", got)
+	}
 }
 
 func TestDemuxerOptionsAreKnownToTheirDemuxer(t *testing.T) {
@@ -138,8 +146,9 @@ func TestInputArgs(t *testing.T) {
 		demuxer string
 		want    string
 	}{
-		{"mov", "-protocol_whitelist file -enable_drefs 0 -f mov -i in"},
-		{"matroska", "-protocol_whitelist file -f matroska -i in"},
+		{"mov", "-protocol_whitelist file -format_whitelist mov -enable_drefs 0 -f mov -i in"},
+		{"matroska", "-protocol_whitelist file -format_whitelist matroska -f matroska -i in"},
+		{"mpegvideo", "-protocol_whitelist file -format_whitelist mpegvideo -f mpegvideo -i in"},
 	} {
 		if got := strings.Join(inputArgs(decoder{"ffmpeg", c.demuxer}, "in"), " "); got != c.want {
 			t.Errorf("%s: %q, want %q", c.demuxer, got, c.want)
@@ -173,16 +182,21 @@ func TestHLSPlaylistClaimedAsMP4(t *testing.T) {
 		}
 	})
 
-	probe := func(demuxer string) (string, error) {
+	probeWith := func(input []string) (string, error) {
 		res, err := p.run(context.Background(), "ffprobe",
-			append([]string{"-v", "error", "-show_entries", "format=duration"}, inputArgs(decoder{"ffprobe", demuxer}, playlist)...)...)
+			append([]string{"-v", "error", "-show_entries", "format=duration"}, input...)...)
 		return string(res.Stdout), err
+	}
+	probe := func(demuxer string) (string, error) {
+		return probeWith(inputArgs(decoder{"ffprobe", demuxer}, playlist))
 	}
 
 	// The whitelist admits file, so the hls demuxer reads a file:// segment;
 	// only the pinned demuxer keeps a playlist from being parsed.
 	t.Run("hls demuxer reads a file segment", func(t *testing.T) {
-		out, err := probe("hls")
+		// Without the format whitelist the pinned arguments add, which also
+		// stops the hls demuxer from opening the segment's own demuxer.
+		out, err := probeWith([]string{"-protocol_whitelist", "file", "-f", "hls", "-i", playlist})
 		if err != nil || !strings.Contains(out, "duration=2.0") {
 			t.Fatalf("control: -f hls gave %q, %v", out, err)
 		}

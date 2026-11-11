@@ -89,13 +89,22 @@
 // most Config.Caps.MaxInputBytes and takes its type from its bytes alone. A
 // GIF, WebP, ISO base media file (HEIC, HEIF, AVIF, MP4, QuickTime) or EBML
 // file (WebM, Matroska) is typed by its leading bytes before any tool runs, and
-// so is every animation and video type: the operations that read only those
-// refuse other content without a tool run. Other content is named by the one
-// header read that the decode needs, under the generated policy, and the coder
-// it reports is looked up in the table of Types. No tool is given the file's
-// name or can let it choose the format: on Linux a tool is given /dev/fd/3,
-// the descriptor Open holds, and elsewhere an extensionless link in the
-// Source's private directory. The decoder is then pinned to the type found.
+// so is every animation and video type that has a signature: the operations
+// that read only those refuse other content without a tool run, except that a
+// file opening an AVI, ASF, FLV, MPEG program, elementary or transport
+// stream, a QuickTime file without ftyp, or an ISO base media file of a brand
+// that is no still image's is named by ffprobe first, in the sandbox, under a
+// format whitelist of the demuxers of the video types in Config.Types that
+// have none of their own signature. If that probe refuses it, the header read
+// below follows. Other content is named by the one header read that the
+// decode needs, under the generated policy, and the coder it reports is
+// looked up in the table of Types. No tool is given the file's name: on Linux
+// a tool is given /dev/fd/3, the descriptor Open holds, and elsewhere an
+// extensionless link in the Source's private directory. No tool lets the
+// content choose a coder or a demuxer outside Config.Types; only the
+// detection probe lets it choose among the whitelisted demuxers. The decoder
+// is then pinned to the type found, and its demuxer is the only format the
+// decode may open.
 // OpenOptions.Type replaces all of this with a type the caller names, which
 // must be in Config.Types.
 //
