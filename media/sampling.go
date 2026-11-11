@@ -52,7 +52,8 @@ type AnimationInfo struct {
 // bytes, and a file VideoFrames would refuse for its type or size, or for
 // the caps on streams, duration and dimensions, is refused here with the same
 // error. An input with no video stream is an error. Usage covers the tool
-// runs of the call, including those of a failed one.
+// runs of the call, including those of a failed one. A caller with a time
+// budget chooses its count of samples (at most 64 per call) from the fields.
 func (p *Processor) ProbeVideo(ctx context.Context, path string) (VideoInfo, Usage, error) {
 	in, err := p.admitInput(videoSpec, path)
 	if err != nil {
@@ -85,7 +86,10 @@ func (p *Processor) ProbeVideo(ctx context.Context, path string) (VideoInfo, Usa
 //
 // It applies the gate of AnimationFrames: a file AnimationFrames would refuse
 // for its type, size, frame count or pixel counts is refused here with the
-// same error. Usage is as for ProbeVideo.
+// same error. The canvas is upright by the orientation the header reports,
+// which a one-frame file can carry where only a decode sees it;
+// AnimationFrames sizes its output from the decoded frame. Usage is as for
+// ProbeVideo.
 func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationInfo, Usage, error) {
 	in, err := p.admitInput(animationSpec, path)
 	if err != nil {
@@ -106,9 +110,10 @@ func (p *Processor) ProbeAnimation(ctx context.Context, path string) (AnimationI
 
 // VideoFramesAt decodes the frame at or after each of timesMS from an MP4,
 // QuickTime, WebM or Matroska file and writes them to dir as
-// frame-NNN.<ext>, read as VideoFrames reads its samples. Output, the gate,
-// the caps, errors, Usage and the state of dir are as for VideoFrames;
-// Image.TimeMS is the requested time.
+// frame-NNN.<ext>, read as VideoFrames reads its samples: by one decode or one
+// seek per time, as the stream's size decides. VideoFrames is this with evenly
+// spaced times. Output, the gate, the caps, errors, Usage and the state of dir
+// are as for VideoFrames; Image.TimeMS is the requested time.
 //
 // timesMS holds 1 to 64 times in milliseconds, in any order, with repeats.
 // The frames are written in ascending time and a repeated time is sampled
@@ -150,8 +155,10 @@ func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding
 // VideoFrameRun decodes count consecutive frames of an MP4, QuickTime, WebM
 // or Matroska file, starting at the first frame at or after startMS, in one
 // decode and writes them to dir as frame-NNN.<ext>. It costs one ffmpeg run
-// however many frames it returns. Output, the gate, the caps, errors, Usage and the
-// state of dir are as for VideoFrames.
+// however many frames it returns: a stream read by seeks starts that run a
+// margin before startMS, and a stream read once is decoded from its start.
+// Output, the gate, the caps, errors, Usage and the state of dir are as for
+// VideoFrames.
 //
 // count is 1 to 64. startMS must be 0 or inside the duration ProbeVideo
 // reports, as for VideoFramesAt. A run that reaches the end of the video
@@ -180,9 +187,10 @@ func (p *Processor) VideoFrameRun(ctx context.Context, path string, enc Encoding
 }
 
 // AnimationFramesAt decodes the frames of a GIF or animated WebP with the
-// given indices, composites them and writes them to dir as frame-NNN.<ext>.
-// Output, the gate, the caps, errors, Usage and the state of dir are as for
-// AnimationFrames; Image.Frame is the index.
+// given indices, composites them and writes them to dir as frame-NNN.<ext>,
+// through the compositors AnimationFrames uses; AnimationFrames is this with
+// evenly spaced indices. Output, the gate, the caps, errors, Usage and the
+// state of dir are as for AnimationFrames; Image.Frame is the index.
 //
 // indices holds 1 to 64 indices, in any order, with repeats. The frames are
 // written in ascending index and a repeated index is written once. An index

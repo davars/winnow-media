@@ -7,8 +7,9 @@ import (
 )
 
 // ErrTooLarge is returned, wrapped with the cap and the values that
-// exceeded it, when an input is larger than the operations accept. Test for
-// it with errors.Is.
+// exceeded it, when an input is larger than the operations accept, and when a
+// header read reaches ImageMagick's list length ceiling (2048 scenes). Test
+// for it with errors.Is.
 var ErrTooLarge = errors.New("input too large")
 
 // ErrTimeLimit is returned, wrapped with what the tool reported, when a
@@ -126,9 +127,13 @@ const (
 	policyThreads    = "4"
 )
 
-// MemoryProfile names the ImageMagick memory limits a run is held to. The
-// zero value is HighMemory. NewProcessor and the Env methods return an error
-// for an undefined value, and LimitArgs panics.
+// MemoryProfile names the ImageMagick memory limits a run is held to: the
+// memory and map limits, between which the pixel cache spills (memory, then
+// map, then disk). The same profile produces a Processor's policy.xml and the
+// -limit flags of every magick run the Env methods make, so a value means the
+// same on both paths. Callers that build their own magick runs start them with
+// profile.LimitArgs(). The zero value is HighMemory. NewProcessor and the Env
+// methods return an error for an undefined value, and LimitArgs panics.
 type MemoryProfile int
 
 const (

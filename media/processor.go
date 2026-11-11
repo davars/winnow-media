@@ -22,6 +22,11 @@ const (
 // ImageMagick policy those runs obey and a private directory for both; it
 // refuses to be created unless ImageMagick reports that policy as the only
 // one in effect. A Processor is safe for concurrent use.
+//
+// The paths an operation takes, path and dir, may be relative. An operation
+// moves no bytes beyond reading the source and writing into its dir. The
+// guarantees that span the operations (the gate, the caps, the sandbox, the
+// policy) are in the package documentation.
 type Processor struct {
 	dir    string
 	memory MemoryProfile
@@ -32,10 +37,16 @@ type Processor struct {
 	compose func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
 }
 
-// NewProcessor resolves ImageMagick and FFmpeg, checks that the sandbox every
-// tool run goes through is in force, installs the policy in a new directory
-// under the system temporary directory and checks that ImageMagick applies
-// exactly that policy. Call Close when done.
+// NewProcessor resolves magick, ffmpeg, ffprobe and webp-frames with the tool
+// package, checks that the sandbox every tool run goes through is in force,
+// creates a private directory with os.MkdirTemp under the system temporary
+// directory, installs a generated ImageMagick policy there and reads it back
+// with "magick -list policy" and "-list resource". It returns an error, after
+// removing the directory, unless the first policy file listed is the
+// installed one with exactly the rules written, no other file contributes a
+// rule and no resource limit reads back above the ceiling written
+// (ImageMagick may lower one, such as threads to the host's CPUs). Call Close
+// when done.
 //
 // The sandbox is a helper process (see Init) that limits the tool's
 // resources and denies it socket creation, and kills whatever the tool leaves
@@ -324,10 +335,20 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 // VideoFrames decodes up to maxFrames still images from an MP4, QuickTime,
 // WebM or Matroska file and writes them to dir as frame-NNN.<ext>. The
 // samples are the centres of equal intervals of the duration of the video
-// stream flagged default (else the first), ignoring attached pictures. A
-// stream whose frame count is known and whose decoded pixels (frames times
-// width times height) are at most 1e9 is read by one decode; any other by one
-// seek per sample.
+// stream flagged default (else the first), ignoring attached pictures; fewer
+// when the stream has fewer frames, targets that coincide are merged, and a
+// clip of unknown duration gives one sample at 0. A video that yields no frame
+// at any of those times, as when its only frame precedes a duration the
+// container reports, is sampled at 0 instead, and fails only if that gives no
+// frame either. A stream whose frame count is known and whose decoded pixels
+// (frames times width times height as stored) are at most 1e9 is read by one
+// decode, in which a select filter keeps the first frame at or after each
+// sample time; any other by one decode per sample, started a margin before
+// the time. The frame count is the container's or, where it gives none (as in
+// Matroska and MPEG-TS), the duration times the declared rate, so a
+// variable-rate stream is estimated high and may take the seeks; a stream with
+// neither is always read by seeks. An input with no video stream is an
+// error.
 //
 // A container with more than 32 streams, a stream longer than six hours or
 // one wider or taller than 16384 pixels gives an error wrapping ErrTooLarge

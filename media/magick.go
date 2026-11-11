@@ -60,8 +60,8 @@ func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, bu
 func LimitArgs() []string { return HighMemory.LimitArgs() }
 
 // LimitArgs returns the resource-limit flags for one magick process under the
-// profile: memory, map, area and list length bound the process, and time
-// bounds each image (its clock starts when the image is created, and
+// profile: memory, map, area and list length (2048 scenes) bound the process,
+// and time bounds each image (its clock starts when the image is created, and
 // ImageMagick stops work on an image that has run past it, exiting 0 in most
 // cases; see ErrTimeLimit). It does not bound the process's total time.
 // Callers building their own magick invocations over the package's artifacts
