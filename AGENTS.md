@@ -27,3 +27,22 @@ Doc comments on exported symbols state what the symbol does, what it requires
 and what it guarantees. Other comments are minimal and explain why. Leave
 history (what an earlier version did, which bug a line fixes) to the commit
 message.
+
+## Where to document what
+
+Each fact has one home. Other places link to it rather than restate it.
+
+| Home | Owns |
+|---|---|
+| Doc comment on an exported symbol | Its contract: what it does, what it accepts and refuses, what it returns and the errors, and the state it leaves. A caller using one symbol should not need the README. |
+| Package doc comment (`media/env.go`, `tool/tool.go`) | The model that spans symbols: decode once and encode many, the gate, the caps, the sandbox and the policy, stated as guarantees. |
+| `README.md` | Orientation and setup: what the module is for, its packages, a short example, one line per operation, a summary of the guarantees that links to the package doc, the flake outputs, building a binary against the tools, the rules for consumers, the pin check and development. |
+| `docs/` | Records that support a number or a choice: measurements, their method and what they justified. The constant's comment links to the record. |
+| Commit message | History: what changed, why, and what was tried. |
+| A consumer's own docs | How that consumer uses the library (see Vocabulary). |
+
+When a change alters a contract, edit the doc comment. Touch the README only
+if an operation's one-line entry, a guarantee's summary or a setup step
+changes; a new operation adds a row, not a section. Keep README list items to
+a sentence or two and paragraphs short. A README passage that describes one
+symbol's behavior in detail belongs in that symbol's doc comment.
