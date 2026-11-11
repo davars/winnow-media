@@ -45,6 +45,7 @@ var testRules = []policyRule{
 }
 
 func TestEffectivePolicyAcceptsOnlyOurs(t *testing.T) {
+	t.Parallel()
 	files, err := parsePolicyList([]byte(listPolicyOutput))
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +84,7 @@ func TestEffectivePolicyAcceptsOnlyOurs(t *testing.T) {
 }
 
 func TestEffectiveResources(t *testing.T) {
+	t.Parallel()
 	const listed = `Resource limits:
   Width: 65536P
   Height: 65536P
@@ -124,6 +126,7 @@ func TestEffectiveResources(t *testing.T) {
 }
 
 func TestResourceNumber(t *testing.T) {
+	t.Parallel()
 	cases := map[string]float64{
 		"1GiB": 1 << 30, "512MP": 512e6, "65536P": 65536, "2048B": 2048,
 		"5 minutes": 300, "300": 300, "4": 4,
@@ -139,6 +142,7 @@ func TestResourceNumber(t *testing.T) {
 }
 
 func TestProcessorPolicyContents(t *testing.T) {
+	t.Parallel()
 	var coders []string
 	for _, r := range processorPolicy(memoryProfiles[HighMemory]) {
 		if r.domain == "coder" && r.pattern != "*" {
@@ -158,6 +162,7 @@ func TestProcessorPolicyContents(t *testing.T) {
 }
 
 func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	data, err := os.ReadFile(filepath.Join(p.dir, "policy.xml"))
 	if err != nil {
@@ -178,6 +183,7 @@ func TestNewProcessorInstallsAndCloseRemoves(t *testing.T) {
 }
 
 func TestProcessorPolicyDeniesEverythingFirst(t *testing.T) {
+	t.Parallel()
 	rules := processorPolicy(memoryProfiles[HighMemory])
 	index := func(domain, pattern string) int {
 		for i, r := range rules {

@@ -79,6 +79,7 @@ func TestRunnerEnvironmentIgnoresCallerConfiguration(t *testing.T) {
 }
 
 func TestRunnerRefusesDangerousCoders(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	text := writeFile(t, "secret.txt", []byte("secret"))
 	out := filepath.Join(t.TempDir(), "out.png")
@@ -106,6 +107,7 @@ func TestRunnerRefusesDangerousCoders(t *testing.T) {
 }
 
 func TestMVGGivenToOperationsIsUnsupportedWithoutRunningATool(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
 	mvg := mvgFile(t, writeFile(t, "secret.txt", []byte("secret")))
@@ -123,6 +125,7 @@ func TestMVGGivenToOperationsIsUnsupportedWithoutRunningATool(t *testing.T) {
 }
 
 func TestPNGNamedGIFIsUnsupportedWithoutRunningATool(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	rec := record(p)
@@ -155,6 +158,7 @@ func zipBytes(t *testing.T) []byte {
 }
 
 func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	clean := writeGIF(t, solid, 6)
 	cleanData, err := os.ReadFile(clean)
@@ -200,6 +204,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 }
 
 func TestInputSizeCap(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
 	header := gifBytes(1, 1)
@@ -228,6 +233,7 @@ func TestInputSizeCap(t *testing.T) {
 }
 
 func TestHeaderCapRefusesBeforeDecoding(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	for name, g := range map[string][]byte{
 		"too wide":        gifBytes(maxDimension+1, 10),
@@ -255,6 +261,7 @@ func TestHeaderCapRefusesBeforeDecoding(t *testing.T) {
 }
 
 func TestCheckSceneHeaders(t *testing.T) {
+	t.Parallel()
 	frames := func(n, w, h int) []sceneHeader {
 		s := make([]sceneHeader, n)
 		for i := range s {
@@ -309,6 +316,7 @@ func TestCheckSceneHeaders(t *testing.T) {
 }
 
 func TestCheckReturnedPixels(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		count, w, h  int
@@ -334,6 +342,7 @@ func TestCheckReturnedPixels(t *testing.T) {
 }
 
 func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	var runs []Usage
@@ -407,6 +416,7 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 func manyFrameGIF(w, h, n int) []byte { return gifFrames(w, h, 1, 1, n) }
 
 func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	cases := map[string][]byte{
 		"too many frames":       manyFrameGIF(1, 1, maxAnimationFrames+1),
@@ -432,6 +442,7 @@ func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 }
 
 func TestVideoSizeCapRefusesBeforeSampling(t *testing.T) {
+	t.Parallel()
 	var names []string
 	env := Env{Run: func(_ context.Context, name string, _ ...string) (Result, error) {
 		names = append(names, name)
@@ -474,6 +485,7 @@ func TestKilledRunLeavesNothingInTheProcessorsTempDir(t *testing.T) {
 }
 
 func TestHeadTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
+	t.Parallel()
 	text := func(n int) string {
 		var b strings.Builder
 		for i := 0; b.Len() < n; i++ {
@@ -509,6 +521,7 @@ func TestHeadTailBufferKeepsTheStartAndTheEndOfWhatWasWritten(t *testing.T) {
 // One byte more than the head and the tail hold is the first that is dropped,
 // and the note says so.
 func TestHeadTailBufferNotesTheFirstByteDropped(t *testing.T) {
+	t.Parallel()
 	whole := strings.Repeat("h", stderrHead) + "x" + strings.Repeat("t", stderrTail)
 	var buf headTailBuffer
 	_, _ = buf.Write([]byte(whole))

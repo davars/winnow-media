@@ -6,12 +6,14 @@ import (
 )
 
 func TestUsageOfNilState(t *testing.T) {
+	t.Parallel()
 	if got := UsageOf(nil); got != nil {
 		t.Fatalf("UsageOf(nil) = %+v, want nil", got)
 	}
 }
 
 func TestRunnerReportsUsage(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	res, err := env.Run(context.Background(), "magick", "-version")
 	if err != nil {

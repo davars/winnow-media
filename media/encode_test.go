@@ -15,6 +15,7 @@ import (
 const testQuality = 80
 
 func TestProfileDetectionAndAnimationPolicy(t *testing.T) {
+	t.Parallel()
 	for _, profiles := range []string{"icc", "ICC", "8bim,exif,icc,iptc", "xmp icm"} {
 		if !profileListHasICC(profiles) {
 			t.Errorf("profile list %q was not recognized as ICC", profiles)
@@ -34,6 +35,7 @@ func TestProfileDetectionAndAnimationPolicy(t *testing.T) {
 
 // The rung sequence itself, which the encoding tests only observe indirectly.
 func TestLadderOrder(t *testing.T) {
+	t.Parallel()
 	limits := Limits{Ceilings: []int{2048, 1536, 1024}, MaxFrames: 16}
 
 	animated := Ladder(limits, true, 1000)
@@ -66,6 +68,7 @@ func TestLadderOrder(t *testing.T) {
 // Frame 0 is always present, and the last frame appears only when the source
 // is no longer than the budget.
 func TestSelectFramesIsEvenlySpaced(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		n, sourceFrames int
 		want            []int
@@ -88,6 +91,7 @@ func TestSelectFramesIsEvenlySpaced(t *testing.T) {
 }
 
 func TestDeleteExpr(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		keep   []int
 		frames int
@@ -104,6 +108,7 @@ func TestDeleteExpr(t *testing.T) {
 }
 
 func TestTimestampsClampShortDelays(t *testing.T) {
+	t.Parallel()
 	got := timestamps([]int{0, 5, 1, 20})
 	want := []int64{0, 100, 150, 250}
 	if !slices.Equal(got, want) {
@@ -112,6 +117,7 @@ func TestTimestampsClampShortDelays(t *testing.T) {
 }
 
 func TestCoderForMIME(t *testing.T) {
+	t.Parallel()
 	if coder, ok := CoderForMIME("image/x-tga"); !ok || coder != "tga" {
 		t.Errorf("CoderForMIME(image/x-tga) = %q, %v", coder, ok)
 	}
@@ -123,6 +129,7 @@ func TestCoderForMIME(t *testing.T) {
 }
 
 func TestRunMagickWithCoderFallbackRecoversTGA(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	dir := t.TempDir()
 	extPath := filepath.Join(dir, "src.tga")
@@ -145,6 +152,7 @@ func TestRunMagickWithCoderFallbackRecoversTGA(t *testing.T) {
 }
 
 func TestEncodeRungStillRecoversTGAViaCoderFallback(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	extPath := filepath.Join(t.TempDir(), "src.tga")
 	magick(t, env, "-size", "4x4", "xc:red", extPath)
@@ -186,6 +194,7 @@ func writeGrayAnimGIF(t *testing.T, env Env, levels, delaysCS []int) string {
 // original timestamp, and a zero stored delay is clamped to the GIF display
 // default.
 func TestEncodeRungAnimationMapsSampledFrames(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	content := writeGrayAnimGIF(t, env, []int{10, 70, 130, 190}, []int{0, 20, 20, 20})
 
@@ -213,6 +222,7 @@ func TestEncodeRungAnimationMapsSampledFrames(t *testing.T) {
 }
 
 func TestEncodeRungNeverUpscalesAStill(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	extPath := filepath.Join(t.TempDir(), "src.png")
 	magick(t, env, "-size", "40x20", "xc:blue", extPath)
@@ -258,6 +268,7 @@ func writeWideGamutStill(t *testing.T, env Env, srgb string) string {
 // The fixture is stored in Adobe RGB, not merely tagged as sRGB: omitting the
 // destination -profile gives a visibly different WebP.
 func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	destination := writeSRGBProfile(t)
 	input := writeWideGamutStill(t, env, destination)
@@ -296,6 +307,7 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 // like the PNG above, though ImageMagick's JXL coder reports no profile under
 // -ping, which the probe's header read uses.
 func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	destination := writeSRGBProfile(t)
 	dir := t.TempDir()
@@ -332,6 +344,7 @@ func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
 // not read from an animation, so the conversion comes from the compositor's
 // report of the profile with each frame.
 func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	destination := writeSRGBProfile(t)
@@ -396,6 +409,7 @@ func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
 // The orientation the header read reports is applied to the composited
 // frames, which carry none, before the resize.
 func TestEncodeRungAppliesTheHeaderOrientationToAnimatedWebP(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	env := real
@@ -424,6 +438,7 @@ func TestEncodeRungAppliesTheHeaderOrientationToAnimatedWebP(t *testing.T) {
 }
 
 func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	withExtension := filepath.Join(t.TempDir(), "untagged.png")
 	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-strip", withExtension)
@@ -455,6 +470,7 @@ func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
 // scene: 94 ms for a 2048x1365 WebP still against 25 ms, on every rung of every
 // item, and the whole animation on an animated artifact.
 func TestIdentifyArtifactReadsHeadersOnly(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, calls := countingEnv(real)
 	artifact := filepath.Join(t.TempDir(), "artifact.webp")

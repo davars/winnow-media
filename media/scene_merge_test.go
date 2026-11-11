@@ -49,6 +49,7 @@ func grayGIF(t *testing.T, pattern []func(x, y int) uint8, delays []int) string 
 // tolerance are merged into its scene; the mapping must describe the scenes
 // the file holds, each at the time of the frame it shows.
 func TestEncodeMapsTheScenesTheWebPWriterMerged(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	ramp := func(noise int) func(x, y int) uint8 {
@@ -123,6 +124,7 @@ func TestEncodeMapsTheScenesTheWebPWriterMerged(t *testing.T) {
 }
 
 func TestSceneStarts(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name           string
 		given, written []int

@@ -61,6 +61,7 @@ func assertGone(t *testing.T, path string) {
 // resize in the output; the encode must refuse that run through the message
 // alone, with a frame inside the bounds.
 func TestEncodeRefusesATimeLimitReportedOnStderr(t *testing.T) {
+	t.Parallel()
 	out := filepath.Join(t.TempDir(), "out.jpg")
 	if err := os.WriteFile(out, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
@@ -81,6 +82,7 @@ func TestEncodeRefusesATimeLimitReportedOnStderr(t *testing.T) {
 // A frame above the bounds, or not of the exact size asked for, is refused
 // when the run exits 0 and says nothing on stderr.
 func TestEncodeRefusesAFrameOutsideItsBound(t *testing.T) {
+	t.Parallel()
 	bound := encodeBound{maxEdge: 100, maxArea: 5000}
 	exact := encodeBound{maxEdge: 100, maxArea: 5000, width: 50, height: 40}
 	for _, c := range []struct {
@@ -122,6 +124,7 @@ func TestEncodeRefusesAFrameOutsideItsBound(t *testing.T) {
 // run exits 0 with the frame unresized; runEncode turns it into ErrTimeLimit
 // and removes the output.
 func TestEncodeTimeLimitThroughTheLimitFlags(t *testing.T) {
+	t.Parallel()
 	env := testEnv(t)
 	src := writeBigPNG(t, env)
 	out := filepath.Join(t.TempDir(), "out.jpg")
@@ -142,6 +145,7 @@ func TestEncodeTimeLimitThroughTheLimitFlags(t *testing.T) {
 
 // The same through the Processor, whose policy sets the ceiling.
 func TestEncodeTimeLimitThroughTheProcessorPolicy(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	src := writeBigPNG(t, requireMagick(t))
 	out := filepath.Join(t.TempDir(), "out.jpg")
@@ -190,6 +194,7 @@ func skipResize(real Env, w, h int) Env {
 // Every route that encodes checks the size the run reports and leaves no
 // output behind when it refuses.
 func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	dir := t.TempDir()
 	jpg := filepath.Join(dir, "x.jpg")
@@ -267,6 +272,7 @@ const timeLimitStderr = "magick: time limit exceeded `x.tif' @ error/cache.c/Get
 // A run that exits non-zero with the message is a time limit, and the message
 // appears once in the error.
 func TestEncodeTimeLimitWithAFailingExit(t *testing.T) {
+	t.Parallel()
 	out := filepath.Join(t.TempDir(), "out.jpg")
 	if err := os.WriteFile(out, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
@@ -288,6 +294,7 @@ func TestEncodeTimeLimitWithAFailingExit(t *testing.T) {
 // Header reads, including the full reads of fullSoft, report a time limit
 // whatever the exit status.
 func TestHeaderReadsReportATimeLimit(t *testing.T) {
+	t.Parallel()
 	for name, res := range map[string]struct {
 		res Result
 		err error
@@ -308,6 +315,7 @@ func TestHeaderReadsReportATimeLimit(t *testing.T) {
 // A frame count other than the expected one removes the outputs, on the
 // bound-less checks too.
 func TestEncodeRefusesAFrameCountMismatch(t *testing.T) {
+	t.Parallel()
 	for name, report := range map[string]string{"fewer": "10|10\n", "more": "10|10\n10|10\n10|10\n"} {
 		out := filepath.Join(t.TempDir(), "out.webp")
 		if err := os.WriteFile(out, []byte("x"), 0o600); err != nil {
@@ -327,6 +335,7 @@ func TestEncodeRefusesAFrameCountMismatch(t *testing.T) {
 // On the reduced-JPEG route the size is exact: a smaller frame inside the
 // bounds is refused.
 func TestEncodeRefusesAWrongExactSize(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	jpg := filepath.Join(t.TempDir(), "x.jpg")
 	magick(t, real, "-size", "600x400", "gradient:red-blue", jpg)
@@ -392,6 +401,7 @@ func editReport(real Env, delta int) Env {
 // Every route holds the report to the number of frames it asked for and
 // leaves no output when the number differs.
 func TestEncodeRoutesRefuseAShortReport(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	jpg := filepath.Join(t.TempDir(), "x.jpg")
 	magick(t, real, "-size", "600x400", "gradient:red-blue", jpg)
@@ -438,6 +448,7 @@ func TestEncodeRoutesRefuseAShortReport(t *testing.T) {
 // encode, with the bound of their encoding and, for a frame reduced in
 // decoding, its exact size.
 func TestVideoWebPPairRefusesABadReport(t *testing.T) {
+	t.Parallel()
 	real := requireFFmpeg(t)
 	small := writeClip(t, real, ".mp4", testsrc("160x120", 10, 3)...)
 	big := writeClip(t, real, ".mp4", testsrc("3840x2160", 5, 1)...)
@@ -466,6 +477,7 @@ func TestVideoWebPPairRefusesABadReport(t *testing.T) {
 // ImageMagick exits 0 on a time limit, so a decode through the coder fallback
 // must fail on the message, and not retry with another coder.
 func TestRunMagickWithCoderFallbackReportsATimeLimit(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 		calls++
@@ -486,6 +498,7 @@ func TestRunMagickWithCoderFallbackReportsATimeLimit(t *testing.T) {
 // A retry with the coder that reaches the time limit fails with ErrTimeLimit
 // too, as every run that reaches it does.
 func TestRunMagickWithCoderFallbackReportsATimeLimitOnTheRetry(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 		calls++
@@ -503,6 +516,7 @@ func TestRunMagickWithCoderFallbackReportsATimeLimitOnTheRetry(t *testing.T) {
 // Through the real tool, a time-limited decode exits 0 with an unfinished
 // image; the fallback fails with ErrTimeLimit and runs magick once.
 func TestRunMagickWithCoderFallbackReportsARealTimeLimit(t *testing.T) {
+	t.Parallel()
 	env := testEnv(t)
 	src := writeBigPNG(t, env)
 	runs := 0
@@ -525,6 +539,7 @@ func TestRunMagickWithCoderFallbackReportsARealTimeLimit(t *testing.T) {
 // A header read whose stderr carries both messages is a time limit, not a
 // scene-count refusal.
 func TestIdentifyHeadersTimeLimitOutranksListLength(t *testing.T) {
+	t.Parallel()
 	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 		return Result{Stderr: []byte(timeLimitStderr)}, errors.New("magick: " + listLengthRefusal)
 	}}
@@ -536,6 +551,7 @@ func TestIdentifyHeadersTimeLimitOutranksListLength(t *testing.T) {
 
 // identifyWithFallback does not retry a time-limited read with the coder.
 func TestIdentifyWithFallbackDoesNotRetryATimeLimit(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 		calls++

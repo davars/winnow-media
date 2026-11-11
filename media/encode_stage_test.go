@@ -35,6 +35,7 @@ func webpEncoding(edge int) encoding {
 // after it has been oriented, for the encoding's bounds, and never as a size
 // computed from the header.
 func TestEncodeArgsAskForTheSizeOfTheOrientedFrame(t *testing.T) {
+	t.Parallel()
 	enc := webpEncoding(100)
 	args := encodeArgs([]encodeFrame{{input: "pam:/in"}}, encodeSource{}, enc, encodeOutput{kind: outputStill, path: "/out.webp"})
 	w, h := fitExpr(enc.maxEdge, enc.maxArea)
@@ -212,6 +213,7 @@ func TestFitExprEqualsFitSize(t *testing.T) {
 // The sizing rows the plan names, through ImageMagick: sides round down, so
 // 4000x3001 at 2048 is 2048x1536.
 func TestFitExprRoundsDown(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	for _, c := range []struct {
 		w, h, edge, area int
@@ -233,6 +235,7 @@ func TestFitExprRoundsDown(t *testing.T) {
 
 // A rung's size, read back from the run that wrote it, is the fitSize one.
 func TestEncodeRungSizesWithFitSize(t *testing.T) {
+	t.Parallel()
 	env := stagedEnv(requireMagick(t), t.TempDir())
 	path := filepath.Join(t.TempDir(), "wide.png")
 	magick(t, env, "-size", "800x601", "gradient:red-blue", path)
@@ -258,6 +261,7 @@ func TestEncodeRungSizesWithFitSize(t *testing.T) {
 // The order of the stages: orient, then convert, then flatten (JPEG only),
 // then resize, and strip last, for every kind of output.
 func TestEncodeArgsStages(t *testing.T) {
+	t.Parallel()
 	src := encodeSource{orientation: "RightTop"}
 	frame := encodeFrame{input: "pam:/f", convertTo: "/srgb.icc", assign: "/own.icc", delayCS: 7}
 	for _, c := range []struct {
@@ -309,6 +313,7 @@ func TestEncodeArgsStages(t *testing.T) {
 // Several frames are each read inside their own parentheses, and each frame
 // is converted by its own profile.
 func TestEncodeArgsPerFrameProfiles(t *testing.T) {
+	t.Parallel()
 	frames := []encodeFrame{
 		{input: "pam:/a", convertTo: "/srgb.icc", assign: "/a.icc"},
 		{input: "pam:/b"},
@@ -331,6 +336,7 @@ func TestEncodeArgsPerFrameProfiles(t *testing.T) {
 
 // An unprofiled frame is never given a profile, however many are available.
 func TestEncodeArgsDoNotAssignAProfile(t *testing.T) {
+	t.Parallel()
 	args := encodeArgs([]encodeFrame{{input: "pam:/a", assign: "/a.icc"}}, encodeSource{},
 		webpEncoding(100), encodeOutput{kind: outputStill, path: "/o.webp"})
 	if slices.Contains(args, "-profile") {
@@ -339,6 +345,7 @@ func TestEncodeArgsDoNotAssignAProfile(t *testing.T) {
 }
 
 func TestEncodeArgsAnimationDelays(t *testing.T) {
+	t.Parallel()
 	args := encodeArgs([]encodeFrame{{input: "pam:/a", delayCS: 0}, {input: "pam:/b", delayCS: 33}, {input: "pam:/c", delayCS: -1}},
 		encodeSource{}, webpEncoding(100), encodeOutput{kind: outputAnimation, path: "/o.webp"})
 	for _, want := range [][]string{
@@ -353,6 +360,7 @@ func TestEncodeArgsAnimationDelays(t *testing.T) {
 // A frame that keeps its own delay keeps it after a frame that set one: a
 // delay setting outlives the parentheses it was given in.
 func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	dir := t.TempDir()
 	a, d7, out := filepath.Join(dir, "a.png"), filepath.Join(dir, "d7.gif"), filepath.Join(dir, "out.webp")
@@ -373,6 +381,7 @@ func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
 }
 
 func TestParseEncoded(t *testing.T) {
+	t.Parallel()
 	got, err := parseEncoded([]byte("abc|12|8\ndef|6|4\n"), true)
 	want := []encodedFrame{{"abc", 12, 8}, {"def", 6, 4}}
 	if err != nil || !slices.Equal(got, want) {
@@ -738,6 +747,7 @@ func quadrantsShifted(w, h int) *image.NRGBA {
 // Every output of every route is free of metadata, including the converted
 // sRGB profile the encode itself applied.
 func TestEveryOutputIsStripped(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	adobe := writeAdobeProfile(t, t.TempDir())
 	srgb := writeSRGBProfile(t)
@@ -801,6 +811,7 @@ func TestEveryOutputIsStripped(t *testing.T) {
 // data, in a text chunk or in an XMP packet, is oriented by what the decode
 // finds, and sized for the picture that results, not for the header.
 func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	ctx := context.Background()
 	const edge = 32
@@ -884,6 +895,7 @@ func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
 
 // A source of more than 8 bits per channel is written as an 8-bit PNG.
 func TestOutputsAreEightBit(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	ec, _ := Encoding{Format: PNG}.resolve()

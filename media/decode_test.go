@@ -50,6 +50,7 @@ func encodeFilters(calls [][]string) []string {
 }
 
 func TestOpenRoutesByTypeAndStructureNotFrameCount(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	dir := t.TempDir()
@@ -104,6 +105,7 @@ func TestOpenRoutesByTypeAndStructureNotFrameCount(t *testing.T) {
 }
 
 func TestOpenRequiresScratch(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	env.Stage, env.Scratch = stagedEnv(env, t.TempDir()).Stage, nil
 	png := filepath.Join(t.TempDir(), "x.png")
@@ -114,6 +116,7 @@ func TestOpenRequiresScratch(t *testing.T) {
 }
 
 func TestSourceCloseRemovesScratch(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	var dirs []string
 	env := stagedEnv(real, t.TempDir())
@@ -138,6 +141,7 @@ func TestSourceCloseRemovesScratch(t *testing.T) {
 
 // The filter follows what the source declares, whichever decoder reads it.
 func TestFilterFollowsTheSourceFrame(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	dir := t.TempDir()
@@ -189,6 +193,7 @@ func TestFilterFollowsTheSourceFrame(t *testing.T) {
 
 // A still and the same image composited choose the same filter.
 func TestStillAndCompositedEquivalentsChooseTheSameFilter(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	ctx := context.Background()
@@ -261,6 +266,7 @@ func writeWebPFramePNG(t *testing.T, k int, alpha bool) string {
 // What the -ping header read declares agrees with what a full decode of the
 // same file declares, for every still format, after completeProfile.
 func TestHeaderReadDeclaresWhatTheDecoderDoes(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -347,6 +353,7 @@ func pngDeclaresSoft(t *testing.T, path string) bool {
 
 // The compositors that read a GIF decode no frame after the last one selected.
 func TestGIFCompositorStopsAfterTheLastSelectedFrame(t *testing.T) {
+	t.Parallel()
 	env, _ := sourceEnv(t)
 	g := oneColourGIF(t, 8, 8, 3)
 	last := bytes.LastIndex(g, []byte{0x2C, 0, 0, 0, 0})
@@ -369,6 +376,7 @@ func TestGIFCompositorStopsAfterTheLastSelectedFrame(t *testing.T) {
 // A rung's budget selects, among the frames the first rung decoded, the source
 // frames it selects of the whole file, for every halving ladder from 16.
 func TestEncodeSelectionOnAHalvingLadderMatchesTheFileRelativeOne(t *testing.T) {
+	t.Parallel()
 	for sourceFrames := 1; sourceFrames <= 400; sourceFrames++ {
 		decoded := selectFrames(frameCount(16, sourceFrames, true), sourceFrames)
 		s := &Source{route: routeGIF, selected: decoded}
@@ -391,6 +399,7 @@ func TestEncodeSelectionOnAHalvingLadderMatchesTheFileRelativeOne(t *testing.T) 
 // Any budget selects among the decoded frames: an odd one is not an error,
 // and a GIF opened as a still takes any budget as a TIFF does.
 func TestEncodeSelectsAmongTheDecodedFramesForAnyBudget(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, _ := sourceEnv(t)
 	levels := make([]int, 40)
@@ -442,6 +451,7 @@ func multiPageTIFF(t *testing.T, env Env) string {
 // One decode serves every rung: the mapping of each Encode is that of the
 // rung encoded alone.
 func TestEncodeFromOneOpenMatchesEncodeRungPerRung(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	path := writeGrayAnimGIF(t, real, []int{10, 30, 60, 90, 120, 150, 180, 210, 240, 20, 50, 80, 110, 140, 170, 200, 230, 5, 35, 65}, repeatInt(5, 20))
@@ -484,6 +494,7 @@ func repeatInt(v, n int) []int {
 // A still is decoded once for all its targets, and each target is what it
 // would be alone.
 func TestEncodeTwoTargetsOfAStillEqualsTwoEncodes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "x.png")
 	magick(t, real, "-size", "300x200", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "60%", "+channel", path)
@@ -522,6 +533,7 @@ func TestEncodeTwoTargetsOfAStillEqualsTwoEncodes(t *testing.T) {
 // Each target of an animation drops the frames that are the same at its own
 // size, so its mapping is its own.
 func TestEachTargetOfAnAnimationHasItsOwnMapping(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	// Frame 1 differs from frame 0 in one pixel by 12 levels: distinct at
 	// full size, identical once shrunk eightfold.
@@ -547,6 +559,7 @@ func TestEachTargetOfAnAnimationHasItsOwnMapping(t *testing.T) {
 }
 
 func TestHintsOrientationReplacesTheFilesOwn(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "x.png")
 	magick(t, real, "-size", "40x20", "xc:red", path)
@@ -571,6 +584,7 @@ func TestHintsOrientationReplacesTheFilesOwn(t *testing.T) {
 }
 
 func TestEncodeFramesWritesOneFilePerFrame(t *testing.T) {
+	t.Parallel()
 	env, _ := sourceEnv(t)
 	path := writeFile(t, "a.gif", oneColourGIF(t, 16, 16, 3))
 	dir := t.TempDir()
@@ -687,6 +701,7 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 // The reduction is the smallest eighth that covers twice the largest target
 // on both sides, and is not used when it would not reduce.
 func TestJPEGSizeReductionChoice(t *testing.T) {
+	t.Parallel()
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
 	enc := func(edge int) encoding { return encoding{maxEdge: edge, maxArea: edge * edge} }
 	for _, c := range []struct {
@@ -732,6 +747,7 @@ func TestJPEGSizeReductionChoice(t *testing.T) {
 // does, with and without the JPEG reduction: the same decode, written to a
 // 16-bit PAM and encoded from that.
 func TestFusedAndMaterialisedEncodesAgreeOnTwoTargetsAndReducedJPEG(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -854,6 +870,7 @@ func oneFrameAnimatedWebP(t *testing.T, path string, icc []byte, alpha bool) str
 // honours its ICC profile, as its still twin is by ImageMagick: both are
 // converted, not labelled.
 func TestOneFrameAnimatedWebPWithAProfileIsConverted(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	still := filepath.Join(t.TempDir(), "still.webp")
@@ -881,6 +898,7 @@ func TestOneFrameAnimatedWebPWithAProfileIsConverted(t *testing.T) {
 
 // A source that fails to open leaves no scratch directory behind.
 func TestFailedOpenRemovesScratch(t *testing.T) {
+	t.Parallel()
 	var dirs []string
 	env, _ := sourceEnv(t)
 	env.Scratch = func() (string, func(), error) {
@@ -907,6 +925,7 @@ func TestFailedOpenRemovesScratch(t *testing.T) {
 // The Processor decodes a profiled GIF into its output directory while it
 // encodes; when it returns, only the frames are left there.
 func TestStreamedProfiledGIFLeavesOnlyFrames(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	var specs []gifFrameSpec
 	for i := range 3 {
@@ -926,6 +945,7 @@ func TestStreamedProfiledGIFLeavesOnlyFrames(t *testing.T) {
 // The decode that settles whether a TIFF declares alpha is made only when an
 // encode resizes, since only a resize uses the filter.
 func TestFullReadForAStillRunsOnlyWhenAnEncodeResizes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "a.tif")
 	magick(t, real, "-size", "64x48", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel", path)
@@ -961,6 +981,7 @@ func TestFullReadForAStillRunsOnlyWhenAnEncodeResizes(t *testing.T) {
 // The full read is made once for a Source, by the first encode that resizes,
 // and its answer serves every later encode.
 func TestFullReadIsMadeOnceAcrossEncodes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "a.tif")
 	magick(t, real, "-size", "64x48", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel", path)
@@ -1000,6 +1021,7 @@ func TestFullReadIsMadeOnceAcrossEncodes(t *testing.T) {
 // writes the bytes of the materialised encode, for sources whose filter is
 // Mitchell and Lanczos.
 func TestSourceEncodeEqualsMaterialisedForPNGs(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	ctx := context.Background()
 	alpha := []string{"-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel"}

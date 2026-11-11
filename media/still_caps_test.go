@@ -54,6 +54,7 @@ func flatImage(t *testing.T, name string, w, h int, extra ...string) string {
 // A JPEG over the pixel cap by its stored size is admitted when the targets
 // let the decode reduce it under the cap, and refused when they do not.
 func TestStillCapsJudgeTheReducedJPEG(t *testing.T) {
+	t.Parallel()
 	for _, sz := range [][2]int{{7308, 10000}, {16382, 3628}} {
 		path := flatImage(t, "big.jpg", sz[0], sz[1], "-quality", "50")
 		for pathName, run := range stillCapPaths(t) {
@@ -76,6 +77,7 @@ func TestStillCapsJudgeTheReducedJPEG(t *testing.T) {
 
 // The error names the reduced and the stored size.
 func TestStillCapRefusalNamesBothSizes(t *testing.T) {
+	t.Parallel()
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{10000, 7308}, upright: [2]int{10000, 7308}}
 	// A target of 9000 reduces by nothing: 8*2*9000/10000 rounds above 8.
 	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 9000, maxArea: 81_000_000}}))
@@ -92,6 +94,7 @@ func TestStillCapRefusalNamesBothSizes(t *testing.T) {
 // The cap on a side applies after reduction: a 20000-wide JPEG reduced below
 // 16384 is admitted, and the same size is refused when nothing reduces it.
 func TestStillSideCapAppliesAfterReduction(t *testing.T) {
+	t.Parallel()
 	path := flatImage(t, "wide.jpg", 20000, 1000, "-quality", "50")
 	for name, run := range stillCapPaths(t) {
 		t.Run(name, func(t *testing.T) {
@@ -114,6 +117,7 @@ func TestStillSideCapAppliesAfterReduction(t *testing.T) {
 // A still that nothing reduces is judged at its stored size: 60 MP is
 // refused and 52 MP admitted.
 func TestStillCapsOnNonReducibleFormats(t *testing.T) {
+	t.Parallel()
 	over := flatImage(t, "over.png", 10000, 6000)
 	exact := flatImage(t, "exact.png", 8000, 6500)
 	for name, run := range stillCapPaths(t) {
@@ -133,6 +137,7 @@ func TestStillCapsOnNonReducibleFormats(t *testing.T) {
 // Processor.Still, the one public operation on a still, refuses a HEIC by
 // the size its header declares and admits one at the cap.
 func TestProcessorStillCapsOnHEIC(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	original, err := os.ReadFile(filepath.Join("testdata", "heic", "gradient-righttop.heic"))
 	if err != nil {
@@ -163,6 +168,7 @@ func TestProcessorStillCapsOnHEIC(t *testing.T) {
 // The size the cap judges is the size ImageMagick produces from the hint
 // the reduction gives.
 func TestDecodedSizeIsWhatTheHintDecodes(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	for _, sz := range [][2]int{{6000, 4000}, {4001, 3001}, {8064, 6048}, {3000, 9001}} {
 		path := flatImage(t, "x.jpg", sz[0], sz[1], "-quality", "50")
@@ -196,6 +202,7 @@ func TestDecodedSizeIsWhatTheHintDecodes(t *testing.T) {
 // A still no reduction can shrink is capped on its header, before the
 // profile read that may decode it.
 func TestUnreducibleStillIsCappedBeforeTheProfileRead(t *testing.T) {
+	t.Parallel()
 	var runs int
 	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 		runs++
@@ -212,6 +219,7 @@ func TestUnreducibleStillIsCappedBeforeTheProfileRead(t *testing.T) {
 // Several targets: the largest decides. A target that does not reduce,
 // beside one that does, leaves the decode unreduced.
 func TestStillCapLargestTargetDecides(t *testing.T) {
+	t.Parallel()
 	path := flatImage(t, "big.jpg", 7308, 10000, "-quality", "50")
 	env, _ := sourceEnv(t)
 	src := openSource(t, env, path, Hints{Still: true})
@@ -228,6 +236,7 @@ func TestStillCapLargestTargetDecides(t *testing.T) {
 
 // A 73 MP JPEG reduced only to seven eighths is still over the pixel cap.
 func TestStillCapAtSevenEighths(t *testing.T) {
+	t.Parallel()
 	path := flatImage(t, "big.jpg", 7308, 10000, "-quality", "50")
 	env, _ := sourceEnv(t)
 	for edge, refused := range map[int]bool{3750: false, 3751: true, 4375: true} {
@@ -263,6 +272,7 @@ func losslessJPEG(t *testing.T, w, h int) string {
 // size: refused over the cap whatever the target, and, under it, decoded
 // without the hint.
 func TestStillCapLosslessJPEG(t *testing.T) {
+	t.Parallel()
 	over := losslessJPEG(t, 10000, 6000)
 	env, _ := sourceEnv(t)
 	src := openSource(t, env, over, Hints{Still: true})
@@ -292,6 +302,7 @@ func TestStillCapLosslessJPEG(t *testing.T) {
 // The header read with the hint gives the size decodedSize expects for every
 // JPEG flavour the decoder scales.
 func TestPingedDecodeSizeAgreesWithDecodedSize(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	cjpeg, err := exec.LookPath("cjpeg")
 	if err != nil {

@@ -135,6 +135,7 @@ func forbidScratch(t *testing.T) func() (string, func(), error) {
 // The cap is a property of the input: an oversized stream is refused before
 // any ffmpeg run or scratch directory.
 func TestVideoOpenRefusesOversizedBeforeScratch(t *testing.T) {
+	t.Parallel()
 	for _, size := range [][2]int{{16385, 100}, {100, 16385}} {
 		stub := newVideoStub()
 		stub.probe = fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,"duration":"10"}],"format":{"duration":"10"}}`, size[0], size[1])
@@ -202,6 +203,7 @@ func TestVideoSeeksCountFromTheContainerStart(t *testing.T) {
 }
 
 func TestSniffedVideoDecoder(t *testing.T) {
+	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	garbage := writeFile(t, "input", []byte("not a video"))
 	if got := sniffedVideoDecoder(mp4); got != (decoder{"ffmpeg", "mov"}) {
@@ -218,6 +220,7 @@ func TestSniffedVideoDecoder(t *testing.T) {
 }
 
 func TestReducedSize(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		w, h, tw, th, margin int
 		rw, rh               int
@@ -240,6 +243,7 @@ func TestReducedSize(t *testing.T) {
 }
 
 func TestVideoPlanSourceIsLiteralOnlyForAReducedFrame(t *testing.T) {
+	t.Parallel()
 	info := videoInfo{width: 402, height: 208}
 	small := encoding{maxEdge: 64, maxArea: 64 * 64}
 	if got := (videoPlan{info: info}).source(small); got != (encodeSource{}) {
@@ -316,6 +320,7 @@ func TestWebPPairSeeksEverySample(t *testing.T) {
 }
 
 func TestWebPPairDropsRepeatedFrames(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=red:size=160x120:rate=10:duration=4",
 		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
@@ -334,6 +339,7 @@ func TestWebPPairDropsRepeatedFrames(t *testing.T) {
 // Both outputs come from one reduced decode, and the smaller one is sized
 // from the source, not from the frame reduced for the larger.
 func TestWebPPairSizeAHDRSmallFromTheSource(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := hlgClip(t, env, testsrc("402x208", 10, 3))
 	out := t.TempDir()
@@ -351,6 +357,7 @@ func TestWebPPairSizeAHDRSmallFromTheSource(t *testing.T) {
 // A sample keeps the decoder's depth; the encode writes 8 bits whatever it
 // was.
 func TestVideoSamplesKeepTheDecodersDepth(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	ten := writeClip(t, env, ".mp4", append(testsrc("160x120", 10, 2), "-c:v", "libx264", "-preset", "ultrafast",
 		"-profile:v", "high10", "-pix_fmt", "yuv420p10le")...)
@@ -407,6 +414,7 @@ func vfScale(args []string) string {
 // An SDR frame is decoded at twice the target, not in full, and the output is
 // the size of the upright source fitted to the target.
 func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "3840x2160", 5, 1)
 	c := withRunCounts(env)
@@ -451,6 +459,7 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 // Encoding at two sizes decodes for the larger output, so that output is never
 // upscaled from a frame reduced for the smaller one.
 func TestWebPPairDecodeForTheLargerOutput(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for name, c := range map[string]struct {
 		clip func() string
@@ -506,6 +515,7 @@ func frameNumber(t *testing.T, env Env, path string) int {
 }
 
 func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := offsetClip(t, env)
@@ -544,6 +554,7 @@ func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
 }
 
 func TestParseVideoProbeStartOffset(t *testing.T) {
+	t.Parallel()
 	probe := func(stream, format string) string {
 		return `{"streams":[{"index":0,"codec_type":"video","width":10,"height":10,"start_time":"` + stream +
 			`"}],"format":{"start_time":"` + format + `"}}`
@@ -572,6 +583,7 @@ func TestParseVideoProbeStartOffset(t *testing.T) {
 
 // A seek past the last frame writes nothing, and no sample is kept for it.
 func TestSampleVideoSkipsASeekThatWritesNothing(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "160x120", 10, 2)
 	dec := sniffedVideoDecoder(src)
@@ -597,6 +609,7 @@ func TestSampleVideoSkipsASeekThatWritesNothing(t *testing.T) {
 // With no type named, ffmpeg's detection may not choose a format that opens
 // other files the input lists.
 func TestDetectedFormatsRefuseListFormats(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	real := sdrClip(t, env, "64x48", 10, 1)
 	dir := t.TempDir()
@@ -628,6 +641,7 @@ func TestDetectedFormatsRefuseListFormats(t *testing.T) {
 // Containers that are neither MP4 nor Matroska are still read when no type is
 // named.
 func TestWebPPairReadsOtherContainers(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for ext, codec := range map[string]string{".avi": "mpeg4", ".ts": "mpeg2video", ".flv": "flv", ".wmv": "wmv2", ".mpg": "mpeg2video"} {
 		t.Run(ext, func(t *testing.T) {
@@ -643,6 +657,7 @@ func TestWebPPairReadsOtherContainers(t *testing.T) {
 // Raw MPEG video streams and 3GPP files are read whether or not their brand
 // is one the sniff table names.
 func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	cases := map[string][]string{
 		"mpeg1video": {"-c:v", "mpeg1video", "-r", "25", "-f", "mpeg1video"},
@@ -673,6 +688,7 @@ func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
 // A reduction is sized from the upright frame: a rotated 160x120 clip at edge
 // 40 is decoded at 60x80, not at the squashed 107x80 its stored size gives.
 func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := rotatedClip(t, env)
 	c := withRunCounts(env)
@@ -710,6 +726,7 @@ func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
 // is still an upper bound: Matroska's container duration also covers the audio
 // that outlasts this clip's video, so the samples near its end are skipped.
 func TestVideoWithoutStreamDurationUsesTheContainersFromTheStreamStart(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := offsetClip(t, env)
@@ -730,6 +747,7 @@ func TestVideoWithoutStreamDurationUsesTheContainersFromTheStreamStart(t *testin
 }
 
 func TestParseVideoProbeDurationFallbackIsRelativeToTheStream(t *testing.T) {
+	t.Parallel()
 	probe := func(streamDuration string) string {
 		return `{"streams":[{"index":0,"codec_type":"video","width":10,"height":10,"start_time":"2.5","duration":"` +
 			streamDuration + `"}],"format":{"start_time":"0.872","duration":"6.632"}}`
@@ -759,6 +777,7 @@ func TestParseVideoProbeDurationFallbackIsRelativeToTheStream(t *testing.T) {
 // The matroska and mov demuxers, and so WebM, MP4 and QuickTime, are opened
 // when no type is named.
 func TestDetectedFormatsOpenMatroskaWebMAndMov(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for ext, codec := range map[string]string{".mkv": "libx264", ".webm": "libvpx", ".mp4": "libx264", ".mov": "libx264"} {
 		t.Run(ext, func(t *testing.T) {

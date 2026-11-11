@@ -181,6 +181,7 @@ func dirNames(t *testing.T, dir string) []string {
 }
 
 func TestEmbeddedProfile(t *testing.T) {
+	t.Parallel()
 	sum := sha256.Sum256(srgbProfile)
 	const want = "384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a"
 	if got := hex.EncodeToString(sum[:]); got != want {
@@ -189,6 +190,7 @@ func TestEmbeddedProfile(t *testing.T) {
 }
 
 func TestFitSize(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		w, h, edge, area int
 		tw, th           int
@@ -227,6 +229,7 @@ func TestFitSize(t *testing.T) {
 // A header report that cannot be read is an error, not a shorter list of
 // scenes.
 func TestParseSceneHeadersRefusesAnUnreadableReport(t *testing.T) {
+	t.Parallel()
 	const good = "5||40|30|40|30|WEBP|Undefined|DirectClass sRGB|False|END"
 	if scenes, err := parseSceneHeaders([]byte(good + "\n" + good + "\n")); err != nil || len(scenes) != 2 || scenes[0].delayCS != 5 || scenes[1].width != 40 {
 		t.Fatalf("a good report gave %+v, %v", scenes, err)
@@ -252,6 +255,7 @@ func TestParseSceneHeadersRefusesAnUnreadableReport(t *testing.T) {
 // IdentifyArtifact reads what identify reports of an encoded file, and fails
 // on a report it cannot read.
 func TestIdentifyArtifactRefusesAnUnreadableReport(t *testing.T) {
+	t.Parallel()
 	read := func(report string) (int, int, int, error) {
 		env := Env{Run: func(context.Context, string, ...string) (Result, error) {
 			return Result{Stdout: []byte(report)}, nil
@@ -279,6 +283,7 @@ func TestIdentifyArtifactRefusesAnUnreadableReport(t *testing.T) {
 // An encode whose report cannot be read, or reports other frames than it was
 // given, fails and leaves no frame in the output directory.
 func TestAnimationFramesRefuseAnUnreadableEncodeReport(t *testing.T) {
+	t.Parallel()
 	src := writeGIF(t, solid, 6)
 	for _, c := range []struct {
 		name, report, want string
@@ -316,6 +321,7 @@ func TestAnimationFramesRefuseAnUnreadableEncodeReport(t *testing.T) {
 
 // Each bound of an Encoding is inclusive, and a value one past it is refused.
 func TestEncodingBoundsAreInclusive(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		enc  Encoding
@@ -340,6 +346,7 @@ func TestEncodingBoundsAreInclusive(t *testing.T) {
 }
 
 func TestDisplayDelayCS(t *testing.T) {
+	t.Parallel()
 	for delay, want := range map[int]int{-1: 10, 0: 10, 1: 10, 2: 2, 3: 3, 100: 100} {
 		if got := displayDelayCS(delay); got != want {
 			t.Errorf("displayDelayCS(%d) = %d, want %d", delay, got, want)
@@ -350,6 +357,7 @@ func TestDisplayDelayCS(t *testing.T) {
 // uprightSize swaps the sides for exactly the four orientations that turn the
 // image a quarter.
 func TestUprightSizeSwapsForTheQuarterTurns(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		swap bool
@@ -375,6 +383,7 @@ func TestUprightSizeSwapsForTheQuarterTurns(t *testing.T) {
 // A directory or a FIFO is refused as a source before a tool runs, and the
 // call returns instead of waiting for a writer to open the FIFO.
 func TestOperationsRefuseASourceThatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
 	defer func() { p.run = rec.inner }()
@@ -405,6 +414,7 @@ func TestOperationsRefuseASourceThatIsNotARegularFile(t *testing.T) {
 }
 
 func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	heic := writeHEIC(t)
 	gif := writeGIF(t, solid, 2)
@@ -478,6 +488,7 @@ func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
 }
 
 func TestStillOutput(t *testing.T) {
+	t.Parallel()
 	requireExiftool(t)
 	env := requireMagick(t)
 	p := requireProcessor(t)
@@ -518,6 +529,7 @@ func TestStillOutput(t *testing.T) {
 }
 
 func TestStillSizing(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	src := writeHEIC(t) // 480x640 upright
 	cases := []struct {
@@ -541,6 +553,7 @@ func TestStillSizing(t *testing.T) {
 }
 
 func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	dir := t.TempDir()
@@ -570,6 +583,7 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 }
 
 func TestFramesSelection(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	src := writeGIF(t, solid, 20)
@@ -625,6 +639,7 @@ func rgbDistance(t *testing.T, a, b string) int {
 }
 
 func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	src := writeGIF(t, func(int) string { return "xc:rgb(10,120,200)" }, 4)
 	images, out := framesInto(t, p, src, Encoding{}, 0)
@@ -637,6 +652,7 @@ func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
 }
 
 func TestFramesRenumbersAfterDedup(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	// Frames 0-1 identical, 2-3 identical: two kept frames, numbered 0 and 1.
 	src := writeGIF(t, func(i int) string { return solid(i / 2) }, 4)
@@ -654,6 +670,7 @@ func TestFramesRenumbersAfterDedup(t *testing.T) {
 }
 
 func TestFramesFlattensTransparencyOnWhite(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "t.gif")
@@ -674,6 +691,7 @@ func TestFramesFlattensTransparencyOnWhite(t *testing.T) {
 }
 
 func TestFramesStripsMetadataAndAcceptsWebP(t *testing.T) {
+	t.Parallel()
 	requireExiftool(t)
 	env := requireMagick(t)
 	p := requireProcessor(t)
@@ -693,6 +711,7 @@ func TestFramesStripsMetadataAndAcceptsWebP(t *testing.T) {
 }
 
 func TestFramesSizing(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	src := writeGIF(t, solid, 3) // 64x48
 	cases := []struct {
@@ -718,6 +737,7 @@ func TestFramesSizing(t *testing.T) {
 }
 
 func TestFramesMaxFrames(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	src := writeGIF(t, solid, 20)
 	images, _ := framesInto(t, p, src, Encoding{}, 4)
@@ -731,6 +751,7 @@ func TestFramesMaxFrames(t *testing.T) {
 }
 
 func TestOperationsCleanUpOnFailure(t *testing.T) {
+	t.Parallel()
 	wide := func() string { return heicFixture(t, "adobe-64x64") }
 	cases := []struct {
 		name      string
@@ -803,6 +824,7 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 }
 
 func TestGoldenArgv(t *testing.T) {
+	t.Parallel()
 	wide := func() string { return heicFixture(t, "adobe-64x32") }
 	type run func(p *Processor, input, out string) error
 	still := func(enc Encoding) run {

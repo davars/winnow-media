@@ -72,6 +72,7 @@ func TestGIFFramesGoToMagickInBatches(t *testing.T) {
 }
 
 func TestScanGIF(t *testing.T) {
+	t.Parallel()
 	good := buildGIF(t, 24, 20, paletteA, []gifFrameSpec{
 		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA},
 		{rect: image.Rect(4, 3, 16, 12), disposal: 1, delay: 5, palette: paletteB},
@@ -107,6 +108,7 @@ func TestScanGIF(t *testing.T) {
 // TestBrokenGIFsFailCleanly runs GIFs the header read accepts but the
 // compositor cannot decode through AnimationFrames.
 func TestBrokenGIFsFailCleanly(t *testing.T) {
+	t.Parallel()
 	requireMagick(t)
 	p := requireProcessor(t)
 	good := buildGIF(t, 24, 20, paletteA, []gifFrameSpec{
@@ -137,6 +139,7 @@ func TestBrokenGIFsFailCleanly(t *testing.T) {
 }
 
 func TestRunCompositorRefusesBadArguments(t *testing.T) {
+	t.Parallel()
 	for name, args := range map[string][]string{
 		"too few":            {"a"},
 		"not a count":        {"a", "b", "x", "1", "1", "1", "0", "0", "1000"},
@@ -205,6 +208,7 @@ func withICC(t *testing.T, g, profile []byte, before ...int) []byte {
 }
 
 func TestScanGIFProfile(t *testing.T) {
+	t.Parallel()
 	adobe := mustAdobeProfile(t)
 	swapped := swappedProfile(t, adobe)
 	g := buildGIF(t, 24, 20, paletteA, []gifFrameSpec{
@@ -279,6 +283,7 @@ func mustAdobeProfile(t *testing.T) []byte {
 }
 
 func TestGIFWithoutTrailerGivesTheSameFrames(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	full := writeGIF(t, solid, 6)
 	data, err := os.ReadFile(full)
@@ -308,6 +313,7 @@ func TestGIFWithoutTrailerGivesTheSameFrames(t *testing.T) {
 // ImageMagick gives for the same file: -coalesce, the sRGB conversion and the
 // resize, in one run.
 func TestProfiledGIFsMatchImageMagick(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	srgb := writeSRGBProfile(t)
@@ -432,6 +438,7 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 // frames each carry a different profile is encoded in one run, every frame
 // converted by its own profile.
 func TestProfilesThatChangeOnEveryFrameShareOneRun(t *testing.T) {
+	t.Parallel()
 	requireMagick(t)
 	p := requireProcessor(t)
 	adobe := mustAdobeProfile(t)
@@ -473,6 +480,7 @@ func TestProfilesThatChangeOnEveryFrameShareOneRun(t *testing.T) {
 }
 
 func TestProfiledGIFConvertsColours(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	adobe := mustAdobeProfile(t)

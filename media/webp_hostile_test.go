@@ -193,6 +193,7 @@ func TestHostileAnimatedWebPsAreRefusedOrBounded(t *testing.T) {
 // would have had to make), over the damaged files, and checks that it fails
 // with nothing written.
 func TestWebPFramesRefusesDamagedAnimations(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {
@@ -235,6 +236,7 @@ func TestWebPFramesRefusesDamagedAnimations(t *testing.T) {
 // TestPatchedCanvasIsRefusedBeforeTheToolStarts checks that a canvas the caps
 // refuse, in a few hundred bytes, never reaches webp-frames.
 func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
 	good, err := os.ReadFile(buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 6}))
@@ -267,6 +269,7 @@ func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
 // TestWebPFramesRefusesBadArguments checks the tool's own validation, which
 // holds whoever calls it.
 func TestWebPFramesRefusesBadArguments(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {
@@ -331,6 +334,7 @@ func TestWebPFramesRefusesBadArguments(t *testing.T) {
 // TestWebPFramesWaitsForConsumedFrames checks the tool's backpressure: with
 // two frames in flight it writes two and waits until the first is deleted.
 func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {
@@ -459,6 +463,7 @@ func TestWebPFramesCleansUpWhenAMagickRunFails(t *testing.T) {
 // last selected one are not decoded: a file whose later frames are corrupt
 // still yields the earlier ones.
 func TestWebPFramesStopsAfterTheLastSelectedFrame(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {

@@ -36,6 +36,7 @@ func writeAdobeHEIC(t *testing.T, env Env, size, path string) {
 // TestRegenerateHEICFixtures rewrites testdata/heic when run with
 // -regenerate-heic, on a platform whose HEIC encoder works (x86_64-linux).
 func TestRegenerateHEICFixtures(t *testing.T) {
+	t.Parallel()
 	if !*regenerateHEIC {
 		t.Skip("run with -regenerate-heic to rewrite the fixtures")
 	}
