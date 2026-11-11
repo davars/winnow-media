@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/davars/winnow-media/tool"
@@ -233,73 +234,78 @@ func TestScaledWebPDecodeKeepsTheOutputSize(t *testing.T) {
 	sweeps = append(sweeps, sweep{[2]int{201, 600}, targets})
 	// Large enough that a 1024 and a 2048 target both reduce.
 	sweeps = append(sweeps, sweep{[2]int{5712, 4284}, []Encoding{edge(1024), edge(2048)}})
-	reduced, stored := 0, 0
-	for _, orientation := range []int{0, 6} {
-		for i, sw := range sweeps {
-			if orientation != 0 && (i%3 != 2 || sw.size[0] >= 4000) {
-				continue
-			}
-			sz, ts := sw.size, sw.targets
-			name := fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation)
-			path := gradientWebP(t, real, sz[0], sz[1])
-			env, calls := sourceEnv(t)
-			src := openSource(t, env, path, Hints{Orientation: orientation})
-			hinted, err := src.Encode(context.Background(), 0, ts...)
-			if err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			decoded := decodedAt(calls())
-			if len(decoded) != 1 {
-				t.Fatalf("%s: webp-frames decoded %d times for %d targets, want 1", name, len(decoded), len(ts))
-			}
-			if want := src.webpDecodeSize(resolveAll(t, ts)); decoded[0] != want {
-				t.Errorf("%s: decoded at %v, webpDecodeSize says %v", name, decoded[0], want)
-			}
-			if decoded[0] == src.stored {
-				stored++
-			} else {
-				reduced += len(ts)
-				// A reduced decode keeps twice every output's size, so the
-				// resize that follows has detail to work from.
-				dw, dh := decoded[0][0], decoded[0][1]
-				if orientation == 6 {
-					dw, dh = dh, dw
+	var reduced, stored atomic.Int64
+	t.Run("sweep", func(t *testing.T) {
+		for _, orientation := range []int{0, 6} {
+			for i, sw := range sweeps {
+				if orientation != 0 && (i%3 != 2 || sw.size[0] >= 4000) {
+					continue
 				}
-				for i, h := range hinted {
-					if dw < 2*h.Width || dh < 2*h.Height {
-						t.Errorf("%s target %d: decoded %dx%d upright for a %dx%d output", name, i, dw, dh, h.Width, h.Height)
-					}
-				}
-			}
-			for i, target := range ts {
-				plain, _ := magickReference(t, path, Hints{Orientation: orientation}, target)
-				if hinted[i].Width != plain.Width || hinted[i].Height != plain.Height {
-					t.Errorf("%s target %d: %dx%d, ImageMagick's full decode %dx%d", name, i,
-						hinted[i].Width, hinted[i].Height, plain.Width, plain.Height)
-				}
-				// Alone, the target may decode at a different size from the
-				// group's.
-				if i == 0 {
-					one, err := src.Encode(context.Background(), 0, target)
+				sz, ts := sw.size, sw.targets
+				name := fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation)
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					path := gradientWebP(t, real, sz[0], sz[1])
+					env, calls := sourceEnv(t)
+					src := openSource(t, env, path, Hints{Orientation: orientation})
+					hinted, err := src.Encode(context.Background(), 0, ts...)
 					if err != nil {
 						t.Fatalf("%s: %v", name, err)
 					}
-					if one[0].Width != plain.Width || one[0].Height != plain.Height {
-						t.Errorf("%s target %d alone: %dx%d, ImageMagick's full decode %dx%d", name, i,
-							one[0].Width, one[0].Height, plain.Width, plain.Height)
+					decoded := decodedAt(calls())
+					if len(decoded) != 1 {
+						t.Fatalf("%s: webp-frames decoded %d times for %d targets, want 1", name, len(decoded), len(ts))
 					}
-					one[0].Cleanup()
-				}
-			}
-			for _, h := range hinted {
-				h.Cleanup()
+					if want := src.webpDecodeSize(resolveAll(t, ts)); decoded[0] != want {
+						t.Errorf("%s: decoded at %v, webpDecodeSize says %v", name, decoded[0], want)
+					}
+					if decoded[0] == src.stored {
+						stored.Add(1)
+					} else {
+						reduced.Add(int64(len(ts)))
+						// A reduced decode keeps twice every output's size, so the
+						// resize that follows has detail to work from.
+						dw, dh := decoded[0][0], decoded[0][1]
+						if orientation == 6 {
+							dw, dh = dh, dw
+						}
+						for i, h := range hinted {
+							if dw < 2*h.Width || dh < 2*h.Height {
+								t.Errorf("%s target %d: decoded %dx%d upright for a %dx%d output", name, i, dw, dh, h.Width, h.Height)
+							}
+						}
+					}
+					for i, target := range ts {
+						plain, _ := magickReference(t, path, Hints{Orientation: orientation}, target)
+						if hinted[i].Width != plain.Width || hinted[i].Height != plain.Height {
+							t.Errorf("%s target %d: %dx%d, ImageMagick's full decode %dx%d", name, i,
+								hinted[i].Width, hinted[i].Height, plain.Width, plain.Height)
+						}
+						// Alone, the target may decode at a different size from the
+						// group's.
+						if i == 0 {
+							one, err := src.Encode(context.Background(), 0, target)
+							if err != nil {
+								t.Fatalf("%s: %v", name, err)
+							}
+							if one[0].Width != plain.Width || one[0].Height != plain.Height {
+								t.Errorf("%s target %d alone: %dx%d, ImageMagick's full decode %dx%d", name, i,
+									one[0].Width, one[0].Height, plain.Width, plain.Height)
+							}
+							one[0].Cleanup()
+						}
+					}
+					for _, h := range hinted {
+						h.Cleanup()
+					}
+				})
 			}
 		}
+	})
+	if reduced.Load() < 20 {
+		t.Errorf("only %d encodes were decoded reduced: the sweep no longer exercises the route", reduced.Load())
 	}
-	if reduced < 20 {
-		t.Errorf("only %d encodes were decoded reduced: the sweep no longer exercises the route", reduced)
-	}
-	if stored == 0 {
+	if stored.Load() == 0 {
 		t.Error("no group was decoded at the stored size: the sweep no longer exercises that branch")
 	}
 }
