@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -621,49 +622,62 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 				t.Parallel()
 				path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+".jpg")
 				magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
-				// encode runs one encode of the file, taking its turn when
-				// the file is large, and returns the artifacts.
-				encode := func(t *testing.T, reduce bool, targets ...Encoding) []Artifact {
-					t.Helper()
-					if isLarge {
-						large <- struct{}{}
-						defer func() { <-large }()
-					}
+				// encode returns the sizes of the outputs of one encode of
+				// the file, each encode on its own Source.
+				encode := func(reduce bool, targets ...Encoding) func() ([][2]int, error) {
 					env, _ := sourceEnv(t)
 					src := openSource(t, env, path, Hints{Orientation: orientation})
 					src.reduce = reduce
-					out, err := src.Encode(context.Background(), 0, targets...)
-					if err != nil {
-						t.Fatal(err)
-					}
-					t.Cleanup(func() {
-						for _, a := range out {
+					return func() ([][2]int, error) {
+						if isLarge {
+							large <- struct{}{}
+							defer func() { <-large }()
+						}
+						out, err := src.Encode(context.Background(), 0, targets...)
+						if err != nil {
+							return nil, err
+						}
+						sizes := make([][2]int, len(out))
+						for i, a := range out {
+							sizes[i] = [2]int{a.Width, a.Height}
 							a.Cleanup()
 						}
-					})
-					return out
-				}
-				plain := encode(t, false, ts...)
-				t.Run("all targets", func(t *testing.T) {
-					t.Parallel()
-					hinted := encode(t, true, ts...)
-					for i := range ts {
-						if hinted[i].Width != plain[i].Width || hinted[i].Height != plain[i].Height {
-							t.Errorf("target %d: reduced %dx%d, full decode %dx%d", i,
-								hinted[i].Width, hinted[i].Height, plain[i].Width, plain[i].Height)
-						}
+						return sizes, nil
 					}
-				})
+				}
+				// The encodes are independent, and run alongside one
+				// another, so that the case's last encode is not queued
+				// behind the other tests.
+				var wg sync.WaitGroup
+				var plain, hinted [][2]int
+				var plainErr, hintedErr error
+				alone := make([][][2]int, len(ts))
+				aloneErr := make([]error, len(ts))
+				run := func(f func()) {
+					wg.Add(1)
+					go func() { defer wg.Done(); f() }()
+				}
+				planPlain, planHinted := encode(false, ts...), encode(true, ts...)
+				run(func() { plain, plainErr = planPlain() })
+				run(func() { hinted, hintedErr = planHinted() })
 				// Each target alone is the path of a ladder rung.
 				for i, target := range ts {
-					t.Run(fmt.Sprintf("target %d alone", i), func(t *testing.T) {
-						t.Parallel()
-						alone := encode(t, true, target)
-						if alone[0].Width != plain[i].Width || alone[0].Height != plain[i].Height {
-							t.Errorf("reduced %dx%d, full decode %dx%d",
-								alone[0].Width, alone[0].Height, plain[i].Width, plain[i].Height)
-						}
-					})
+					plan := encode(true, target)
+					run(func() { alone[i], aloneErr[i] = plan() })
+				}
+				wg.Wait()
+				if plainErr != nil || hintedErr != nil {
+					t.Fatalf("all targets: full decode %v, reduced %v", plainErr, hintedErr)
+				}
+				for i := range ts {
+					if hinted[i] != plain[i] {
+						t.Errorf("target %d: reduced %dx%d, full decode %dx%d", i, hinted[i][0], hinted[i][1], plain[i][0], plain[i][1])
+					}
+					if aloneErr[i] != nil {
+						t.Errorf("target %d alone: %v", i, aloneErr[i])
+					} else if alone[i][0] != plain[i] {
+						t.Errorf("target %d alone: reduced %dx%d, full decode %dx%d", i, alone[i][0][0], alone[i][0][1], plain[i][0], plain[i][1])
+					}
 				}
 			})
 		}
