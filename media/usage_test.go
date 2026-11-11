@@ -13,7 +13,6 @@ func TestUsageOfNilState(t *testing.T) {
 }
 
 func TestRunnerReportsUsage(t *testing.T) {
-	t.Parallel()
 	env := requireMagick(t)
 	res, err := env.Run(context.Background(), "magick", "-version")
 	if err != nil {

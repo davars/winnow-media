@@ -273,7 +273,6 @@ func withoutGCE(t *testing.T, n int, interlaced bool) []byte {
 // TestPAMReadsBackIdentically checks that magick reads a written canvas
 // as the same pixels, alpha included.
 func TestPAMReadsBackIdentically(t *testing.T) {
-	t.Parallel()
 	env := requireMagick(t)
 	const w, h = 24, 20
 	g := buildGIF(t, w, h, paletteA, []gifFrameSpec{

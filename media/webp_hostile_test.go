@@ -236,7 +236,6 @@ func TestWebPFramesRefusesDamagedAnimations(t *testing.T) {
 // TestPatchedCanvasIsRefusedBeforeTheToolStarts checks that a canvas the caps
 // refuse, in a few hundred bytes, never reaches webp-frames.
 func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
-	t.Parallel()
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
 	good, err := os.ReadFile(buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 6}))

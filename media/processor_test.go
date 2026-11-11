@@ -342,7 +342,6 @@ func TestCheckReturnedPixels(t *testing.T) {
 }
 
 func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
-	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	var runs []Usage

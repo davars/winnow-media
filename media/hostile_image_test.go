@@ -219,7 +219,6 @@ func TestAnimationAtTheFrameCapDecodesWithinTheBounds(t *testing.T) {
 }
 
 func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
-	t.Parallel()
 	p := requireProcessor(t)
 	bounds := refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}
 	for name, side := range map[string][2]int{
@@ -233,7 +232,6 @@ func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
 }
 
 func TestWebPOfMaximumDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
-	t.Parallel()
 	p := requireProcessor(t)
 	requireAnimationRefusals(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, losslessWebP(16383, 16383))
 }
@@ -249,7 +247,6 @@ func TestLosslessWebPFixtureIsOneColour(t *testing.T) {
 }
 
 func TestHEICDeclaringHugeDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
-	t.Parallel()
 	p := requireProcessor(t)
 	original, err := os.ReadFile(filepath.Join("testdata", "heic", "gradient-righttop.heic"))
 	if err != nil {
@@ -271,7 +268,6 @@ func TestHEICDeclaringHugeDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
 }
 
 func TestManyFrameGIFIsRefusedAfterTheHeaderRead(t *testing.T) {
-	t.Parallel()
 	p := requireProcessor(t)
 	requireAnimationRefusals(t, p, refusalBounds{wall: time.Second, maxRSS: 512 << 20}, manyFrameGIF(1, 1, 10_000))
 }
@@ -296,7 +292,6 @@ func reachCompositor(t *testing.T, p *Processor) func() int {
 // bounds the decode of one frame at the frame cap, and TestAnimationAtTheFrameCapDecodesWithinTheBounds
 // that of the most frames, not 16 frames of 4 megapixels.
 func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
-	t.Parallel()
 	p := requireProcessor(t)
 	cases := []struct {
 		name          string
@@ -329,7 +324,6 @@ func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 }
 
 func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
-	t.Parallel()
 	p := requireProcessor(t)
 	data := oneColourGIF(t, 2000, 2001, 16)
 	indices := func(n int) []int {
