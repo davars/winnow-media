@@ -187,7 +187,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
 			images, out := framesInto(t, p, path, Encoding{}, 0)
-			if !slices.Equal(images, wantImages) {
+			if !sameImages(images, wantImages) {
 				t.Errorf("images = %+v, want %+v", images, wantImages)
 			}
 			for _, img := range images {
@@ -454,21 +454,13 @@ func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 
 func TestVideoSizeCapRefusesBeforeSampling(t *testing.T) {
 	t.Parallel()
-	var names []string
-	env := Env{Run: func(_ context.Context, name string, _ ...string) (Result, error) {
-		names = append(names, name)
-		return Result{Stdout: []byte(`{"streams":[{"index":0,"codec_type":"video","width":16385,"height":100,"duration":"1.0","nb_frames":"10"}]}`)}, nil
-	}}
-	enc, err := Encoding{}.resolve()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = env.videoFrames(context.Background(), region{}, decoder{"ffmpeg", "mov"}, "in", enc, 4, t.TempDir())
+	stub := &videoStub{probe: `{"streams":[{"index":0,"codec_type":"video","width":16385,"height":100,"duration":"1.0","nb_frames":"10"}]}`}
+	_, err := stub.open(t)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
-	if !slices.Equal(names, []string{"ffprobe"}) {
-		t.Errorf("tool runs %v, want only ffprobe", names)
+	if len(stub.probes) != 1 || len(stub.runs) != 0 {
+		t.Errorf("%d ffprobe and %d ffmpeg runs, want only the probe", len(stub.probes), len(stub.runs))
 	}
 }
 

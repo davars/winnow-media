@@ -94,8 +94,8 @@ func TestEncodeMapsTheScenesTheWebPWriterMerged(t *testing.T) {
 			if len(mapping) != len(written) {
 				t.Fatalf("mapping describes %d frames, the file holds %d scenes %v", len(mapping), len(written), written)
 			}
-			if mapping[0].SourceFrame != 0 {
-				t.Errorf("first scene shows frame %d, want 0", mapping[0].SourceFrame)
+			if mapping[0].Index != 0 {
+				t.Errorf("first scene shows frame %d, want 0", mapping[0].Index)
 			}
 			if len(written) == 1 {
 				return
@@ -108,14 +108,14 @@ func TestEncodeMapsTheScenesTheWebPWriterMerged(t *testing.T) {
 				return ms
 			}
 			for i, f := range mapping {
-				if f.SourceTimeMS != startMS(f.SourceFrame) {
-					t.Errorf("scene %d shows frame %d at %d ms, want %d", i, f.SourceFrame, f.SourceTimeMS, startMS(f.SourceFrame))
+				if f.TimeMS != startMS(f.Index) {
+					t.Errorf("scene %d shows frame %d at %d ms, want %d", i, f.Index, f.TimeMS, startMS(f.Index))
 				}
 				end := startMS(len(delays))
 				if i+1 < len(mapping) {
-					end = mapping[i+1].SourceTimeMS
+					end = mapping[i+1].TimeMS
 				}
-				if got := (end - f.SourceTimeMS) / 10; got != int64(written[i]) {
+				if got := (end - f.TimeMS) / 10; got != int64(written[i]) {
 					t.Errorf("scene %d lasts %d cs in the file, its frames span %d", i, written[i], got)
 				}
 			}

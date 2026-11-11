@@ -282,7 +282,7 @@ func TestEncodeRungMatchesTheWholeFileEncode(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The stored 0 delay of frame 0 is shown as 10 centiseconds.
-	want := []Frame{{SourceFrame: 0, SourceTimeMS: 0}, {SourceFrame: 1, SourceTimeMS: 100}, {SourceFrame: 3, SourceTimeMS: 370}}
+	want := []Frame{{Index: 0, TimeMS: 0}, {Index: 1, TimeMS: 100}, {Index: 3, TimeMS: 370}}
 	if !slices.Equal(mapping, want) {
 		t.Errorf("mapping %v, want %v", mapping, want)
 	}
@@ -364,7 +364,7 @@ func TestEncodeRungDropsConsecutiveDuplicateFrames(t *testing.T) {
 	}
 	var sources []int
 	for _, f := range mapping {
-		sources = append(sources, f.SourceFrame)
+		sources = append(sources, f.Index)
 	}
 	if want := []int{0, 3, 5}; !slices.Equal(sources, want) {
 		t.Errorf("mapping holds source frames %v, want %v", sources, want)
@@ -811,6 +811,24 @@ func TestEncodeRungRefusesOtherFormatsAsAnimationFramesDoes(t *testing.T) {
 	cleanup()
 }
 
+// A still whose orientation the header read leaves open is refused when its
+// encode reports no upright size.
+func TestEncodeRefusesAnUnsettledStillWhoseRunReportsNoUprightSize(t *testing.T) {
+	t.Parallel()
+	env := stagedEnv(Env{Run: func(_ context.Context, _ string, args ...string) (Result, error) {
+		if slices.Contains(args, "identify") {
+			return Result{Stdout: []byte("0||64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
+		}
+		return Result{Stdout: []byte("64|64\n")}, nil
+	}}, t.TempDir())
+	path := writeFile(t, "content", []byte("not a recognised type"))
+	_, _, _, _, _, err := env.EncodeRung(context.Background(), path, "", false,
+		Rung{CeilingPx: 64, MaxFrames: 1}, []FrameInfo{{}}, "", "", testQuality)
+	if err == nil || !strings.Contains(err.Error(), "upright") {
+		t.Errorf("err = %v, want a refusal for the missing upright size", err)
+	}
+}
+
 // A profiled still gets its sRGB destination from the profile the package
 // embeds when the caller supplies no file, as a composited animation does.
 func TestEncodeRungStillWithoutProfilePathUsesTheEmbeddedProfile(t *testing.T) {
@@ -821,7 +839,7 @@ func TestEncodeRungStillWithoutProfilePathUsesTheEmbeddedProfile(t *testing.T) {
 			return Result{Stdout: []byte("0|icc|64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
 		}
 		encodes = append(encodes, args)
-		return Result{Stdout: []byte("64|64\n")}, nil
+		return Result{Stdout: []byte("upright|64|64\n64|64\n")}, nil
 	}}, t.TempDir())
 	path := writeFile(t, "content", []byte("not a recognised type"))
 	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "", false,

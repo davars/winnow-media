@@ -94,7 +94,7 @@ type videoInfo struct {
 	frames        int // 0 when unknown
 	declared      int // the container's frame count; 0 when it gives none
 	rate          float64
-	codec         string // empty unless the probe asked for it
+	codec         string
 	hasAudio      bool
 	transfer      string
 	streams       int // streams in the container, of every kind
@@ -169,41 +169,13 @@ func inputArgs(dec decoder, path string) []string {
 	return append(args, "-f", dec.name, "-i", path)
 }
 
-// videoDecoderOf returns the decoder of the video type path's leading bytes
-// name, and false for any other content.
-func videoDecoderOf(path string) (decoder, bool) {
-	mediaType, err := sniffFile(path)
-	if err != nil {
-		return decoder{}, false
-	}
-	if e := typeTable[mediaType]; e.kind == kindVideo {
-		return e.decoderFor(""), true
-	}
-	return decoder{}, false
-}
-
-// sniffedVideoDecoder returns videoDecoderOf path, or the unnamed decoder,
-// which leaves the demuxer to ffmpeg, for any other content. It serves the
-// Env, which has no gate on types.
-func sniffedVideoDecoder(path string) decoder {
-	if dec, ok := videoDecoderOf(path); ok {
-		return dec
-	}
-	return unnamedVideoDecoder
-}
-
 // unnamedVideoDecoder leaves the demuxer to ffmpeg's detection, limited to
 // detectedFormats.
 var unnamedVideoDecoder = decoder{"ffmpeg", ""}
 
-// probeEntries is what ffprobe is asked to show for the sampling operations;
-// probeEntriesWithCodec also asks for each stream's codec name.
-const (
-	probeEntries = "stream=index,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,start_time" +
-		":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
-	probeEntriesWithCodec = "stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,start_time" +
-		":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
-)
+// probeEntries is what ffprobe is asked to show of a video.
+const probeEntries = "stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,start_time" +
+	":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
 
 // probeVideo runs the probe that the sampling operations share.
 func probeVideo(ctx context.Context, env Env, dec decoder, path string) (videoInfo, error) {
@@ -519,42 +491,6 @@ type sampledFrame struct {
 	timeMS int64
 }
 
-// videoFrames samples up to maxFrames frames evenly.
-func (e Env) videoFrames(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
-	return e.videoFramesPicked(ctx, r, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
-		return sampleTimesMS(info, maxFrames), nil
-	}, dir)
-}
-
-// videoFramesPicked samples the frames at the times pick chooses, given the
-// probe, which must be in ascending order without repeats; sampleVideo reads
-// them.
-func (e Env) videoFramesPicked(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
-	return e.encodeVideoFiles(ctx, r, openRequest{
-		path: inputPath, dec: dec, pinned: true, scratch: dir, video: &videoRequest{times: pick},
-	}, enc, dir)
-}
-
-// videoFrameRun samples count consecutive frames from startMS in one ffmpeg
-// run.
-func (e Env) videoFrameRun(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
-	return e.encodeVideoFiles(ctx, r, openRequest{
-		path: inputPath, dec: dec, pinned: true, scratch: dir,
-		video: &videoRequest{run: &frameRun{startMS: startMS, count: count}},
-	}, enc, dir)
-}
-
-// encodeVideoFiles opens the video req describes and writes its samples to
-// dir.
-func (e Env) encodeVideoFiles(ctx context.Context, r region, req openRequest, enc encoding, dir string) ([]Image, error) {
-	src, err := e.open(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer src.Close()
-	return src.encodeFiles(ctx, r, enc, dir)
-}
-
 // sampleVideo writes the frame at or after each of times, which must be
 // ascending without repeats, to a file in dir, and returns them with the time
 // each was asked for. A time past the last frame has no frame and is skipped,
@@ -742,12 +678,21 @@ type sampleEncoder struct {
 	// framePixels is the pixel count of each frame as read; it sets the batch
 	// size.
 	framePixels int
+	// name is the name of the n-th kept file; nil names it frameName(n).
+	name func(n int) string
 	// keep is called for each kept frame with its index among all the frames
 	// given, its output number and its size.
 	keep func(i, n, w, h int)
 
 	lastSig string
 	seen, n int
+}
+
+func (s *sampleEncoder) nameOf(n int) string {
+	if s.name != nil {
+		return s.name(n)
+	}
+	return frameName(n, s.enc.ext)
 }
 
 // batchSize is the number of frames one run reads: at least one, at most
@@ -776,7 +721,7 @@ func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 			}
 			continue
 		}
-		if err := os.Rename(tmp, filepath.Join(s.dir, frameName(s.n, s.enc.ext))); err != nil {
+		if err := os.Rename(tmp, filepath.Join(s.dir, s.nameOf(s.n))); err != nil {
 			return err
 		}
 		s.lastSig = f.signature

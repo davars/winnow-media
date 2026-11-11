@@ -44,7 +44,7 @@ var internalCoders = []string{"icc", "pam"}
 
 // policyCoders returns the coders a Processor of the given types reads and
 // writes, keyed by upper-case coder name: the coders of the types, the
-// internal ones and the output formats.
+// internal ones, the output formats and the info: and null: sinks.
 func policyCoders(types []string) map[string]coderRights {
 	coders := map[string]coderRights{}
 	add := func(name string, read, write bool) {
@@ -61,7 +61,7 @@ func policyCoders(types []string) map[string]coderRights {
 	for _, n := range internalCoders {
 		add(n, true, false)
 	}
-	for _, n := range append([]string{"info"}, outputCoders...) {
+	for _, n := range append([]string{"info", "null"}, outputCoders...) {
 		add(n, false, true)
 	}
 	return coders

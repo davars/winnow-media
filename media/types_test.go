@@ -224,7 +224,7 @@ func decodeFixture(t *testing.T, p *Processor, typ, path, typeName string) (w, h
 		}
 		return images[0].Width, images[0].Height
 	}
-	img, _, err := p.still(ctx, path, typeName, enc, t.TempDir())
+	img, _, err := stillAs(ctx, p, path, typeName, enc, t.TempDir())
 	if err != nil {
 		t.Fatalf("Still: %v", err)
 	}

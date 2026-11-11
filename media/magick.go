@@ -22,6 +22,8 @@ var coderByMIME = map[string]string{
 // CoderForMIME returns the ImageMagick coder to force, as an input prefix
 // ("<coder>:<path>"), for a mime type whose bytes magick cannot identify
 // without an extension. ok is false for every other mime type, including "".
+//
+// Deprecated: use OpenOptions.Type.
 func CoderForMIME(mimeType string) (coder string, ok bool) {
 	coder, ok = coderByMIME[mimeType]
 	return coder, ok
@@ -38,6 +40,8 @@ func CoderForMIME(mimeType string) (coder string, ok bool) {
 // supported. A run that reaches ImageMagick's time limit fails with an error
 // wrapping ErrTimeLimit, even though ImageMagick exits 0, and is not retried;
 // this needs the Runner to fill Result.Stderr.
+//
+// Deprecated: use OpenOptions.Type.
 func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, buildArgs func(coder string) []string) ([]byte, error) {
 	first, err := e.runMagick(ctx, buildArgs("")...)
 	if err == nil {
@@ -57,6 +61,8 @@ func (e Env) RunMagickWithCoderFallback(ctx context.Context, mimeType string, bu
 
 // LimitArgs returns the resource-limit flags that bound one magick process
 // under HighMemory; it is HighMemory.LimitArgs().
+//
+// Deprecated: use Config.Resources.
 func LimitArgs() []string { return HighMemory.LimitArgs() }
 
 // LimitArgs returns the resource-limit flags for one magick process under the
@@ -68,6 +74,8 @@ func LimitArgs() []string { return HighMemory.LimitArgs() }
 // should start them with these (after a leading "identify"). The slice is
 // fresh on every call. It panics on an undefined profile; check Valid first
 // when the value comes from outside the program.
+//
+// Deprecated: use Config.Resources.
 func (p MemoryProfile) LimitArgs() []string {
 	r, err := p.resources()
 	if err != nil {
@@ -77,6 +85,8 @@ func (p MemoryProfile) LimitArgs() []string {
 }
 
 // Valid reports whether p is a defined profile.
+//
+// Deprecated: use Config.Resources.
 func (p MemoryProfile) Valid() bool {
 	_, err := p.resources()
 	return err == nil
@@ -106,6 +116,8 @@ func (e Env) runMagick(ctx context.Context, args ...string) (Result, error) {
 // sourceFrames frames that keep does not name. It returns "" when nothing is
 // dropped, in which case the caller must omit -delete rather than pass an
 // empty argument.
+//
+// Deprecated: the library runs every tool itself.
 func DeleteExpr(keep []int, sourceFrames int) string {
 	kept := make(map[int]bool, len(keep))
 	for _, idx := range keep {
@@ -123,6 +135,8 @@ func DeleteExpr(keep []int, sourceFrames int) string {
 // IdentifyArtifact runs "magick identify" over an encoded artifact and
 // returns its scene count and the first scene's canvas width and height. It
 // is the post-encode check: a still must hold exactly one scene.
+//
+// Deprecated: use Processor.Open and Source.Info.
 func (e Env) IdentifyArtifact(ctx context.Context, path string) (scenes, width, height int, err error) {
 	delays, width, height, err := e.identifyScenes(ctx, path)
 	return len(delays), width, height, err

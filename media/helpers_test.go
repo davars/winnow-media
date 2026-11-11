@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -182,7 +183,11 @@ func (e Env) stillRegion(ctx context.Context, r region, dec decoder, path string
 		return Image{}, err
 	}
 	defer src.Close()
-	return src.stillImage(ctx, r, enc, dir)
+	images, err := src.encodeFiles(ctx, r, enc, dir, func(int) string { return "still" + enc.ext })
+	if err != nil {
+		return Image{}, err
+	}
+	return images[0], nil
 }
 
 // testScratch is an Env.Scratch that makes directories under the system
@@ -217,3 +222,38 @@ var envTestCaps = Caps{
 	MaxDecodedPixels:  maxDecodedPixels,
 	MaxFrames:         maxAnimationFrames,
 }
+
+// sameImages reports whether a and b describe the same files.
+func sameImages(a, b []Image) bool { return reflect.DeepEqual(a, b) }
+
+// stillAs encodes the first image of the file at path through Open and Encode,
+// reading it as typ when that is not empty.
+func stillAs(ctx context.Context, p *Processor, path, typ string, enc Encoding, dir string) (Image, Usage, error) {
+	src, usage, err := p.Open(ctx, path, OpenOptions{Type: typ})
+	if err != nil {
+		return Image{}, usage, err
+	}
+	defer func() { _ = src.Close() }()
+	images, used, err := src.Encode(ctx, dir, Select{}, enc)
+	usage.CPU += used.CPU
+	usage.MaxRSS = max(usage.MaxRSS, used.MaxRSS)
+	if err != nil {
+		return Image{}, usage, err
+	}
+	return images[0], usage, nil
+}
+
+// streamingDiskBytes is a Resources.Disk below the composited frames of any
+// animation of more than one frame in the tests, which makes a Source stream:
+// about one batch of frames is on disk at a time and none is kept.
+const streamingDiskBytes = 16 << 10
+
+// requireStreamingProcessor is requireProcessor with Resources.Disk at
+// streamingDiskBytes.
+func requireStreamingProcessor(t *testing.T) *Processor {
+	t.Helper()
+	return requireProcessorWith(t, Config{Resources: Resources{Disk: streamingDiskBytes}})
+}
+
+// exported is r as the Region of a Select.
+func (r region) exported() Region { return Region{X: r.x, Y: r.y, Width: r.width, Height: r.height} }

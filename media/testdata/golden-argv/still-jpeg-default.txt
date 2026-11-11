@@ -17,8 +17,8 @@
 "300"
 "-ping"
 "-format"
-"%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|END\n"
-"heic:$IN/input[0]"
+"%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|%[tiff:subfiletype]|END\n"
+"heic:$IN/input[0-2048]"
 
 "magick"
 "-limit"

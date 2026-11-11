@@ -386,13 +386,25 @@ func editReport(real Env, delta int) Env {
 		if err != nil || name != "magick" || !slices.Contains(args, "-write") {
 			return res, err
 		}
-		lines := strings.Split(strings.TrimSpace(string(res.Stdout)), "\n")
-		if delta < 0 {
-			lines = lines[:len(lines)-1]
-		} else {
-			lines = append(lines, lines[len(lines)-1])
+		var uprights, reports []string
+		for _, line := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
+			if strings.HasPrefix(line, uprightPrefix) {
+				uprights = append(uprights, line)
+			} else {
+				reports = append(reports, line)
+			}
 		}
-		res.Stdout = []byte(strings.Join(lines, "\n") + "\n")
+		// The size of each frame is reported with its upright size, if any.
+		for _, lines := range []*[]string{&uprights, &reports} {
+			switch {
+			case len(*lines) == 0:
+			case delta < 0:
+				*lines = (*lines)[:len(*lines)-1]
+			default:
+				*lines = append(*lines, (*lines)[len(*lines)-1])
+			}
+		}
+		res.Stdout = []byte(strings.Join(append(uprights, reports...), "\n") + "\n")
 		return res, nil
 	}
 	return real

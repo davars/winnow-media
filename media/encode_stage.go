@@ -54,6 +54,10 @@ type encodeSource struct {
 	// when the header read does not settle it.
 	crop    region
 	upright [2]int
+	// reportUpright makes the run print the upright size of each frame even
+	// when it crops nothing, for a still whose orientation the header read
+	// leaves open.
+	reportUpright bool
 }
 
 type outputKind int
@@ -178,6 +182,11 @@ type encodeCheck struct {
 	// crop lies inside.
 	crop    region
 	upright [2]int
+	// reportUpright says the run prints the upright size of each frame
+	// although it crops nothing, and uprightOut, when not nil, receives that
+	// size once the run passes its checks.
+	reportUpright bool
+	uprightOut    *[2]int
 }
 
 // timeLimitMessage is what ImageMagick prints when a run exceeds its time
@@ -288,6 +297,8 @@ func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 		// cropped.
 		args = append(args, "+repage", "-print", uprightPrefix+"%w|%h\\n",
 			"-crop", fmt.Sprintf("%dx%d+%d+%d", src.crop.width, src.crop.height, src.crop.x, src.crop.y), "+repage")
+	} else if src.reportUpright {
+		args = append(args, "-print", uprightPrefix+"%w|%h\\n")
 	}
 	if f.convertTo != "" {
 		if f.assign != "" {
@@ -387,9 +398,10 @@ func splitUpright(out []byte) ([]byte, [][2]int, error) {
 
 // checkUpright returns an error unless the run printed, once for each of
 // frames reported frames, an upright size that c.upright equals (when set) and
-// c.crop lies inside, or nothing when c crops nothing.
+// c.crop lies inside, or nothing when c crops nothing and reports no size.
+// Without a crop the sizes must agree with each other.
 func (c encodeCheck) checkUpright(got [][2]int, frames int) error {
-	if c.crop.zero() {
+	if c.crop.zero() && !c.reportUpright {
 		if len(got) > 0 {
 			return fmt.Errorf("encode reported %d upright sizes for a run that crops nothing", len(got))
 		}
@@ -402,6 +414,9 @@ func (c encodeCheck) checkUpright(got [][2]int, frames int) error {
 		if c.upright != [2]int{} && size != c.upright {
 			return fmt.Errorf("magick: frame %d is %dx%d upright, the region was checked against %dx%d",
 				i, size[0], size[1], c.upright[0], c.upright[1])
+		}
+		if size != got[0] {
+			return fmt.Errorf("magick: frame %d is %dx%d upright, frame 0 is %dx%d", i, size[0], size[1], got[0][0], got[0][1])
 		}
 		if err := c.crop.check(size[0], size[1]); err != nil {
 			return fmt.Errorf("magick: frame %d: %w", i, err)

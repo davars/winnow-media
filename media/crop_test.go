@@ -46,18 +46,18 @@ func TestRegionShape(t *testing.T) {
 // uprightSources are 480x640 pictures held as a tag over a 640x480 frame
 // (the JPEG) or as one the decoder turns itself (the HEIC), opened with a
 // counting Env.
-var uprightSources = map[string]func(t *testing.T) (*Source, func() [][]string){
-	"heic": func(t *testing.T) (*Source, func() [][]string) {
+var uprightSources = map[string]func(t *testing.T) (*EnvSource, func() [][]string){
+	"heic": func(t *testing.T) (*EnvSource, func() [][]string) {
 		env, calls := sourceEnv(t)
 		return openSource(t, env, heicFixtureFile(t, "gradient-righttop"), Hints{Still: true}), calls
 	},
-	"jpeg": func(t *testing.T) (*Source, func() [][]string) {
+	"jpeg": func(t *testing.T) (*EnvSource, func() [][]string) {
 		env, calls := sourceEnv(t)
 		return openSource(t, env, quadrantJPEG(t, env), Hints{Still: true}), calls
 	},
 }
 
-func heicSource(t *testing.T) (*Source, func() [][]string) { return uprightSources["heic"](t) }
+func heicSource(t *testing.T) (*EnvSource, func() [][]string) { return uprightSources["heic"](t) }
 
 func pngEncoding() encoding {
 	return encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000}
@@ -486,7 +486,7 @@ func TestRegionOnAnAnimationIsInTheUprightCanvas(t *testing.T) {
 		"(", "-size", "30x40", "xc:blue", "-size", "30x40", "xc:red", "+append", "-set", "delay", "10", ")",
 		"-loop", "0", gif)
 	// Stored 60x40, red on the left; hinted RightTop it is 40x60 with red above.
-	open := func(t *testing.T) *Source {
+	open := func(t *testing.T) *EnvSource {
 		return openSource(t, env, gif, Hints{Orientation: 6})
 	}
 	for _, c := range []struct {
@@ -504,7 +504,7 @@ func TestRegionOnAnAnimationIsInTheUprightCanvas(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			images, err := open(t).encodeFiles(context.Background(), c.r, pngEncoding(), dir)
+			images, err := open(t).encodeFiles(context.Background(), c.r, pngEncoding(), dir, nil)
 			if !c.ok {
 				if err == nil || !strings.Contains(err.Error(), "outside") {
 					t.Fatalf("err = %v, want a refusal that the region is outside the canvas", err)
@@ -527,16 +527,19 @@ func TestRegionOnAnAnimationIsInTheUprightCanvas(t *testing.T) {
 // The caps stay on the canvas: a region does not let a call return more
 // frames of it than the cap allows.
 func TestRegionDoesNotRelaxTheReturnedPixelCap(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env := requireMagick(t)
+	p := requireProcessorWith(t, Config{Caps: Caps{MaxReturnedPixels: maxReturnedPixels}})
 	gif := filepath.Join(t.TempDir(), "big.gif")
 	// Five frames of 16 MP are 80 MP, over the 64 MP a call may return.
 	frame := []string{"-size", "4000x4000", "xc:red", "-set", "delay", "10"}
 	args := slices.Concat(frame, frame, frame, frame, frame, []string{"-loop", "0", gif})
 	magick(t, env, args...)
+	src, _, err := p.Open(context.Background(), gif, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
-	in := admitted{path: gif, dir: dir, decoder: decoder{"magick", "gif"}}
-	all := func(n int) ([]int, error) { return []int{0, 1, 2, 3, 4}[:n], nil }
-	_, err := env.encodeAnimationFrames(context.Background(), region{0, 0, 1, 1}, in, pngEncoding(), all)
+	_, _, err = src.Encode(context.Background(), dir, Select{Frames: All(), Region: Region{Width: 1, Height: 1}}, Encoding{Format: PNG})
 	if !errors.Is(err, ErrTooLarge) {
 		t.Errorf("err = %v, want ErrTooLarge", err)
 	}

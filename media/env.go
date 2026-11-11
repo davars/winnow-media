@@ -1,28 +1,57 @@
 // Package media builds and runs the media tools' command lines: bounded WebP
 // encodes of still images and animations (a fallback ladder of dimension
 // ceilings and frame caps, with the frame mapping each encode holds), and
-// animated WebPs of a video's samples. It also offers media operations that
-// turn one input file into upright, sized, sRGB images in an output directory.
+// animated WebPs of a video's samples. It also turns one input file into
+// upright, sized, sRGB images in an output directory.
 //
-// The package has two layers. The operations (Processor.Still,
-// Processor.AnimationFrames, Processor.VideoFrames and their
-// AnimationFramesAt, VideoFramesAt and VideoFrameRun variants, and the probes
-// ProbeVideo and ProbeAnimation) run the tools themselves, for untrusted
-// input: a Processor checks the file's size and type before pixels are read,
-// pins the decoder to the type found, and runs the tools with a fixed
-// environment under a generated ImageMagick policy that it has read back from
-// the tool. The rest of the package, reached through an Env, decides
-// arguments and interprets tool output without running programs: a caller
-// supplies a Runner, a Stager and a Scratcher, so it controls how tools are
-// resolved, how long they run and where scratch files live. The same inputs,
-// arguments and tool binaries produce the same arguments, and so the same
-// output bytes; callers pass policy values (quality, sizes, ceilings) in
-// explicitly.
+// The package has two layers. A Processor runs the tools themselves, for
+// untrusted input: Processor.Open checks the file's size and type before
+// pixels are read, pins the decoder to the type found, and returns a Source;
+// Source.Info describes the file, and Source.Encode writes the frames and
+// region a Select names, in the formats and sizes of its Encodings. The tools
+// run with a fixed environment under a generated ImageMagick policy that the
+// Processor has read back from the tool. Processor.Still, AnimationFrames,
+// VideoFrames and their AnimationFramesAt, VideoFramesAt and VideoFrameRun
+// variants, and the probes ProbeVideo and ProbeAnimation, are deprecated
+// wrappers over Open, Info and Encode. The rest of the
+// package, reached through an Env, decides arguments and interprets tool
+// output without running programs: a caller supplies a Runner, a Stager and a
+// Scratcher, so it controls how tools are resolved, how long they run and
+// where scratch files live. The same inputs, arguments and tool binaries
+// produce the same arguments, and so the same output bytes; callers pass
+// policy values (quality, sizes, ceilings) in explicitly.
+//
+// # Sources
+//
+// A Source is one open input. Open reads only headers (a still's or
+// animation's) or runs one ffprobe (a video); no pixel is decoded until an
+// Encode. A Source holds no process or file descriptor between calls, only
+// what the next call needs, in a private directory under the Processor's own;
+// each Encode has its own Usage. The Source records the file's device, inode,
+// size and modification and status-change times when it is opened and checks
+// them before every Encode, which refuses a file that changed.
+//
+//   - A still is decoded and encoded in one ImageMagick run per Encode (a JPEG
+//     at a reduced size when its targets are small, a still WebP at a reduced
+//     size too). Nothing is kept between calls. Where the header read does not
+//     say how the picture is oriented, the first Encode learns it, and Info
+//     and Image.Region then report the upright size.
+//   - An animation is composited by the compositor, once for the frames an
+//     Encode lacks, up to the largest of them. The Source keeps the composited
+//     frames of its most recent call only, so a call that asks for a subset of
+//     the last one's frames composites nothing.
+//   - A video is probed once, at Open. Each Encode samples it afresh: one time
+//     is read by a seek, several by one decode when the stream has at most 1e9
+//     decoded pixels and by one seek each otherwise. No sample is kept, so a
+//     Region decodes the cut part afresh.
+//
+// Calls on one Source are serialised, and Sources run in parallel.
+// Processor.Close closes every Source still open.
 //
 // # Decode once, encode many
 //
 // Env.Open reads a file's headers, applies the caps and selects its frames;
-// Source.Encode then writes one WebP, PNG or JPEG per Encoding from that one
+// EnvSource.Encode then writes one WebP, PNG or JPEG per Encoding from that one
 // decode. The decoder is chosen by the file's type and structure, never by
 // its frame count:
 //
@@ -35,8 +64,9 @@
 //   - Any other image: ImageMagick, in the same run as the encode.
 //
 // A GIF or animated WebP is composited by Open onto a full canvas in
-// Env.Scratch, where every Encode reads the selected frames; a Processor
-// streams them instead, so its output directory holds only a batch at a time.
+// Env.Scratch, where every Encode reads the selected frames; a Processor's
+// Source composites the frames of each Encode when it is called instead (see
+// Sources).
 // Each frame is assigned the ICC profile it carries (a GIF may carry several)
 // and converted to sRGB. ImageMagick's own decode of an animated WebP ignores
 // the profile, as it ignores the EXIF orientation, so an oriented animation
@@ -45,30 +75,31 @@
 //
 // # The gate
 //
-// Before pixels are read, a Processor operation checks that the input is a
-// regular file of at most Config.Caps.MaxInputBytes and takes its type from
-// its bytes alone. A GIF, WebP, ISO base media file (HEIC, HEIF, AVIF, MP4,
-// QuickTime) or EBML file (WebM, Matroska) is typed by its leading bytes
-// before any tool runs, and so is every animation and video type: other
-// content is refused by those operations without a tool run. For Still, other
-// content is named by the one header read that the decode needs, under the
-// generated policy, and the coder it reports is looked up in the table of
-// Types. The input is read through an extensionless link in the Processor's
-// private directory, so no tool is given the file's name or can let it choose
-// the format; the decoder is then pinned to the type found.
+// Before pixels are read, Open checks that the input is a regular file of at
+// most Config.Caps.MaxInputBytes and takes its type from its bytes alone. A
+// GIF, WebP, ISO base media file (HEIC, HEIF, AVIF, MP4, QuickTime) or EBML
+// file (WebM, Matroska) is typed by its leading bytes before any tool runs, and
+// so is every animation and video type: the operations that read only those
+// refuse other content without a tool run. Other content is named by the one
+// header read that the decode needs, under the generated policy, and the coder
+// it reports is looked up in the table of Types. The input is read through an
+// extensionless link in the Source's private directory, so no tool is given
+// the file's name or can let it choose the format; the decoder is then pinned
+// to the type found. OpenOptions.Type replaces all of this with a type the
+// caller names, which must be in Config.Types.
 //
 // The type must be in Config.Types and be read by the operation, else the
 // call gives an error wrapping ErrUnsupportedType, which names the type
 // found. SVG, MVG, MSL, PostScript, EPS, PDF and text are never in Types:
 // ImageMagick reads them through delegates or with external-reference or
 // scripting semantics. Some types in Types are not identified from content
-// and are decoded only when the caller names them (see Types), and a TIFF
-// whose first image is a reduced-resolution preview, as in a camera raw file,
-// is refused.
+// and are decoded only when OpenOptions.Type names them (see Types), and a
+// TIFF whose first image is a reduced-resolution preview, as in a camera raw
+// file, is refused unless its type is named.
 //
 // # The caps
 //
-// Image headers are read without decoding pixels (-ping), here and in
+// Image headers are read without decoding pixels (-ping), by Open and by
 // Env.Open, and an input is refused with an error wrapping ErrTooLarge, naming
 // the cap and the values, when it is over a limit of Config.Caps, whose doc
 // comment states each limit and its ceiling. The frame caps apply to a still
@@ -156,6 +187,8 @@ import (
 )
 
 // Result is one completed tool run.
+//
+// Deprecated: use Processor, which runs every tool itself.
 type Result struct {
 	Stdout []byte
 	// Stderr is the start and end of the tool's standard error (a Processor
@@ -182,6 +215,8 @@ type Usage struct {
 
 // UsageOf reports the resources an exited process consumed. It returns nil
 // when state is nil or carries no rusage.
+//
+// Deprecated: use Processor, which meters every tool itself.
 func UsageOf(state *os.ProcessState) *Usage {
 	if state == nil {
 		return nil
@@ -201,6 +236,8 @@ func UsageOf(state *os.ProcessState) *Usage {
 //
 // The package passes bare tool names ("magick", "ffmpeg"); resolving them to
 // executables is the Runner's business. A non-nil error means the tool failed.
+//
+// Deprecated: use Processor, which runs every tool itself.
 type Runner func(ctx context.Context, tool string, args ...string) (Result, error)
 
 // Stager creates an empty scratch file whose name ends in ext (for example
@@ -211,14 +248,18 @@ type Stager func(ext string) (path string, cleanup func(), err error)
 
 // Scratcher creates a new empty directory for intermediate files. cleanup
 // removes it and what is in it and is safe to call once; the caller owns it.
+//
+// Deprecated: use Processor, which keeps each Source's scratch itself.
 type Scratcher func() (dir string, cleanup func(), err error)
 
 // Env is what the package needs from its caller to run tools. Run is
 // required by every method, and receives bare tool names ("magick",
 // "ffmpeg"); it must also be able to run "webp-frames" for a WebP. Stage is
 // required by the methods that produce an output file (EncodeRung,
-// Source.Encode); Scratch is required by Open and EncodeRung, which keep
+// EnvSource.Encode); Scratch is required by Open and EncodeRung, which keep
 // decoded frames in it until the source is closed.
+//
+// Deprecated: use Processor, which runs every tool itself.
 type Env struct {
 	Run     Runner
 	Stage   Stager

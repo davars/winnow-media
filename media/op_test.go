@@ -506,7 +506,7 @@ func TestStillOutput(t *testing.T) {
 				wantType, wantName = "image/png", "still.png"
 			}
 			img, out := stillInto(t, p, src, Encoding{Format: format, MaxEdge: 400})
-			if img.Name != wantName || img.Width != 300 || img.Height != 400 || img.Frame != 0 || img.TimeMS != 0 {
+			if img.Name != wantName || img.Width != 300 || img.Height != 400 || img.Frames[0].Index != 0 || img.Frames[0].TimeMS != 0 {
 				t.Errorf("image = %+v, want %s 300x400 frame 0 at 0ms", img, wantName)
 			}
 			if got := dirNames(t, out); !slices.Equal(got, []string{wantName}) {
@@ -580,6 +580,67 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 	}
 }
 
+// ImageMagick's JXL coder reports no profile under -ping, so the header read
+// of a JXL must be completed by a full read of the image to be encoded. A JXL
+// of several frames is read as several images, and the first must still be
+// converted to sRGB.
+func TestStillConvertsTheFirstFrameOfAProfiledMultiFrameJXL(t *testing.T) {
+	t.Parallel()
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	dir := t.TempDir()
+	srgb := writeSRGBProfile(t)
+	adobe := writeAdobeProfile(t, dir)
+	path := filepath.Join(dir, "wide.jxl")
+	magick(t, env, "-delay", "10", "-size", "64x48", "gradient:#0020ff-#ffb000", "-profile", srgb, "-profile", adobe,
+		"(", "+clone", "-negate", ")", path)
+	if n := strings.Count(string(magick(t, env, "identify", "-ping", "-format", "%m\n", path)), "JXL"); n < 2 {
+		t.Skipf("magick wrote a JXL of %d images", n)
+	}
+	if got := string(magick(t, env, "identify", "-format", "%[profiles]", path+"[0]")); !strings.Contains(got, "icc") {
+		t.Skipf("magick wrote no ICC profile into the JXL (profiles %q)", got)
+	}
+	rec := record(p)
+	stillInto(t, p, stage(t, path), Encoding{Format: PNG})
+	var converted bool
+	for _, call := range rec.ran("magick") {
+		if slices.Contains(call, "-profile") {
+			converted = true
+		}
+	}
+	if !converted {
+		t.Error("the first frame of a profiled multi-frame JXL was encoded with no conversion to sRGB")
+	}
+}
+
+// The profile of a later frame of a multi-frame JXL, which ImageMagick reports
+// only from a full read, is completed before that frame is encoded.
+func TestSourceCompletesTheProfileOfALaterFrameOfAMultiFrameJXL(t *testing.T) {
+	t.Parallel()
+	env := requireMagick(t)
+	p := requireProcessor(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wide.jxl")
+	magick(t, env, "-delay", "10", "-size", "64x48", "gradient:#0020ff-#ffb000", "(", "+clone", "-negate", ")", path)
+	if n := strings.Count(string(magick(t, env, "identify", "-ping", "-format", "%m\n", path)), "JXL"); n < 2 {
+		t.Skipf("magick wrote a JXL of %d images", n)
+	}
+	src := openSourceOn(t, p, path, OpenOptions{})
+	rec := record(p)
+	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Indices(1)}, Encoding{Format: PNG}); err != nil {
+		t.Fatal(err)
+	}
+	var full bool
+	for _, call := range rec.ran("magick") {
+		if slices.Contains(call, "identify") && !slices.Contains(call, "-ping") && strings.HasSuffix(call[len(call)-1], "[1]") {
+			full = true
+		}
+	}
+	if !full {
+		t.Errorf("no full read of the second frame before its encode: %q", rec.calls)
+	}
+}
+
 func TestFramesSelection(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
@@ -593,8 +654,8 @@ func TestFramesSelection(t *testing.T) {
 	for i, f := range images {
 		wantIdx := i * 20 / 16
 		wantMS := int64(wantIdx) * 50
-		if f.Frame != wantIdx || f.TimeMS != wantMS {
-			t.Errorf("image %d: source frame %d at %d ms, want frame %d at %d ms", i, f.Frame, f.TimeMS, wantIdx, wantMS)
+		if f.Frames[0].Index != wantIdx || f.Frames[0].TimeMS != wantMS {
+			t.Errorf("image %d: source frame %d at %d ms, want frame %d at %d ms", i, f.Frames[0].Index, f.Frames[0].TimeMS, wantIdx, wantMS)
 		}
 		if f.Name != fmt.Sprintf("frame-%03d.jpg", i) || f.Width != 64 || f.Height != 48 {
 			t.Errorf("image %d = %+v", i, f)
@@ -641,7 +702,7 @@ func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
 	p := requireProcessor(t)
 	src := writeGIF(t, func(int) string { return "xc:rgb(10,120,200)" }, 4)
 	images, out := framesInto(t, p, src, Encoding{}, 0)
-	if len(images) != 1 || images[0].Name != "frame-000.jpg" || images[0].Frame != 0 {
+	if len(images) != 1 || images[0].Name != "frame-000.jpg" || images[0].Frames[0].Index != 0 {
 		t.Fatalf("images = %+v", images)
 	}
 	if got := dirNames(t, out); !slices.Equal(got, []string{"frame-000.jpg"}) {
@@ -657,7 +718,7 @@ func TestFramesRenumbersAfterDedup(t *testing.T) {
 	images, out := framesInto(t, p, src, Encoding{}, 0)
 	var got []int
 	for _, f := range images {
-		got = append(got, f.Frame)
+		got = append(got, f.Frames[0].Index)
 	}
 	if !slices.Equal(got, []int{0, 2}) {
 		t.Errorf("source frames %v", got)
@@ -741,7 +802,7 @@ func TestFramesMaxFrames(t *testing.T) {
 	images, _ := framesInto(t, p, src, Encoding{}, 4)
 	var idx []int
 	for _, f := range images {
-		idx = append(idx, f.Frame)
+		idx = append(idx, f.Frames[0].Index)
 	}
 	if !slices.Equal(idx, []int{0, 5, 10, 15}) {
 		t.Errorf("source frames %v", idx)
@@ -793,7 +854,7 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 	encodeBatchPixels = 2 * 64 * 48
 	t.Cleanup(func() { encodeBatchPixels = old })
 	for _, failAfter := range []int{2, 3, 4} {
-		p := requireProcessor(t)
+		p := requireStreamingProcessor(t)
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()
@@ -807,7 +868,7 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 	}
 	// Header read, then one encode per batch of two of the four frames.
 	for _, failAfter := range []int{2, 3} {
-		p := requireProcessor(t)
+		p := requireStreamingProcessor(t)
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()

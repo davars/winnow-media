@@ -90,9 +90,9 @@ var coderTypes = func() map[string]string {
 // every type of the table, which is the default of Config.Types. SVG, MVG,
 // MSL, PostScript, EPS, PDF and text are never among them. TGA, ICO and CUR
 // (one type), G3 and DNG are not identified from content: they are decoded
-// only when the caller names the type, which no operation yet takes. A TIFF
-// whose first image is a reduced-resolution preview, as in a camera raw file,
-// is likewise refused unless its type is named.
+// only when the caller names the type in OpenOptions.Type. A TIFF whose first
+// image is a reduced-resolution preview, as in a camera raw file, is likewise
+// refused unless its type is named.
 func Types() []string {
 	out := make([]string, 0, len(typeTable))
 	for typ := range typeTable {

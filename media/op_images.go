@@ -90,11 +90,9 @@ func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sc
 // channel (TIFF, JPEG 2000, OpenEXR) or the palette (PCX).
 var fullReadFormats = map[string]bool{"TIFF": true, "JP2": true, "EXR": true, "PCX": true}
 
-// fullSoft reports whether the first scene of the file ref names is
-// palette-based or declares alpha, by decoding it. It is for the coders in
-// fullReadFormats, whose -ping read cannot say.
-func fullSoft(ctx context.Context, env Env, ref string) (bool, error) {
-	full, err := identifyHeaders(ctx, env, ref+"[0]", false)
+// fullSoftAt is fullSoft for scene i of the file.
+func fullSoftAt(ctx context.Context, env Env, ref string, i int) (bool, error) {
+	full, err := identifyHeaders(ctx, env, ref+"["+strconv.Itoa(i)+"]", false)
 	if err != nil {
 		return false, err
 	}
@@ -130,6 +128,23 @@ func identifyHeadersAs(ctx context.Context, env Env, inputRef string, ping bool,
 		return nil, fmt.Errorf("reading headers: %w", err)
 	}
 	return parseSceneHeaders(res.Stdout)
+}
+
+// stillScenes is the scene selector of the header read of a still of any
+// number of images: one past maxStillImages, so that a file of more is seen to
+// be, and no read lists more. ImageMagick's list-length limit does not bound a
+// -ping read.
+const (
+	maxStillImages = 2048
+	stillScenes    = "[0-2048]"
+)
+
+// checkStillImages refuses a still of more images than maxStillImages.
+func checkStillImages(scenes []sceneHeader) error {
+	if len(scenes) > maxStillImages {
+		return tooLarge("file holds more than %d images, the limit is %d", maxStillImages, maxStillImages)
+	}
+	return nil
 }
 
 // sceneHeaderFormat is the identify -format that parseSceneHeaders reads. %m
@@ -253,7 +268,9 @@ func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]e
 		if report, uprights, err = splitUpright(res.Stdout); err == nil {
 			if frames, err = parseEncoded(report, chk.signed); err == nil {
 				if err = chk.checkUpright(uprights, len(frames)); err == nil {
-					err = chk.checkFrames(frames)
+					if err = chk.checkFrames(frames); err == nil && chk.uprightOut != nil && len(uprights) > 0 {
+						*chk.uprightOut = uprights[0]
+					}
 				}
 			}
 		}

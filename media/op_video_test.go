@@ -199,10 +199,10 @@ func TestVideoFramesSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 	}
 	var names []string
 	for i, f := range images {
-		if want := int64(i)*1000 + 500; f.TimeMS != want {
-			t.Errorf("image %d at %d ms, want %d", i, f.TimeMS, want)
+		if want := int64(i)*1000 + 500; f.Frames[0].TimeMS != want {
+			t.Errorf("image %d at %d ms, want %d", i, f.Frames[0].TimeMS, want)
 		}
-		if f.Name != fmt.Sprintf("frame-%03d.jpg", i) || f.Frame != 0 || f.Width != 160 || f.Height != 120 {
+		if f.Name != fmt.Sprintf("frame-%03d.jpg", i) || f.Frames[0].Index != 0 || f.Width != 160 || f.Height != 120 {
 			t.Errorf("image %d = %+v", i, f)
 		}
 		names = append(names, f.Name)
@@ -215,8 +215,8 @@ func TestVideoFramesSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 	if len(images) != 5 || images[0].Name != "frame-000.webp" {
 		t.Fatalf("max frames 5: %+v", images)
 	}
-	if images[0].TimeMS != 1600 || images[4].TimeMS != 14400 {
-		t.Errorf("max frames 5 times: %d .. %d", images[0].TimeMS, images[4].TimeMS)
+	if images[0].Frames[0].TimeMS != 1600 || images[4].Frames[0].TimeMS != 14400 {
+		t.Errorf("max frames 5 times: %d .. %d", images[0].Frames[0].TimeMS, images[4].Frames[0].TimeMS)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestVideoFramesShortClips(t *testing.T) {
 	t.Run("one frame mp4", func(t *testing.T) {
 		src := sdrClip(t, env, "160x120", 10, 1, "-frames:v", "1")
 		images, out := videoInto(t, p, src, Encoding{}, 0)
-		if len(images) != 1 || images[0].TimeMS != 0 || len(dirNames(t, out)) != 1 {
+		if len(images) != 1 || images[0].Frames[0].TimeMS != 0 || len(dirNames(t, out)) != 1 {
 			t.Errorf("images = %+v", images)
 		}
 	})

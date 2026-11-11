@@ -213,8 +213,8 @@ func TestVideoFramesAt(t *testing.T) {
 		}
 		var times []int64
 		for i, img := range images {
-			times = append(times, img.TimeMS)
-			if img.Name != frameName(i, ".jpg") || img.Width != 160 || img.Height != 120 || img.Frame != 0 {
+			times = append(times, img.Frames[0].TimeMS)
+			if img.Name != frameName(i, ".jpg") || img.Width != 160 || img.Height != 120 || img.Frames[0].Index != 0 {
 				t.Errorf("image %d = %+v", i, img)
 			}
 		}
@@ -227,16 +227,16 @@ func TestVideoFramesAt(t *testing.T) {
 
 		even, evenDir := videoInto(t, p, src, Encoding{}, 16)
 		for i, img := range images {
-			j := int(img.TimeMS / 1000)
+			j := int(img.Frames[0].TimeMS / 1000)
 			if !bytes.Equal(readFrames(t, out, images[i:i+1])[0], readFrames(t, evenDir, even[j:j+1])[0]) {
-				t.Errorf("frame at %d ms differs from VideoFrames' sample", img.TimeMS)
+				t.Errorf("frame at %d ms differs from VideoFrames' sample", img.Frames[0].TimeMS)
 			}
 		}
 	})
 
 	t.Run("start of the video", func(t *testing.T) {
 		images, _, err := p.VideoFramesAt(ctx, src, Encoding{}, []int64{0}, t.TempDir())
-		if err != nil || len(images) != 1 || images[0].TimeMS != 0 {
+		if err != nil || len(images) != 1 || images[0].Frames[0].TimeMS != 0 {
 			t.Errorf("images = %+v, err %v", images, err)
 		}
 	})
@@ -328,7 +328,7 @@ func TestVideoFrameRun(t *testing.T) {
 		var times []int64
 		var names []string
 		for _, img := range images {
-			times = append(times, img.TimeMS)
+			times = append(times, img.Frames[0].TimeMS)
 			names = append(names, img.Name)
 		}
 		if !slices.Equal(times, []int64{1500, 1600, 1700, 1800, 1900}) {
@@ -384,7 +384,7 @@ func TestVideoFrameRun(t *testing.T) {
 		}
 		var times []int64
 		for _, img := range images {
-			times = append(times, img.TimeMS)
+			times = append(times, img.Frames[0].TimeMS)
 		}
 		if !slices.Equal(times, []int64{3700, 3800, 3900}) {
 			t.Errorf("times = %v", times)
@@ -485,12 +485,12 @@ func TestAnimationFramesAt(t *testing.T) {
 		}
 		var got []int
 		for i, img := range images {
-			got = append(got, img.Frame)
+			got = append(got, img.Frames[0].Index)
 			if img.Name != frameName(i, ".png") {
 				t.Errorf("image %d is named %s", i, img.Name)
 			}
-			if !bytes.Equal(readFrames(t, out, images[i:i+1])[0], readFrames(t, all, every[img.Frame:img.Frame+1])[0]) {
-				t.Errorf("frame %d differs from AnimationFrames' output", img.Frame)
+			if !bytes.Equal(readFrames(t, out, images[i:i+1])[0], readFrames(t, all, every[img.Frames[0].Index:img.Frames[0].Index+1])[0]) {
+				t.Errorf("frame %d differs from AnimationFrames' output", img.Frames[0].Index)
 			}
 		}
 		if !slices.Equal(got, []int{0, 2, frames - 1}) {
@@ -566,7 +566,7 @@ func TestAnimationFramesAt(t *testing.T) {
 		}
 		var got []int
 		for _, img := range images {
-			got = append(got, img.Frame)
+			got = append(got, img.Frames[0].Index)
 		}
 		if !slices.Equal(got, []int{1, 2, 3}) {
 			t.Errorf("frames = %v, want 1, 2, 3", got)
@@ -574,9 +574,9 @@ func TestAnimationFramesAt(t *testing.T) {
 	})
 }
 
-// An animation frame's Image.TimeMS is when it starts in the source: the sum
+// The TimeMS of an animation frame is when it starts in the source: the sum
 // of the display delays before it, a stored delay below 20 ms counting as
-// 100 ms. It is the Frame.SourceTimeMS of the same frame.
+// 100 ms. An Image reports the same time as EnvSource.Frames.
 func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
@@ -591,7 +591,7 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 		}
 		var got []int64
 		for _, img := range images {
-			got = append(got, img.TimeMS)
+			got = append(got, img.Frames[0].TimeMS)
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("AnimationFramesAt%v times = %v, want %v", indices, got, want)
@@ -605,8 +605,8 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 		}
 		frames := source.Frames()
 		for _, img := range encoded {
-			if f := frames[img.Frame]; img.TimeMS != f.SourceTimeMS {
-				t.Errorf("EncodeFrames: frame %d at %d ms, Frames says %d ms", img.Frame, img.TimeMS, f.SourceTimeMS)
+			if f := frames[img.Frames[0].Index]; img.Frames[0].TimeMS != f.TimeMS {
+				t.Errorf("EncodeFrames: frame %d at %d ms, Frames says %d ms", img.Frames[0].Index, img.Frames[0].TimeMS, f.TimeMS)
 			}
 		}
 	}

@@ -25,7 +25,7 @@ func sourceEnv(t *testing.T) (Env, func() [][]string) {
 }
 
 // openSource opens path, closing the source when the test ends.
-func openSource(t *testing.T, env Env, path string, h Hints) *Source {
+func openSource(t *testing.T, env Env, path string, h Hints) *EnvSource {
 	t.Helper()
 	src, err := env.Open(context.Background(), path, h)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestOpenRoutesByTypeAndStructureNotFrameCount(t *testing.T) {
 			t.Fatalf("err = %v, want ErrUnsupportedType naming tiff", err)
 		}
 		src := openSource(t, e, tiff, Hints{Still: true})
-		if got := src.Frames(); len(got) != 1 || got[0].SourceFrame != 0 {
+		if got := src.Frames(); len(got) != 1 || got[0].Index != 0 {
 			t.Errorf("frames = %v", got)
 		}
 	})
@@ -379,7 +379,7 @@ func TestEncodeSelectionOnAHalvingLadderMatchesTheFileRelativeOne(t *testing.T) 
 	t.Parallel()
 	for sourceFrames := 1; sourceFrames <= 400; sourceFrames++ {
 		decoded := selectFrames(frameCount(16, sourceFrames, true), sourceFrames)
-		s := &Source{route: routeGIF, selected: decoded}
+		s := &EnvSource{route: routeGIF, selected: decoded}
 		for _, rung := range []int{16, 8, 4, 2, 1} {
 			pos, err := s.positions(rung)
 			if err != nil {
@@ -416,7 +416,7 @@ func TestEncodeSelectsAmongTheDecodedFramesForAnyBudget(t *testing.T) {
 		}
 		var got []int
 		for _, f := range out[0].Frames {
-			got = append(got, f.SourceFrame)
+			got = append(got, f.Index)
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("budget %d: source frames %v, want %v", budget, got, want)
@@ -429,7 +429,7 @@ func TestEncodeSelectsAmongTheDecodedFramesForAnyBudget(t *testing.T) {
 	for name, p := range map[string]string{"GIF": path, "TIFF": multiPageTIFF(t, real)} {
 		still := openSource(t, env, p, Hints{Still: true})
 		out, err := still.Encode(context.Background(), 16, enc)
-		if err != nil || len(out[0].Frames) != 1 || out[0].Frames[0].SourceFrame != 0 {
+		if err != nil || len(out[0].Frames) != 1 || out[0].Frames[0].Index != 0 {
 			t.Errorf("%s opened as a still, Encode(16): %v, %v", name, out, err)
 		}
 		if err == nil {
@@ -553,7 +553,7 @@ func TestEachTargetOfAnAnimationHasItsOwnMapping(t *testing.T) {
 	for _, a := range out {
 		defer a.Cleanup()
 	}
-	if len(out[0].Frames) != 3 || len(out[1].Frames) != 2 || out[1].Frames[1].SourceFrame != 2 {
+	if len(out[0].Frames) != 3 || len(out[1].Frames) != 2 || out[1].Frames[1].Index != 2 {
 		t.Errorf("mappings %v and %v, want 3 frames and {0, 2}", out[0].Frames, out[1].Frames)
 	}
 }
@@ -593,7 +593,7 @@ func TestEncodeFramesWritesOneFilePerFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Identical frames collapse to one.
-	if len(images) != 1 || images[0].Name != "frame-000.png" || images[0].Frame != 0 {
+	if len(images) != 1 || images[0].Name != "frame-000.png" || images[0].Frames[0].Index != 0 {
 		t.Errorf("images = %+v", images)
 	}
 }
@@ -637,7 +637,7 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 				path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+".jpg")
 				magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
 				// encode returns the sizes of the outputs of one encode of
-				// the file, each encode on its own Source.
+				// the file, each encode on its own EnvSource.
 				encode := func(reduce bool, targets ...Encoding) func() ([][2]int, error) {
 					env, _ := sourceEnv(t)
 					src := openSource(t, env, path, Hints{Orientation: orientation})
@@ -698,9 +698,9 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 	}
 }
 
-// One Source encodes the same targets again and again, as a caller that keeps
+// One EnvSource encodes the same targets again and again, as a caller that keeps
 // it open does, and every encode writes the same bytes and size as the first
-// encode of a fresh Source, which is made for each variant. For a JPEG the variants are reduced for all
+// encode of a fresh EnvSource, which is made for each variant. For a JPEG the variants are reduced for all
 // targets, reduced for each alone and not reduced; for a TIFF, which is read
 // in full to learn whether it has alpha only when an encode resizes, the first
 // target fits, so that the full read is first made by a later encode.
@@ -750,11 +750,11 @@ func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
 				bytes []byte
 				size  [2]int
 			}
-			open := func() *Source {
+			open := func() *EnvSource {
 				env, _ := sourceEnv(t)
 				return openSource(t, env, path, Hints{Orientation: fx.orientation})
 			}
-			encode := func(src *Source, reduce bool, ts ...Encoding) []result {
+			encode := func(src *EnvSource, reduce bool, ts ...Encoding) []result {
 				t.Helper()
 				src.reduce = reduce
 				out, err := src.Encode(context.Background(), 0, ts...)
@@ -768,7 +768,7 @@ func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
 				}
 				return res
 			}
-			variants := func(source func() *Source) map[string][]result {
+			variants := func(source func() *EnvSource) map[string][]result {
 				got := map[string][]result{}
 				// The first target alone, which fits for a TIFF, comes first.
 				for i, target := range fx.targets {
@@ -781,10 +781,10 @@ func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
 			want := variants(open)
 			src := open()
 			for round := range 3 {
-				for variant, got := range variants(func() *Source { return src }) {
+				for variant, got := range variants(func() *EnvSource { return src }) {
 					for i := range got {
 						if got[i].size != want[variant][i].size || !bytes.Equal(got[i].bytes, want[variant][i].bytes) {
-							t.Errorf("round %d, %s, target %d: %v, %d bytes; a fresh Source gave %v, %d bytes", round, variant, i,
+							t.Errorf("round %d, %s, target %d: %v, %d bytes; a fresh EnvSource gave %v, %d bytes", round, variant, i,
 								got[i].size, len(got[i].bytes), want[variant][i].size, len(want[variant][i].bytes))
 						}
 					}
@@ -798,7 +798,7 @@ func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
 // on both sides, and is not used when it would not reduce.
 func TestJPEGSizeReductionChoice(t *testing.T) {
 	t.Parallel()
-	s := &Source{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
+	s := &EnvSource{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
 	enc := func(edge int) encoding { return encoding{maxEdge: edge, maxArea: edge * edge} }
 	for _, c := range []struct {
 		encs []encoding
@@ -825,7 +825,7 @@ func TestJPEGSizeReductionChoice(t *testing.T) {
 	}
 	// Rotated by the file's orientation, the sides the targets bound are the
 	// other way round from the stored ones.
-	rotated := &Source{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{4000, 6000}}
+	rotated := &EnvSource{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{4000, 6000}}
 	if ops, _ := rotated.reduction([]encoding{enc(1024)}); len(ops) != 2 || ops[1] != "jpeg:size=2250x1500" {
 		t.Errorf("rotated source: %v, want a 2250x1500 hint", ops)
 	}
@@ -1074,14 +1074,14 @@ func TestFullReadForAStillRunsOnlyWhenAnEncodeResizes(t *testing.T) {
 	}
 }
 
-// The full read is made once for a Source, by the first encode that resizes,
+// The full read is made once for an EnvSource, by the first encode that resizes,
 // and its answer serves every later encode.
 func TestFullReadIsMadeOnceAcrossEncodes(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "a.tif")
 	magick(t, real, "-size", "64x48", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel", path)
-	encode := func(src *Source, edge int) []byte {
+	encode := func(src *EnvSource, edge int) []byte {
 		out, err := src.Encode(context.Background(), 0, Encoding{Format: WebP, Quality: 80, MaxEdge: edge, MaxArea: edge * edge})
 		if err != nil {
 			t.Fatal(err)
@@ -1109,7 +1109,7 @@ func TestFullReadIsMadeOnceAcrossEncodes(t *testing.T) {
 	freshEnv, _ := sourceEnv(t)
 	fresh := encode(openSource(t, freshEnv, path, Hints{}), 40)
 	if !bytes.Equal(first, fresh) || !bytes.Equal(second, fresh) {
-		t.Error("an encode after an earlier one differs from a fresh Source's")
+		t.Error("an encode after an earlier one differs from a fresh EnvSource's")
 	}
 }
 

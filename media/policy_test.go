@@ -154,7 +154,7 @@ func TestProcessorPolicyContents(t *testing.T) {
 	}
 	want := []string{
 		"GIF=read", "HEIC=read", "ICC=read", "INFO=write", "JPEG=write", "JPG=write",
-		"PAM=read", "PNG=write", "WEBP=read|write",
+		"NULL=write", "PAM=read", "PNG=write", "WEBP=read|write",
 	}
 	if !slices.Equal(coders, want) {
 		t.Errorf("coder rules %v, want %v", coders, want)

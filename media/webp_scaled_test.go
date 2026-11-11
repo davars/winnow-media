@@ -346,7 +346,7 @@ func resolveAll(t *testing.T, ts []Encoding) []encoding {
 func TestScaledWebPReductionChoice(t *testing.T) {
 	t.Parallel()
 	enc := func(edge int) encoding { return encoding{maxEdge: edge, maxArea: edge * edge} }
-	s := &Source{webp: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
+	s := &EnvSource{webp: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
 	for _, c := range []struct {
 		encs []encoding
 		want [2]int
@@ -372,13 +372,13 @@ func TestScaledWebPReductionChoice(t *testing.T) {
 	}
 	// Turned by the file's orientation, the sides the targets bound are the
 	// other way round from the stored ones.
-	rotated := &Source{webp: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{4000, 6000}}
+	rotated := &EnvSource{webp: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{4000, 6000}}
 	if got := rotated.webpDecodeSize([]encoding{enc(1024)}); got != [2]int{2048, 1366} {
 		t.Errorf("rotated source: decode at %v, want 2048x1366", got)
 	}
 	// Both sides cover the margin even where the targets round apart.
 	for _, sz := range [][2]int{{1001, 1000}, {1000, 1001}, {5001, 3333}, {999, 1500}} {
-		s := &Source{webp: true, reduce: true, stored: sz, upright: sz}
+		s := &EnvSource{webp: true, reduce: true, stored: sz, upright: sz}
 		for _, edge := range []int{100, 200, 333} {
 			got := s.webpDecodeSize([]encoding{enc(edge)})
 			if got == sz {
@@ -801,8 +801,8 @@ func TestWebPDecodeSizeIsTheSameForEitherOrientation(t *testing.T) {
 	}
 	for _, sz := range [][2]int{{6000, 4000}, {4000, 3001}, {3001, 4000}, {5712, 4284}, {1999, 2000}, {2001, 2000}, {8064, 6048}, {13632, 3058}, {1000, 997}} {
 		for _, enc := range targets {
-			straight := &Source{webp: true, reduce: true, stored: sz, upright: sz}
-			turned := &Source{webp: true, reduce: true, stored: sz, upright: [2]int{sz[1], sz[0]}}
+			straight := &EnvSource{webp: true, reduce: true, stored: sz, upright: sz}
+			turned := &EnvSource{webp: true, reduce: true, stored: sz, upright: [2]int{sz[1], sz[0]}}
 			a, b := straight.webpDecodeSize([]encoding{enc}), turned.webpDecodeSize([]encoding{enc})
 			if a != b {
 				t.Errorf("%v at %+v: %v upright, %v turned", sz, enc, a, b)

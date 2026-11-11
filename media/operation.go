@@ -49,22 +49,34 @@ type Encoding struct {
 	// MaxArea bounds the pixel count, 256 to 100000000; the default is
 	// 3750000.
 	MaxArea int
+	// Animate writes every selected frame into one animated file instead of
+	// one file per frame. The Format must be WebP when more than one frame is
+	// selected. Several images of a still cannot be animated.
+	Animate bool
 }
 
-// Image describes one output file an operation wrote.
+// Image describes one output file a call wrote.
 type Image struct {
 	// Name is the file's name relative to the output directory.
-	Name          string
+	Name string
+	// Target is the index of the Encoding that produced the file.
+	Target        int
 	Width, Height int
-	// Frame is the index of the animation frame the image shows; 0 for other
-	// operations, a video among them.
-	Frame int
-	// TimeMS is the position of the image in the source, in milliseconds: the
-	// time a video was sampled at, or the sum of the display delays of the
-	// frames before it in an animation (a stored delay below 20 ms counts as
-	// 100 ms, as browsers display it). It is 0 for other operations.
-	TimeMS int64
+	// Frames are the frames of the source the file shows, in order: one for
+	// a plain image, one per scene for an animated file.
+	Frames []Frame
+	// Region is the part of the frame the file shows, in upright pixels of
+	// the source: the region asked for, or the whole frame.
+	Region Region
 }
+
+// Region is a rectangle of a frame in upright pixels of the frame as shown:
+// after a still's orientation and a video's display rotation, on an
+// animation's canvas. X, Y is its top-left corner. The zero Region is the
+// whole frame; any other has sides of at least 1 and lies inside the frame.
+type Region struct{ X, Y, Width, Height int }
+
+func (r Region) internal() region { return region{r.X, r.Y, r.Width, r.Height} }
 
 const (
 	defaultQuality   = 90
@@ -86,6 +98,7 @@ type encoding struct {
 	format                    Format
 	ext                       string
 	quality, maxEdge, maxArea int
+	animate                   bool
 }
 
 // region is a rectangle of a frame in pixels of the frame as shown: after a
@@ -132,7 +145,7 @@ func (r region) subject(w, h int) (int, int) {
 
 func (e Encoding) resolve() (encoding, error) {
 	out := encoding{
-		format: e.Format, quality: e.Quality, maxEdge: e.MaxEdge, maxArea: e.MaxArea,
+		format: e.Format, quality: e.Quality, maxEdge: e.MaxEdge, maxArea: e.MaxArea, animate: e.Animate,
 	}
 	if out.format == "" {
 		out.format = JPEG

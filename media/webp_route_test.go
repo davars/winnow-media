@@ -224,8 +224,8 @@ func TestAnimatedWebPFramesMatchTheImageMagickPath(t *testing.T) {
 			}
 			var d pixelDiff
 			for i, im := range images {
-				if im.Frame != selected[i] {
-					t.Errorf("image %d shows frame %d, want %d", i, im.Frame, selected[i])
+				if im.Frames[0].Index != selected[i] {
+					t.Errorf("image %d shows frame %d, want %d", i, im.Frames[0].Index, selected[i])
 				}
 				ref, got := filepath.Join(refDir, im.Name), filepath.Join(out, im.Name)
 				if c.enc.Format == "" {
@@ -288,7 +288,7 @@ func TestHeaderOrientationIsAppliedToAnimatedWebP(t *testing.T) {
 		}
 		got := readNRGBA(t, filepath.Join(out, im.Name))
 		// RightTop rotates the stored image 90 degrees clockwise.
-		src := webpFrameImage(im.Frame, webpCanvasW, webpCanvasH, false)
+		src := webpFrameImage(im.Frames[0].Index, webpCanvasW, webpCanvasH, false)
 		for y := range webpCanvasW {
 			for x := range webpCanvasH {
 				if got.NRGBAAt(x, y) != src.NRGBAAt(y, webpCanvasH-1-x) {

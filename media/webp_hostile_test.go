@@ -403,7 +403,7 @@ func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
 // on disk.
 func TestWebPFramesGoToMagickInBatches(t *testing.T) {
 	requireWebPBuilders(t)
-	p := requireProcessor(t)
+	p := requireStreamingProcessor(t)
 	old, oldTimeout := encodeBatchPixels, composeTimeout
 	encodeBatchPixels, composeTimeout = 2*webpCanvasW*webpCanvasH, 10*time.Second
 	t.Cleanup(func() { encodeBatchPixels, composeTimeout = old, oldTimeout })
@@ -442,7 +442,7 @@ func TestWebPFramesGoToMagickInBatches(t *testing.T) {
 // its files removed when the encoder fails between batches.
 func TestWebPFramesCleansUpWhenAMagickRunFails(t *testing.T) {
 	requireWebPBuilders(t)
-	p := requireProcessor(t)
+	p := requireStreamingProcessor(t)
 	old := encodeBatchPixels
 	encodeBatchPixels = 2 * webpCanvasW * webpCanvasH
 	t.Cleanup(func() { encodeBatchPixels = old })

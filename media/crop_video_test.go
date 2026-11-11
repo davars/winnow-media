@@ -80,23 +80,14 @@ func TestVideoRunCropsBeforeScalingAndToneMapping(t *testing.T) {
 		trc  string
 		want string
 	}{
-		{"SDR", "", cropFilter(region{10, 6, 40, 30}) + ",scale=16:12:flags=lanczos"},
-		{"HDR", `,"color_transfer":"arib-std-b67"`, cropFilter(region{10, 6, 40, 30}) + ",scale=8:6:flags=lanczos,format=yuv444p16le," + hdrToneMap + ",format=yuv444p"},
+		{"SDR", "", cropFilter(region{10, 6, 40, 30}) + ",scale=32:24:flags=lanczos"},
+		{"HDR", `,"color_transfer":"arib-std-b67"`, cropFilter(region{10, 6, 40, 30}) + ",scale=16:12:flags=lanczos,format=yuv444p16le," + hdrToneMap + ",format=yuv444p"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stub := newVideoStub()
 			stub.probe = strings.Replace(stub.probe, `"start_time":"0"}]`, `"start_time":"0"`+c.trc+`}]`, 1)
-			env := stub.env()
-			env.Scratch, env.Stage = testScratch, stagerIn(t.TempDir())
-			src, err := env.open(context.Background(), openRequest{
-				path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, scratch: t.TempDir(), video: &videoRequest{},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer src.Close()
-			enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 8, maxArea: 64}
-			_, _ = src.encode(context.Background(), region{10, 6, 40, 30}, 0, []encoding{enc})
+			enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 16, MaxArea: 256}
+			_ = stub.encode(t, Select{Frames: Even(15), Region: Region{X: 10, Y: 6, Width: 40, Height: 30}}, enc)
 			if len(stub.runs) == 0 {
 				t.Fatal("no ffmpeg run")
 			}
@@ -114,21 +105,12 @@ func TestVideoRegionDecodeCoversTheLargestTarget(t *testing.T) {
 	forceSeek(t)
 	stub := newVideoStub()
 	stub.probe = strings.Replace(stub.probe, `"width":64,"height":48`, `"width":160,"height":120`, 1)
-	env := stub.env()
-	env.Scratch, env.Stage = testScratch, stagerIn(t.TempDir())
-	src, err := env.open(context.Background(), openRequest{
-		path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, scratch: t.TempDir(), video: &videoRequest{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer src.Close()
-	r := region{10, 10, 100, 20}
+	r := Region{X: 10, Y: 10, Width: 100, Height: 20}
 	// On the whole 160x120 frame the first fits to 28x21, the second to
 	// 18x13; on the region, to 30x6 and 35x7.
-	a := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 30, maxArea: 600}
-	b := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 40, maxArea: 256}
-	_, _ = src.encode(context.Background(), r, 0, []encoding{a, b})
+	a := Encoding{Format: WebP, Quality: 80, MaxEdge: 30, MaxArea: 600}
+	b := Encoding{Format: WebP, Quality: 80, MaxEdge: 40, MaxArea: 256}
+	_ = stub.encode(t, Select{Frames: Even(15), Region: r}, a, b)
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
@@ -161,10 +143,12 @@ func TestVideoRegionBounds(t *testing.T) {
 		{"a width the stored frame has", region{0, 0, 160, 20}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			c2 := withRunCounts(env)
+			p := requireProcessor(t)
+			rec := record(p)
 			dir := t.TempDir()
-			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 200, maxArea: 200 * 200}
-			images, err := c2.videoFrames(context.Background(), c.r, sniffedVideoDecoder(src), src, enc, 1, dir)
+			enc := Encoding{Format: PNG, Quality: 80, MaxEdge: 200, MaxArea: 200 * 200}
+			images, _, err := openSourceOn(t, p, src, OpenOptions{}).Encode(context.Background(), dir,
+				Select{Frames: Even(1), Region: c.r.exported()}, enc)
 			if c.ok {
 				if err != nil || len(images) == 0 {
 					t.Fatalf("images = %v, %v", images, err)
@@ -174,7 +158,7 @@ func TestVideoRegionBounds(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "outside") {
 				t.Fatalf("err = %v, want a refusal that the region is outside the frame", err)
 			}
-			if n := len(c2.runs["ffmpeg"]); n != 0 {
+			if n := len(rec.ran("ffmpeg")); n != 0 {
 				t.Errorf("the refused call ran ffmpeg %d times", n)
 			}
 		})
@@ -202,11 +186,11 @@ func TestVideoRegionOfARotatedClipIsInUprightCoordinates(t *testing.T) {
 		t.Fatal(err)
 	}
 	rotated = stage(t, rotated)
-	enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 400, maxArea: 400 * 400}
-	dec := sniffedVideoDecoder(rotated)
+	enc := Encoding{Format: PNG, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400}
+	src := openSourceOn(t, requireProcessor(t), rotated, OpenOptions{})
 
 	whole := t.TempDir()
-	images, err := env.videoFrames(context.Background(), region{}, dec, rotated, enc, 1, whole)
+	images, _, err := src.Encode(context.Background(), whole, Select{Frames: Even(1)}, enc)
 	if err != nil || len(images) != 1 {
 		t.Fatalf("images = %v, %v", images, err)
 	}
@@ -216,7 +200,7 @@ func TestVideoRegionOfARotatedClipIsInUprightCoordinates(t *testing.T) {
 	colours := map[[3]int]bool{}
 	for _, r := range []region{{0, 0, 40, 40}, {80, 0, 40, 40}, {0, 120, 40, 40}, {80, 120, 40, 40}} {
 		dir := t.TempDir()
-		got, err := env.videoFrames(context.Background(), r, dec, rotated, enc, 1, dir)
+		got, _, err := src.Encode(context.Background(), dir, Select{Frames: Even(1), Region: r.exported()}, enc)
 		if err != nil || len(got) != 1 {
 			t.Fatalf("region %+v: images = %v, %v", r, got, err)
 		}
@@ -240,7 +224,7 @@ func TestVideoRegionOfARotatedClipIsInUprightCoordinates(t *testing.T) {
 func TestVideoRegionOfAnHDRClipMayBeOdd(t *testing.T) {
 	env := requireFFmpeg(t)
 	clip := hlgClip(t, env, testsrc("160x120", 10, 2))
-	dec := sniffedVideoDecoder(clip)
+	src := openSourceOn(t, requireProcessor(t), clip, OpenOptions{})
 	for _, c := range []struct {
 		name         string
 		r            region
@@ -251,8 +235,8 @@ func TestVideoRegionOfAnHDRClipMayBeOdd(t *testing.T) {
 		{"reduced", region{5, 7, 61, 45}, 30, 30, 22},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: c.maxEdge, maxArea: c.maxEdge * c.maxEdge}
-			images, err := env.videoFrames(context.Background(), c.r, dec, clip, enc, 1, t.TempDir())
+			enc := Encoding{Format: PNG, Quality: 80, MaxEdge: c.maxEdge, MaxArea: c.maxEdge * c.maxEdge}
+			images, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Even(1), Region: c.r.exported()}, enc)
 			if err != nil || len(images) != 1 {
 				t.Fatalf("images = %v, %v", images, err)
 			}
@@ -263,44 +247,29 @@ func TestVideoRegionOfAnHDRClipMayBeOdd(t *testing.T) {
 	}
 }
 
-// Samples decoded for one region do not serve an encode of another, though
-// they have the same size.
-func TestVideoSecondEncodeWithAnotherRegionDecodesAgain(t *testing.T) {
+// A Source keeps no decoded sample: every Encode decodes afresh, whatever its
+// region.
+func TestVideoSourceDecodesAgainForEveryEncode(t *testing.T) {
 	forceSeek(t)
 	env := requireFFmpeg(t)
 	clip := sdrClip(t, env, "160x120", 10, 2)
-	c := withRunCounts(env)
-	c.Stage = stagerIn(t.TempDir())
-	src, err := c.open(context.Background(), openRequest{
-		path: clip, dec: sniffedVideoDecoder(clip), pinned: true, scratch: t.TempDir(), video: &videoRequest{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer src.Close()
-	encode := func(r region) {
-		t.Helper()
-		enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 64, maxArea: 64 * 64}
-		out, err := src.encode(context.Background(), r, 1, []encoding{enc})
-		if err != nil {
+	p := requireProcessor(t)
+	rec := record(p)
+	src := openSourceOn(t, p, clip, OpenOptions{})
+	for i, r := range []Region{{Width: 80, Height: 60}, {Width: 80, Height: 60}, {X: 40, Y: 30, Width: 80, Height: 60}} {
+		before := len(rec.ran("ffmpeg"))
+		if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Even(1), Region: r},
+			Encoding{Format: WebP, Quality: 80, MaxEdge: 64, MaxArea: 64 * 64}); err != nil {
 			t.Fatal(err)
 		}
-		out[0].Cleanup()
-	}
-	runs := func() int { return len(c.runs["ffmpeg"]) }
-
-	encode(region{0, 0, 80, 60})
-	first := runs()
-	if first == 0 {
-		t.Fatal("the first encode ran no ffmpeg")
-	}
-	encode(region{0, 0, 80, 60})
-	if runs() != first {
-		t.Errorf("the same region decoded again: %d runs after %d", runs(), first)
-	}
-	encode(region{40, 30, 80, 60})
-	if runs() == first {
-		t.Error("another region of the same size was served from the samples of the first")
+		if len(rec.ran("ffmpeg")) == before {
+			t.Errorf("encode %d ran no ffmpeg", i)
+		}
+		for _, e := range dirNames(t, src.dir) {
+			if strings.HasPrefix(e, ".sample-") {
+				t.Errorf("encode %d left the sample %s", i, e)
+			}
+		}
 	}
 }
 
@@ -351,10 +320,10 @@ func TestVideoRegionOutsideAFrameThatShrankIsRefused(t *testing.T) {
 	if err := os.WriteFile(path, []byte(wide+narrow), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 400, maxArea: 400 * 400}
+	src := openSourceOn(t, requireProcessor(t), remuxToMatroska(t, env, path), OpenOptions{})
+	enc := Encoding{Format: PNG, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400}
 	dir := t.TempDir()
-	images, err := env.videoFramesPicked(context.Background(), region{100, 0, 100, 50}, unnamedVideoDecoder, path, enc,
-		func(videoInfo) ([]int64, error) { return []int64{3000}, nil }, dir)
+	images, _, err := src.Encode(context.Background(), dir, Select{Frames: Times(3000), Region: Region{X: 100, Width: 100, Height: 50}}, enc)
 	if err == nil {
 		var got [3]int
 		if len(images) > 0 {
@@ -387,14 +356,13 @@ func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
 		"-f", "concat", "-safe", "0", "-i", list, "-c", "copy", joined); err != nil {
 		t.Fatal(err)
 	}
-	path := stage(t, joined)
+	src := openSourceOn(t, requireProcessor(t), remuxToMatroska(t, env, joined), OpenOptions{})
 	for name, limit := range map[string]int64{"seek": 0, "select": 1 << 40} {
 		t.Run(name, func(t *testing.T) {
 			forceSelectLimit(t, limit)
-			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 400, maxArea: 400 * 400}
+			enc := Encoding{Format: PNG, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400}
 			dir := t.TempDir()
-			images, err := env.videoFramesPicked(context.Background(), region{100, 0, 100, 50}, unnamedVideoDecoder, path, enc,
-				func(videoInfo) ([]int64, error) { return []int64{1000, 3000}, nil }, dir)
+			images, _, err := src.Encode(context.Background(), dir, Select{Frames: Times(1000, 3000), Region: Region{X: 100, Width: 100, Height: 50}}, enc)
 			if err == nil {
 				t.Errorf("a region past the 160-pixel frame gave %d images", len(images))
 			}
@@ -407,4 +375,17 @@ func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// remuxToMatroska copies the MPEG-TS file at path into Matroska, which the
+// Processor reads, keeping the in-band parameter sets that let a stream change
+// size.
+func remuxToMatroska(t *testing.T, env Env, path string) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "input.mkv")
+	if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+		"-f", "mpegts", "-i", path, "-c", "copy", "-f", "matroska", out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

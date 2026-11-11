@@ -8,6 +8,8 @@ import (
 )
 
 // Limits are the bounds that shape the encode ladder.
+//
+// Deprecated: the ladder belongs to the caller, over Even.
 type Limits struct {
 	// Ceilings is the shrink-only dimension ladder, longest side first. The
 	// first entry is the nominal ceiling; later entries are reached only
@@ -17,17 +19,25 @@ type Limits struct {
 	MaxFrames int
 }
 
-// Frame is one frame of an encoded artifact and the frame of the ORIGINAL
-// media it came from. The slice index of a Frame is its position in the
-// encoded sequence.
+// Frame is one frame of an encoded output and the frame of the ORIGINAL media
+// it came from. The slice index of a Frame is its position in the encoded
+// sequence.
 type Frame struct {
-	SourceFrame  int   // frame in the original media; 0 for a still
-	SourceTimeMS int64 // elapsed milliseconds before it in the original
+	// Index is the frame's index in the original media: 0 for a still and
+	// for a video, whose samples have no frame index.
+	Index int
+	// TimeMS is the time the frame is shown in the original, in
+	// milliseconds: the sum of the display delays of the frames before it in
+	// an animation (a stored delay below 20 ms counts as 100 ms, as browsers
+	// display it), or the time a video was sampled at; 0 for a still.
+	TimeMS int64
 }
 
 // Rung is one step of the fallback ladder: an encode at a dimension ceiling
 // (longest side, in pixels) sampling at most MaxFrames frames of an
 // animation.
+//
+// Deprecated: the ladder belongs to the caller, over Even.
 type Rung struct {
 	CeilingPx int
 	MaxFrames int
@@ -46,6 +56,8 @@ type Rung struct {
 // identically are collapsed using sourceFrames, the source's frame count: a
 // five-frame animation caps to five at both the 16- and 8-frame rungs.
 // Ladder returns nil when limits has no ceilings.
+//
+// Deprecated: the ladder belongs to the caller, over Even.
 func Ladder(limits Limits, animated bool, sourceFrames int) []Rung {
 	if len(limits.Ceilings) == 0 {
 		return nil
@@ -142,7 +154,7 @@ func displayDelayCS(delay int) int {
 
 // EncodeRung encodes inputPath as a WebP at rung and returns the staged
 // artifact, its canvas size and the frame mapping the artifact actually
-// holds. It is Open, Source.Encode of the rung's frames and Close.
+// holds. It is Open, EnvSource.Encode of the rung's frames and Close.
 // sourceFrames is ProbeFrames' result for inputPath, used only to check an
 // animation's frame count; mimeType keys the coder fallback ("" disables it);
 // quality is the WebP quality; profilePath, when not empty, is the sRGB
@@ -153,11 +165,13 @@ func displayDelayCS(delay int) int {
 // is the first image of the file, as Hints.Still; an animation of more than
 // one frame must be a GIF or a WebP, else the error wraps ErrUnsupportedType.
 // Everything else, the sizing, the caps and the staging, is as Open and
-// Source.Encode say. Env.Scratch is required.
+// EnvSource.Encode say. Env.Scratch is required.
 //
 // The caller owns the artifact via cleanupFn and decides, from its size,
 // whether to publish it or drop it and try the next rung. On error the staged
 // file is already removed.
+//
+// Deprecated: use Processor.Open and Source.Encode.
 func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 	animated bool, rung Rung, sourceFrames []FrameInfo, profilePath, orient string, quality int,
 ) (outputPath string, cleanupFn func(), width, height int, frames []Frame, err error) {
@@ -196,6 +210,8 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 // pixels. ICC presence is per scene so an animation never assigns the sRGB
 // destination profile to an unprofiled frame merely because another frame was
 // tagged.
+//
+// Deprecated: use Info.
 type FrameInfo struct {
 	delayCS int
 	hasICC  bool
@@ -214,6 +230,8 @@ type FrameInfo struct {
 // resource limits only, not by the frame caps. A failed read is retried once
 // with the coder CoderForMIME names for mimeType ("" disables the retry),
 // because magick cannot sniff some formats from an extensionless path.
+//
+// Deprecated: use Processor.Open and Source.Info.
 func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]FrameInfo, error) {
 	scenes, ref, err := identifyWithFallback(ctx, e, inputPath, "", mimeType)
 	if err != nil {
@@ -271,6 +289,8 @@ func frameDelays(frames []FrameInfo) []int {
 }
 
 // AnyProfiled reports whether any frame carries an ICC profile.
+//
+// Deprecated: use Processor.Open and Source.Info.
 func AnyProfiled(frames []FrameInfo) bool {
 	for _, frame := range frames {
 		if frame.hasICC {

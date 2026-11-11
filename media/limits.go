@@ -121,6 +121,8 @@ var policyArea = strconv.Itoa(policyAreaMP) + "MP"
 // start them with profile.LimitArgs(). The zero value is HighMemory. The Env
 // methods return an error for an undefined value, and LimitArgs panics. A
 // Processor takes Resources instead.
+//
+// Deprecated: use Config.Resources.
 type MemoryProfile int
 
 const (

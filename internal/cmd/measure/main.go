@@ -171,23 +171,12 @@ func run(ctx context.Context, p *media.Processor, s inputSpec, path string, repe
 			return r
 		}
 		start := time.Now()
-		var usage media.Usage
-		var n int
-		switch s.op {
-		case "video":
-			var imgs []media.Image
-			imgs, usage, err = p.VideoFrames(ctx, path, media.Encoding{}, 64, out)
-			n = len(imgs)
-		case "animation":
-			var imgs []media.Image
-			imgs, usage, err = p.AnimationFrames(ctx, path, media.Encoding{}, 64, out)
-			n = len(imgs)
-		default:
-			_, usage, err = p.Still(ctx, path, media.Encoding{}, out)
-			if err == nil {
-				n = 1
-			}
+		sel := media.Select{}
+		if s.op == "video" || s.op == "animation" {
+			sel.Frames = media.Even(64)
 		}
+		imgs, usage, err := encodeFile(ctx, p, path, sel, out)
+		n := len(imgs)
 		wall := time.Since(start)
 		_ = os.RemoveAll(out)
 		r.Runs++
@@ -209,6 +198,20 @@ func run(ctx context.Context, p *media.Processor, s inputSpec, path string, repe
 	r.CPUMS = ms(cpus[len(cpus)/2])
 	r.MaxRSSMB = float64(rss) / (1 << 20)
 	return r
+}
+
+// encodeFile opens path, makes one Encode into out and closes the Source; the
+// Usage covers both calls.
+func encodeFile(ctx context.Context, p *media.Processor, path string, sel media.Select, out string) ([]media.Image, media.Usage, error) {
+	src, usage, err := p.Open(ctx, path, media.OpenOptions{})
+	if err != nil {
+		return nil, usage, err
+	}
+	defer func() { _ = src.Close() }()
+	imgs, used, err := src.Encode(ctx, out, sel, media.Encoding{})
+	usage.CPU += used.CPU
+	usage.MaxRSS = max(usage.MaxRSS, used.MaxRSS)
+	return imgs, usage, err
 }
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }

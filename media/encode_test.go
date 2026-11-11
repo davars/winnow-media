@@ -168,7 +168,7 @@ func TestEncodeRungStillRecoversTGAViaCoderFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if w != 4 || h != 4 || !slices.Equal(mapping, []Frame{{SourceFrame: 0, SourceTimeMS: 0}}) {
+	if w != 4 || h != 4 || !slices.Equal(mapping, []Frame{{Index: 0, TimeMS: 0}}) {
 		t.Errorf("EncodeRung = %dx%d %v, want 4x4 and frame 0", w, h, mapping)
 	}
 	if info, err := os.Stat(out); err != nil || info.Size() == 0 {
@@ -211,7 +211,7 @@ func TestEncodeRungAnimationMapsSampledFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	want := []Frame{{SourceFrame: 0, SourceTimeMS: 0}, {SourceFrame: 2, SourceTimeMS: 300}}
+	want := []Frame{{Index: 0, TimeMS: 0}, {Index: 2, TimeMS: 300}}
 	if !slices.Equal(mapping, want) {
 		t.Errorf("mapping = %v, want %v", mapping, want)
 	}

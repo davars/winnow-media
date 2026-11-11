@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -44,6 +45,60 @@ func (s *videoStub) env() Env {
 	}}
 }
 
+// processor returns a Processor whose ffprobe and ffmpeg runs the stub
+// answers; magick and the rest run for real. The Processor is unsandboxed so
+// that the stub sees the argv of every run.
+func (s *videoStub) processor(t *testing.T) *Processor {
+	t.Helper()
+	requireTools(t, "magick", "ffmpeg", "ffprobe")
+	p, err := newProcessor(context.Background(), Config{Unsandboxed: true, Dir: t.TempDir()}, func(next runner) runner {
+		return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
+			s.mu.Lock()
+			switch filepath.Base(spec.Tool) {
+			case "ffprobe":
+				s.probes = append(s.probes, spec.Args)
+				s.mu.Unlock()
+				_, err := stdout.Write([]byte(s.probe))
+				return toolResult{}, err
+			case "ffmpeg":
+				s.runs = append(s.runs, spec.Args)
+				s.mu.Unlock()
+				return toolResult{}, nil
+			}
+			s.mu.Unlock()
+			return next(ctx, spec, stdout, stderr)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
+// open opens an MP4 on a Processor the stub answers for.
+func (s *videoStub) open(t *testing.T) (*Source, error) {
+	t.Helper()
+	path := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
+	src, _, err := s.processor(t).Open(context.Background(), path, OpenOptions{})
+	if err == nil {
+		t.Cleanup(func() { _ = src.Close() })
+	}
+	return src, err
+}
+
+// encode makes the Encode of sel that the stub's silent ffmpeg cannot satisfy;
+// the argv of the runs is the subject.
+func (s *videoStub) encode(t *testing.T, sel Select, targets ...Encoding) error {
+	t.Helper()
+	src, err := s.open(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = src.Encode(context.Background(), t.TempDir(), sel, targets...)
+	return err
+}
+
 // forceSeek makes every sampling in the test use one seek per time.
 func forceSeek(t *testing.T) { forceSelectLimit(t, 0) }
 
@@ -62,18 +117,14 @@ func newVideoStub() *videoStub { return &videoStub{probe: fmt.Sprintf(stubVideoP
 // hostile file, whichever entry point started it.
 func TestEveryFFmpegRunCarriesTheInputBounds(t *testing.T) {
 	ctx := context.Background()
-	entries := map[string]func(Env, string) error{
-		"encodeWebPPair": func(e Env, dir string) error {
-			return encodeWebPPair(e, ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 64, 200, 80)
+	webp := Encoding{Format: WebP, MaxEdge: 100, MaxArea: 10000}
+	entries := map[string]func(*videoStub, *testing.T) error{
+		"encodeWebPPair": func(s *videoStub, t *testing.T) error {
+			dir := t.TempDir()
+			return encodeWebPPair(s.env(), ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 64, 200, 80)
 		},
-		"videoFrames": func(e Env, dir string) error {
-			_, err := e.videoFrames(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 5, dir)
-			return err
-		},
-		"videoFrameRun": func(e Env, dir string) error {
-			_, err := e.videoFrameRun(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 0, 3, dir)
-			return err
-		},
+		"Even": func(s *videoStub, t *testing.T) error { return s.encode(t, Select{Frames: Even(5)}, webp) },
+		"Run":  func(s *videoStub, t *testing.T) error { return s.encode(t, Select{Frames: Run(0, 3)}, webp) },
 	}
 	for _, path := range []struct {
 		name  string
@@ -88,11 +139,11 @@ func TestEveryFFmpegRunCarriesTheInputBounds(t *testing.T) {
 	}
 }
 
-func testBounds(t *testing.T, run func(Env, string) error) {
+func testBounds(t *testing.T, run func(*videoStub, *testing.T) error) {
 	stub := newVideoStub()
 	// No run writes a frame, so the call ends in an error; the argv
 	// of the runs is the subject.
-	_ = run(stub.env(), t.TempDir())
+	_ = run(stub, t)
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
@@ -124,26 +175,14 @@ func testBounds(t *testing.T, run func(Env, string) error) {
 	}
 }
 
-// forbidScratch is an Env.Scratch that fails the test when it is called.
-func forbidScratch(t *testing.T) func() (string, func(), error) {
-	return func() (string, func(), error) {
-		t.Error("Scratch called")
-		return "", nil, errors.New("scratch requested")
-	}
-}
-
-// The cap is a property of the input: an oversized stream is refused before
-// any ffmpeg run or scratch directory.
-func TestVideoOpenRefusesOversizedBeforeScratch(t *testing.T) {
+// The cap is a property of the input: an oversized stream is refused by Open
+// before any ffmpeg run.
+func TestVideoOpenRefusesOversizedBeforeSampling(t *testing.T) {
 	t.Parallel()
 	for _, size := range [][2]int{{16385, 100}, {100, 16385}} {
 		stub := newVideoStub()
 		stub.probe = fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,"duration":"10"}],"format":{"duration":"10"}}`, size[0], size[1])
-		env := stub.env()
-		env.Scratch = forbidScratch(t)
-		_, err := env.open(context.Background(), openRequest{
-			path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, video: &videoRequest{},
-		})
+		_, err := stub.open(t)
 		if !errors.Is(err, ErrTooLarge) {
 			t.Errorf("%v: err = %v, want ErrTooLarge", size, err)
 		}
@@ -153,31 +192,23 @@ func TestVideoOpenRefusesOversizedBeforeScratch(t *testing.T) {
 	}
 }
 
-// A request's scratch directory is used in place of the system temporary
-// directory and Env.Scratch.
-func TestVideoOpenStagesSamplesInTheRequestedScratch(t *testing.T) {
-	scratch := t.TempDir()
-	t.Setenv("TMPDIR", t.TempDir())
+// A Source stages the samples of a call in its own scratch directory, not in
+// the output directory.
+func TestVideoSourceStagesSamplesInItsScratch(t *testing.T) {
 	stub := newVideoStub()
-	env := stub.env()
-	env.Scratch = forbidScratch(t)
-	staging := t.TempDir()
-	env.Stage = func(ext string) (string, func(), error) { return filepath.Join(staging, "out"+ext), func() {}, nil }
-	src, err := env.open(context.Background(), openRequest{
-		path: "/in.mov", dec: sniffedVideoDecoder("/in.mov"), pinned: true, scratch: scratch, video: &videoRequest{},
-	})
+	src, err := stub.open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer src.Close()
-	_, _ = src.encode(context.Background(), region{}, 0, []encoding{{format: WebP, ext: ".webp", quality: 80, maxEdge: 200, maxArea: 200 * 200}})
+	out := t.TempDir()
+	_, _, _ = src.Encode(context.Background(), out, Select{Frames: Even(3)}, Encoding{Format: WebP, MaxEdge: 200})
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
 	for _, args := range stub.runs {
 		sample := args[len(args)-1]
-		if !strings.HasPrefix(sample, scratch+string(filepath.Separator)) {
-			t.Errorf("scratch sample %s is not under %s", sample, scratch)
+		if !strings.HasPrefix(sample, src.dir+string(filepath.Separator)) {
+			t.Errorf("scratch sample %s is not under %s", sample, src.dir)
 		}
 	}
 }
@@ -188,9 +219,7 @@ func TestVideoSeeksCountFromTheContainerStart(t *testing.T) {
 	forceSeek(t)
 	stub := newVideoStub()
 	stub.probe = fmt.Sprintf(stubVideoProbe, "1.5")
-	out := t.TempDir()
-	_ = encodeWebPPair(stub.env(), context.Background(), "/in.mov",
-		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80)
+	_ = stub.encode(t, Select{Frames: Even(15)}, Encoding{Format: WebP, MaxEdge: 200})
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
@@ -199,23 +228,6 @@ func TestVideoSeeksCountFromTheContainerStart(t *testing.T) {
 	// 10 s over 15 samples centres the first at 333 ms.
 	if i < 0 || first[i+1] != "1.193000" {
 		t.Errorf("first seek = %v, want 1.193000 (333 ms plus the 1.5 s offset, less the 640 ms margin of 16 frames at 25 fps)", first)
-	}
-}
-
-func TestSniffedVideoDecoder(t *testing.T) {
-	t.Parallel()
-	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
-	garbage := writeFile(t, "input", []byte("not a video"))
-	if got := sniffedVideoDecoder(mp4); got != (decoder{"ffmpeg", "mov"}) {
-		t.Errorf("mp4: %v", got)
-	}
-	got := sniffedVideoDecoder(garbage)
-	if got.name != "" {
-		t.Fatalf("unrecognized content: %v, want the unnamed decoder", got)
-	}
-	args := inputArgs(got, "/x")
-	if want := []string{"-protocol_whitelist", "file", "-format_whitelist", detectedFormats, "-i", "/x"}; !slices.Equal(args, want) {
-		t.Errorf("unnamed decoder args = %q, want %q", args, want)
 	}
 }
 
@@ -359,6 +371,7 @@ func TestWebPPairSizeAHDRSmallFromTheSource(t *testing.T) {
 func TestVideoSamplesKeepTheDecodersDepth(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
+	p := requireProcessor(t)
 	ten := writeClip(t, env, ".mp4", append(testsrc("160x120", 10, 2), "-c:v", "libx264", "-preset", "ultrafast",
 		"-profile:v", "high10", "-pix_fmt", "yuv420p10le")...)
 	for name, c := range map[string]struct {
@@ -369,7 +382,7 @@ func TestVideoSamplesKeepTheDecodersDepth(t *testing.T) {
 		"10-bit": {ten, "16"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			dec := sniffedVideoDecoder(c.path)
+			dec := decoder{"ffmpeg", "mov"}
 			plan, err := env.planVideo(context.Background(), dec, c.path, encoding{maxEdge: 100, maxArea: 10000})
 			if err != nil {
 				t.Fatal(err)
@@ -386,7 +399,8 @@ func TestVideoSamplesKeepTheDecodersDepth(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := t.TempDir()
-			images, err := env.videoFrames(context.Background(), region{}, dec, c.path, encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000}, 2, out)
+			images, _, err := openSourceOn(t, p, c.path, OpenOptions{}).Encode(context.Background(), out, Select{Frames: Even(2)},
+				Encoding{Format: PNG, Quality: 90, MaxEdge: 100, MaxArea: 10000})
 			if err != nil || len(images) == 0 {
 				t.Fatalf("images = %v, %v", images, err)
 			}
@@ -417,10 +431,12 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "3840x2160", 5, 1)
-	c := withRunCounts(env)
+	p := requireProcessor(t)
+	rec := record(p)
 	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 256, maxArea: 256 * 256}
 	out := t.TempDir()
-	images, err := c.videoFrames(context.Background(), region{}, sniffedVideoDecoder(src), src, enc, 2, out)
+	images, _, err := openSourceOn(t, p, src, OpenOptions{}).Encode(context.Background(), out, Select{Frames: Even(2)},
+		Encoding{Format: WebP, Quality: 80, MaxEdge: 256, MaxArea: 256 * 256})
 	if err != nil || len(images) == 0 {
 		t.Fatalf("images = %v, %v", images, err)
 	}
@@ -430,19 +446,19 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 			t.Errorf("%s is %dx%d, want %dx%d", im.Name, im.Width, im.Height, tw, th)
 		}
 	}
-	if len(c.runs["ffmpeg"]) == 0 {
+	if len(rec.ran("ffmpeg")) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
-	for _, args := range c.runs["ffmpeg"] {
+	for _, args := range rec.ran("ffmpeg") {
 		if got := vfScale(args); got != "512x288" {
 			t.Errorf("ffmpeg scale = %q, want 512x288: %v", got, args)
 		}
 	}
-	plan, err := env.planVideo(context.Background(), sniffedVideoDecoder(src), src, enc)
+	plan, err := env.planVideo(context.Background(), decoder{"ffmpeg", "mov"}, src, enc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	samples, err := env.sampleVideo(context.Background(), sniffedVideoDecoder(src), src, t.TempDir(), plan, []int64{300})
+	samples, err := env.sampleVideo(context.Background(), decoder{"ffmpeg", "mov"}, src, t.TempDir(), plan, []int64{300})
 	if err != nil || len(samples) != 1 {
 		t.Fatalf("samples = %v, %v", samples, err)
 	}
@@ -451,7 +467,7 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 	}
 	// A target at or above the source is not upscaled.
 	big := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 4000, maxArea: 4000 * 4000}
-	if plan, err = env.planVideo(context.Background(), sniffedVideoDecoder(src), src, big); err != nil || plan.reduced || plan.filter != "" {
+	if plan, err = env.planVideo(context.Background(), decoder{"ffmpeg", "mov"}, src, big); err != nil || plan.reduced || plan.filter != "" {
 		t.Errorf("plan for a target above the source = %+v, %v", plan, err)
 	}
 }
@@ -532,7 +548,7 @@ func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
 		}
 		for i, want := range []int{10, 20} {
 			if got := frameNumber(t, env, filepath.Join(out, images[i].Name)); got < want-1 || got > want+1 {
-				t.Errorf("frame at %d ms is %d, want %d", images[i].TimeMS, got, want)
+				t.Errorf("frame at %d ms is %d, want %d", images[i].Frames[0].TimeMS, got, want)
 			}
 		}
 	})
@@ -546,8 +562,8 @@ func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
 			if got := frameNumber(t, env, filepath.Join(out, images[i].Name)); got < want-1 || got > want+1 {
 				t.Errorf("run frame %d is %d, want %d", i, got, want)
 			}
-			if wantMS := int64(1000 + 100*i); images[i].TimeMS < wantMS-50 || images[i].TimeMS > wantMS+50 {
-				t.Errorf("run frame %d TimeMS = %d, want about %d: the stream's offset must not shift it", i, images[i].TimeMS, wantMS)
+			if wantMS := int64(1000 + 100*i); images[i].Frames[0].TimeMS < wantMS-50 || images[i].Frames[0].TimeMS > wantMS+50 {
+				t.Errorf("run frame %d TimeMS = %d, want about %d: the stream's offset must not shift it", i, images[i].Frames[0].TimeMS, wantMS)
 			}
 		}
 	})
@@ -586,7 +602,7 @@ func TestSampleVideoSkipsASeekThatWritesNothing(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "160x120", 10, 2)
-	dec := sniffedVideoDecoder(src)
+	dec := decoder{"ffmpeg", "mov"}
 	plan, err := env.planVideo(context.Background(), dec, src, encoding{maxEdge: 100, maxArea: 10000})
 	if err != nil {
 		t.Fatal(err)
@@ -680,7 +696,6 @@ func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
 			if got := sceneSizes(t, env, large)[0]; !strings.HasPrefix(got, "100x") {
 				t.Errorf("large = %s", got)
 			}
-			t.Logf("%s decoder: %+v", name, sniffedVideoDecoder(path))
 		})
 	}
 }
@@ -691,10 +706,12 @@ func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	src := rotatedClip(t, env)
-	c := withRunCounts(env)
+	p := requireProcessor(t)
+	rec := record(p)
 	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 40, maxArea: 40 * 40}
-	dec := sniffedVideoDecoder(src)
-	images, err := c.videoFrames(context.Background(), region{}, dec, src, enc, 2, t.TempDir())
+	dec := decoder{"ffmpeg", "mov"}
+	images, _, err := openSourceOn(t, p, src, OpenOptions{}).Encode(context.Background(), t.TempDir(), Select{Frames: Even(2)},
+		Encoding{Format: WebP, Quality: 80, MaxEdge: 40, MaxArea: 40 * 40})
 	if err != nil || len(images) == 0 {
 		t.Fatalf("images = %v, %v", images, err)
 	}
@@ -703,7 +720,7 @@ func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
 			t.Errorf("%s is %dx%d, want 30x40", im.Name, im.Width, im.Height)
 		}
 	}
-	for _, args := range c.runs["ffmpeg"] {
+	for _, args := range rec.ran("ffmpeg") {
 		if got := vfScale(args); got != "60x80" {
 			t.Errorf("ffmpeg scale = %q, want the portrait 60x80: %v", got, args)
 		}
@@ -840,6 +857,8 @@ func readDir(t *testing.T, dir string) map[string][]byte {
 	return files
 }
 
+var errNotProcessable = errors.New("the Processor does not read this container")
+
 // Reading a short stream once gives the frames, and so the bytes, that a seek
 // to each time gives, through every entry point.
 func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
@@ -872,9 +891,8 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		},
 	}
 	enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 100}
-	enc2 := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 100, maxArea: 100 * 100}
 	// processable reports whether the Processor accepts the clip's type; the
-	// others, such as MPEG-TS, are read through the Env.
+	// others, such as MPEG-TS, are read only through the Env entries.
 	processable := func(src string) bool {
 		mt, err := sniffFile(src)
 		if err != nil {
@@ -886,8 +904,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		"VideoFrames": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
-				images, err := env.videoFrames(context.Background(), region{}, sniffedVideoDecoder(src), src, enc2, 15, dir)
-				return sampled{images, readDir(t, dir)}, err
+				return sampled{}, errNotProcessable
 			}
 			images, _, err := p.VideoFrames(context.Background(), src, enc, 15, dir)
 			return sampled{images, readDir(t, dir)}, err
@@ -896,9 +913,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			dir := t.TempDir()
 			times := []int64{0, 67, 167, 300, 1033, 1200, 1250, 1900}
 			if !processable(src) {
-				images, err := env.videoFramesPicked(context.Background(), region{}, sniffedVideoDecoder(src), src, enc2,
-					func(videoInfo) ([]int64, error) { return times, nil }, dir)
-				return sampled{images, readDir(t, dir)}, err
+				return sampled{}, errNotProcessable
 			}
 			images, _, err := p.VideoFramesAt(context.Background(), src, enc, times, dir)
 			return sampled{images, readDir(t, dir)}, err
@@ -906,8 +921,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		"VideoFrameRun": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
-				images, err := env.videoFrameRun(context.Background(), region{}, sniffedVideoDecoder(src), src, enc2, 500, 4, dir)
-				return sampled{images, readDir(t, dir)}, err
+				return sampled{}, errNotProcessable
 			}
 			images, _, err := p.VideoFrameRun(context.Background(), src, enc, 500, 4, dir)
 			return sampled{images, readDir(t, dir)}, err
@@ -973,6 +987,9 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 					t.Run(clip+"/"+entry, func(t *testing.T) {
 						t.Parallel()
 						s, err := run(t, src)
+						if errors.Is(err, errNotProcessable) {
+							return
+						}
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -990,7 +1007,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			if len(seek.files) == 0 {
 				t.Fatal("seek wrote nothing")
 			}
-			if !slices.Equal(seek.images, once.images) {
+			if !sameImages(seek.images, once.images) {
 				t.Errorf("images differ:\nseek   %+v\nselect %+v", seek.images, once.images)
 			}
 			for name, want := range seek.files {
@@ -1033,20 +1050,18 @@ func TestSelectIsChosenByDecodedPixelsOnly(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			forceSelectLimit(t, c.limit)
 			ctx := context.Background()
-			entries := map[string]func(Env, string){
-				"encodeWebPPair": func(e Env, dir string) {
-					_ = encodeWebPPair(e, ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 32, 64, 80)
+			webp := Encoding{Format: WebP, MaxEdge: 50, MaxArea: 2500}
+			entries := map[string]func(*videoStub){
+				"encodeWebPPair": func(s *videoStub) {
+					dir := t.TempDir()
+					_ = encodeWebPPair(s.env(), ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 32, 64, 80)
 				},
-				"videoFrames": func(e Env, dir string) {
-					_, _ = e.videoFrames(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 5, dir)
-				},
-				"videoFrameRun": func(e Env, dir string) {
-					_, _ = e.videoFrameRun(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 0, 3, dir)
-				},
+				"Even": func(s *videoStub) { _ = s.encode(t, Select{Frames: Even(5)}, webp) },
+				"Run":  func(s *videoStub) { _ = s.encode(t, Select{Frames: Run(0, 3)}, webp) },
 			}
 			for name, run := range entries {
 				stub := &videoStub{probe: probe(c.frames)}
-				run(stub.env(), t.TempDir())
+				run(stub)
 				if len(stub.runs) == 0 {
 					t.Fatalf("%s: no ffmpeg run", name)
 				}
@@ -1069,9 +1084,7 @@ func TestSelectCountsFromTheContainerStart(t *testing.T) {
 	forceSelectLimit(t, selectMaxPixels)
 	stub := newVideoStub()
 	stub.probe = fmt.Sprintf(stubVideoProbe, "1.5")
-	out := t.TempDir()
-	_ = encodeWebPPair(stub.env(), context.Background(), "/in.mov",
-		filepath.Join(out, "s.webp"), filepath.Join(out, "l.webp"), 64, 200, 80)
+	_ = stub.encode(t, Select{Frames: Even(15)}, Encoding{Format: WebP, MaxEdge: 200})
 	// The stub writes no frame, so the sample at 0 that follows is a second
 	// select run.
 	if len(stub.runs) == 0 || !isSelectRun(stub.runs[0]) {
@@ -1102,7 +1115,7 @@ func fractionalOffsetTS(t *testing.T, env Env) string {
 func TestTimeZeroIsTheFirstFrameOnBothPaths(t *testing.T) {
 	env := requireFFmpeg(t)
 	src := fractionalOffsetTS(t, env)
-	dec := sniffedVideoDecoder(src)
+	dec := unnamedVideoDecoder
 	for name, limit := range map[string]int64{"seek": 0, "select": selectMaxPixels} {
 		t.Run(name, func(t *testing.T) {
 			forceSelectLimit(t, limit)
@@ -1149,8 +1162,12 @@ func encodeWebPPair(e Env, ctx context.Context, inputPath, smallPath, largePath 
 		outputs = outputs[1:]
 		return path, func() { _ = os.Remove(path) }, nil
 	}
+	route, dec := videoRouteOf(inputPath)
+	if route == routeNotVideo {
+		dec = unnamedVideoDecoder
+	}
 	src, err := e.open(ctx, openRequest{
-		path: inputPath, dec: sniffedVideoDecoder(inputPath), pinned: true, scratch: dir,
+		path: inputPath, dec: dec, pinned: true, scratch: dir,
 		video: &videoRequest{},
 	})
 	if err != nil {

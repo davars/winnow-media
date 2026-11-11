@@ -260,7 +260,7 @@ func TestProcessorInstallsTheResources(t *testing.T) {
 	}
 }
 
-// Every magick run of a Source, whichever encode path it takes, carries the
+// Every magick run of an EnvSource, whichever encode path it takes, carries the
 // Env's profile.
 func TestSourceRunsCarryTheProfile(t *testing.T) {
 	t.Parallel()

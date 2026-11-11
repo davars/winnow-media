@@ -37,7 +37,7 @@ func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := sdrClip(t, env, "320x240", 10, 4)
-	info, err := probeVideo(context.Background(), env, sniffedVideoDecoder(clip), clip)
+	info, err := probeVideo(context.Background(), env, decoder{"ffmpeg", "mov"}, clip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
 		times := sampleTimesMS(info, c.want)
 		var want []Frame
 		for _, ms := range times {
-			want = append(want, Frame{SourceTimeMS: ms})
+			want = append(want, Frame{TimeMS: ms})
 		}
 		if got := src.Frames(); !slices.Equal(got, want) {
 			t.Errorf("Frames{%d} = %v, want %v", c.hint, got, want)
@@ -94,7 +94,7 @@ func TestVideoMapsTheScenesTheWriterMerged(t *testing.T) {
 	if len(frames) < 2 || len(frames) >= len(src.Frames()) {
 		t.Fatalf("kept %d of %d samples, want the red run collapsed to one", len(frames), len(src.Frames()))
 	}
-	if frames[0].SourceTimeMS != src.Frames()[0].SourceTimeMS || frames[1].SourceTimeMS < 2000 {
+	if frames[0].TimeMS != src.Frames()[0].TimeMS || frames[1].TimeMS < 2000 {
 		t.Errorf("kept times %v: want the first red sample, then the first testsrc sample from 2 s", frames)
 	}
 	if scenes := sceneSizes(t, env, arts[0].Path); len(scenes) != len(frames) {
@@ -396,11 +396,11 @@ func TestOpenVideoMatchesTheProcessorsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(got, want) {
+	if !sameImages(got, want) {
 		t.Errorf("images differ:\nOpen       %+v\nProcessor  %+v", got, want)
 	}
 	for _, img := range want {
-		if img.Frame != 0 || img.TimeMS < 0 {
+		if img.Frames[0].Index != 0 || img.Frames[0].TimeMS < 0 {
 			t.Errorf("image %+v: want Frame 0 and the sample time", img)
 		}
 	}
@@ -604,7 +604,7 @@ func TestVideoWithOneFrameBeforeALongerContainerYieldsASampleAtZero(t *testing.T
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := []Frame{{SourceTimeMS: 0}}
+				want := []Frame{{TimeMS: 0}}
 				if got := src.Frames(); !slices.Equal(got, want) {
 					t.Errorf("Frames = %v, want %v", got, want)
 				}

@@ -32,7 +32,7 @@ type frameRun struct {
 	count   int
 }
 
-// videoSource is what a Source holds of a video: the probe, which Open
+// videoSource is what an EnvSource holds of a video: the probe, which Open
 // makes, and the samples, which the first encode decodes.
 type videoSource struct {
 	dec  decoder
@@ -56,12 +56,18 @@ func (e hintError) Error() string { return e.msg }
 // openVideo is open for a video: it probes it and chooses the sample times,
 // and decodes nothing, since the size to decode at depends on the targets of
 // the encode.
-func (e Env) openVideo(ctx context.Context, req openRequest) (*Source, error) {
-	h := req.hints
+func (e Env) openVideo(ctx context.Context, req openRequest) (*EnvSource, error) {
 	info, err := e.probeChecked(ctx, req.dec, req.path)
 	if err != nil {
 		return nil, err
 	}
+	return e.videoFromProbe(req, info)
+}
+
+// videoFromProbe is openVideo given the probe of the video.
+func (e Env) videoFromProbe(req openRequest, info videoInfo) (*EnvSource, error) {
+	h := req.hints
+	var err error
 	switch {
 	case h.Frames < 0:
 		return nil, hintError{fmt.Sprintf("frames %d is negative", h.Frames)}
@@ -84,7 +90,7 @@ func (e Env) openVideo(ctx context.Context, req openRequest) (*Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Source{env: e, route: routeVideo, video: v}
+	s := &EnvSource{env: e, route: routeVideo, video: v}
 	s.layout.uw, s.layout.uh = info.upright()
 	s.layout.cw, s.layout.ch = info.width, info.height
 	s.upright = [2]int{s.layout.uw, s.layout.uh}
@@ -96,7 +102,7 @@ func (e Env) openVideo(ctx context.Context, req openRequest) (*Source, error) {
 }
 
 // setSamples makes the source hold n samples, numbered from 0.
-func (s *Source) setSamples(n int) {
+func (s *EnvSource) setSamples(n int) {
 	s.selected = make([]int, n)
 	s.layout.infos = make([]FrameInfo, n)
 	for i := range n {
@@ -110,7 +116,7 @@ func (s *Source) setSamples(n int) {
 // target is decoded again. A failed decode leaves no samples and keeps the
 // times the source held before it, those Open chose or the last decode
 // found, so that the encode can be retried.
-func (s *Source) decodeVideo(ctx context.Context, r region, encs []encoding) error {
+func (s *EnvSource) decodeVideo(ctx context.Context, r region, encs []encoding) error {
 	v := s.video
 	w, h := v.info.upright()
 	decode, best := encs[0], 0
@@ -122,6 +128,8 @@ func (s *Source) decodeVideo(ctx context.Context, r region, encs []encoding) err
 		}
 	}
 	plan := newVideoPlan(v.info, r, decode, s.env.threads())
+	// One time is cheaper by a seek than by decoding from the start.
+	plan.selectFrames = plan.selectFrames && (v.run != nil || len(v.times) > 1)
 	if v.decoded && v.plan.covers(plan) {
 		return nil
 	}

@@ -29,7 +29,7 @@ func forbidCompositor(t *testing.T, p *Processor) {
 }
 
 func TestGIFFramesGoToMagickInBatches(t *testing.T) {
-	p := requireProcessor(t)
+	p := requireStreamingProcessor(t)
 	// Two 64x48 frames per run.
 	old, oldTimeout := encodeBatchPixels, composeTimeout
 	encodeBatchPixels, composeTimeout = 2*64*48, 10*time.Second
@@ -41,7 +41,7 @@ func TestGIFFramesGoToMagickInBatches(t *testing.T) {
 	}
 	var frames []int
 	for _, im := range images {
-		frames = append(frames, im.Frame)
+		frames = append(frames, im.Frames[0].Index)
 	}
 	if !slices.Equal(frames, []int{0, 2, 4, 6, 8, 10}) {
 		t.Errorf("source frames %v", frames)
@@ -299,8 +299,8 @@ func TestGIFWithoutTrailerGivesTheSameFrames(t *testing.T) {
 		t.Fatalf("%d frames without the trailer, %d with, want 6", len(got), len(want))
 	}
 	for i, im := range got {
-		if im.Frame != want[i].Frame {
-			t.Errorf("image %d shows frame %d, want %d", i, im.Frame, want[i].Frame)
+		if im.Frames[0].Index != want[i].Frames[0].Index {
+			t.Errorf("image %d shows frame %d, want %d", i, im.Frames[0].Index, want[i].Frames[0].Index)
 		}
 	}
 	if names := dirNames(t, out); len(names) != 6 {
@@ -398,7 +398,7 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 					var maxDiff, differing int
 					for i, im := range images {
 						a := readNRGBA(t, filepath.Join(out, im.Name))
-						b := readNRGBA(t, filepath.Join(ref, fmt.Sprintf("%03d.png", im.Frame)))
+						b := readNRGBA(t, filepath.Join(ref, fmt.Sprintf("%03d.png", im.Frames[0].Index)))
 						if a.Bounds() != b.Bounds() {
 							t.Fatalf("frame %d: %v against %v", i, a.Bounds(), b.Bounds())
 						}

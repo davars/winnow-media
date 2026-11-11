@@ -15,7 +15,7 @@ func TestCURFileIsReadAsIcon(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	path := gradient(".cur")(t)
-	img, _, err := p.still(context.Background(), path, "image/vnd.microsoft.icon", Encoding{Format: PNG}, t.TempDir())
+	img, _, err := stillAs(context.Background(), p, path, "image/vnd.microsoft.icon", Encoding{Format: PNG}, t.TempDir())
 	if err != nil || img.Width != 32 || img.Height != 24 {
 		t.Errorf("CUR as icon: %+v, %v", img, err)
 	}

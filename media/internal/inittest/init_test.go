@@ -57,13 +57,13 @@ func runOperations(t *testing.T, cfg media.Config) {
 
 	t.Run("still", func(t *testing.T) {
 		dir := t.TempDir()
-		img, _, err := p.Still(context.Background(), filepath.Join("..", "..", "testdata", "heic", "adobe-64x64.heic"),
-			media.Encoding{Format: media.WebP, Quality: 80, MaxEdge: 32, MaxArea: 1024}, dir)
+		out, err := encode(p, filepath.Join("..", "..", "testdata", "heic", "adobe-64x64.heic"), media.Select{}, dir,
+			media.Encoding{Format: media.WebP, Quality: 80, MaxEdge: 32, MaxArea: 1024})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info, err := os.Stat(filepath.Join(dir, img.Name)); err != nil || info.Size() == 0 {
-			t.Errorf("output %q: %v", img.Name, err)
+		if info, err := os.Stat(filepath.Join(dir, out[0].Name)); err != nil || info.Size() == 0 {
+			t.Errorf("output %q: %v", out[0].Name, err)
 		}
 	})
 
@@ -85,8 +85,8 @@ func runOperations(t *testing.T, cfg media.Config) {
 		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		out, _, err := p.AnimationFrames(context.Background(), path,
-			media.Encoding{Format: media.WebP, Quality: 80, MaxEdge: 16, MaxArea: 256}, 3, t.TempDir())
+		out, err := encode(p, path, media.Select{Frames: media.Even(3)}, t.TempDir(),
+			media.Encoding{Format: media.WebP, Quality: 80, MaxEdge: 16, MaxArea: 256})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -94,6 +94,17 @@ func runOperations(t *testing.T, cfg media.Config) {
 			t.Error("no frames")
 		}
 	})
+}
+
+// encode opens path and makes one Encode of sel into dir.
+func encode(p *media.Processor, path string, sel media.Select, dir string, enc media.Encoding) ([]media.Image, error) {
+	src, _, err := p.Open(context.Background(), path, media.OpenOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = src.Close() }()
+	out, _, err := src.Encode(context.Background(), dir, sel, enc)
+	return out, err
 }
 
 func withDir(cfg media.Config, dir string) media.Config {

@@ -41,17 +41,25 @@ func main() {
 	}
 	defer p.Close()
 
+	src, _, err := p.Open(ctx, "clip.mp4", media.OpenOptions{})
+	if err != nil {
+		log.Fatal(err) // test with errors.Is for ErrUnsupportedType, ErrTooLarge
+	}
+	defer src.Close()
+	info := src.Info()
+	log.Printf("%s %dx%d, %d ms", info.Kind, info.Width, info.Height, info.DurationMS)
+
 	dir, err := os.MkdirTemp("", "frames") // must exist and be empty
 	if err != nil {
 		log.Fatal(err)
 	}
-	images, usage, err := p.VideoFrames(ctx, "clip.mp4",
-		media.Encoding{Format: media.WebP, MaxEdge: 1024}, 8, dir)
+	images, usage, err := src.Encode(ctx, dir, media.Select{Frames: media.Even(8)},
+		media.Encoding{Format: media.WebP, MaxEdge: 1024})
 	if err != nil {
-		log.Fatal(err) // test with errors.Is for ErrUnsupportedType, ErrTooLarge
+		log.Fatal(err)
 	}
 	for _, img := range images {
-		log.Printf("%s %dx%d at %d ms", img.Name, img.Width, img.Height, img.TimeMS)
+		log.Printf("%s %dx%d shows %+v", img.Name, img.Width, img.Height, img.Frames)
 	}
 	log.Printf("cpu %s, peak rss %d bytes", usage.CPU, usage.MaxRSS)
 }
@@ -59,35 +67,36 @@ func main() {
 
 ## Operations
 
-The methods of a `Processor` take one untrusted input file and write images
-into an empty directory `dir`. Each returns a `Usage` (CPU time and peak
-resident set size over every tool run of the call, also on failure). Each
+A `Processor` opens one untrusted input file as a `Source`; the `Source` is
+read as often as the caller likes. Each call returns a `Usage` (CPU time and
+peak resident set size over every tool run of the call, also on failure). Each
 output is sized and encoded by an `Encoding` (format JPEG, WebP or PNG,
-quality, longest side, pixel area), is upright, is converted to sRGB when
-the source carries a profile, and carries no metadata.
+quality, longest side, pixel area), is upright, is converted to sRGB when the
+source carries a profile, and carries no metadata.
 
-| Operation | Accepts | Output | Purpose |
-|---|---|---|---|
-| `Still` | any type of `Types()` that content identifies, other than GIF, animated WebP and video | one `Image`, `still.<ext>` | The first image of the file. |
-| `AnimationFrames` | GIF, WebP | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Evenly spaced composited frames. |
-| `AnimationFramesAt` | GIF, WebP | 1 to 64 `frame-NNN.<ext>` | The frames with the given indices. |
-| `VideoFrames` | MP4, QuickTime, WebM, Matroska | up to `maxFrames` (default 16, at most 64) `frame-NNN.<ext>` | Samples at the centres of equal intervals of the duration; HDR is tone-mapped to SDR. |
-| `VideoFramesAt` | as `VideoFrames` | 1 to 64 `frame-NNN.<ext>` | The first frame at or after each given time. |
-| `VideoFrameRun` | as `VideoFrames` | 1 to 64 `frame-NNN.<ext>` | Consecutive frames from a start time, in one ffmpeg run. |
-| `ProbeVideo` | as `VideoFrames` | `VideoInfo` | Duration, rate, upright size, rotation, HDR, codec, audio and frame count, from one `ffprobe` run. |
-| `ProbeAnimation` | GIF, WebP | `AnimationInfo` | Frame count, canvas size and display delays, from the headers. |
+| Call | Does |
+|---|---|
+| `Processor.Open` | Applies the gate and the caps and reads the headers, or probes a video, without decoding a pixel. `OpenOptions.Type` names the type of a file whose bytes name none (TGA, ICO, CUR, G3, DNG). |
+| `Source.Info` | What is known of the file: type, kind (still, animation, video), size, orientation, frame count and delays, and for a video the duration, rate, rotation, HDR, codec and audio. |
+| `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Run`) and region of a `Select`, one file per frame for each `Encoding`, or one animated WebP when `Animate` is set. |
+| `Source.Close`, `Processor.Close` | Remove a Source's scratch; closing the Processor closes its Sources. |
 
-`Image` records its file `Name`, size, source frame index (`Frame`) and
-position in the source (`TimeMS`). Every operation runs the same gate and caps
-before it decodes anything, and removes what it wrote on failure. The doc
-comment of each method is its contract.
+A `Source` is checked against the file it was opened on before every `Encode`.
+Its calls are serialised, and an animation or video is not decoded until
+asked: the contracts, and what a Source keeps between calls, are in the doc
+comments and the [package documentation](media/env.go).
+
+Deprecated wrappers over these: `Still`, `AnimationFrames`,
+`AnimationFramesAt`, `VideoFrames`, `VideoFramesAt`, `VideoFrameRun`,
+`ProbeAnimation` and `ProbeVideo`. They write `still.<ext>` and
+`frame-NNN.<ext>`.
 
 Below the `Processor` is a decode-once layer for callers that run the tools
 themselves: an `Env{Run, Stage, Scratch}` supplies the `Runner`, so the caller
 decides how tools are resolved, limited and cancelled. `Env.Open` reads a
-file's headers, applies the caps and selects its frames; `Source.Encode` writes
-one WebP, PNG or JPEG per `Encoding` from that single decode, and
-`Source.EncodeFrames` writes one file per frame. `Env.Open` applies the caps
+file's headers, applies the caps and selects its frames; `EnvSource.Encode`
+writes one WebP, PNG or JPEG per `Encoding` from that single decode, and
+`EnvSource.EncodeFrames` writes one file per frame. `Env.Open` applies the caps
 only: the gate, sandbox and policy below belong to the `Processor`.
 
 - Decode once: `Open`, `Encode`, `EncodeFrames`.
@@ -97,7 +106,7 @@ only: the gate, sandbox and policy below belong to the `Processor`.
 
 ## Guarantees
 
-For `Processor` operations, stated in full in the
+For a `Processor`, stated in full in the
 [package documentation](media/env.go)
 (`go doc github.com/davars/winnow-media/media`):
 
@@ -128,13 +137,12 @@ that (see the package documentation).
 `Types()` lists the media types the library has a pinned decoder for: those
 ImageMagick reads with a built-in coder, and video. SVG, MVG, MSL,
 PostScript, EPS, PDF and text are never among them. TGA, ICO, G3 and DNG are
-in the list but are not identified from content; no operation decodes them
-yet, since none takes a type from the caller. `Config.Types` narrows the set;
-nil is all of it. `Config.Caps` sets the limits that turn input away. A zero
-`Caps` is the library's ceilings, not values measured for any host, so a
-deployment for hostile input sets its own. The `Caps` doc comment lists them;
-[the measurements](docs/measurements.md) record the values a small deployment
-chose.
+in the list but are not identified from content: `OpenOptions.Type` names them.
+`Config.Types` narrows the set; nil is all of it. `Config.Caps` sets the limits
+that turn input away. A zero `Caps` is the library's ceilings, not values
+measured for any host, so a deployment for hostile input sets its own. The
+`Caps` doc comment lists them; [the measurements](docs/measurements.md) record
+the values a small deployment chose.
 
 ## Resources
 
