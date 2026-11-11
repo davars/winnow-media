@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -166,6 +167,7 @@ func sweepSizes(areas []int) [][2]int {
 // The fx expressions give fitSize's size, to the pixel, for every bound the
 // encodings allow, and fitSize agrees with the iterative oracle.
 func TestFitExprEqualsFitSize(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	edges := []int{16, 24, 100, 1024, 2048, 2576, 16384}
 	areas := []int{256, 768, 100000, 1048576, 3_750_000, 4194304, 100_000_000}
@@ -177,29 +179,34 @@ func TestFitExprEqualsFitSize(t *testing.T) {
 		}
 	}
 	sizes := sweepSizes(areas)
-	var checked, resized, mismatches int
-	for _, c := range combos {
-		got := fxSizes(t, env, c[0], c[1], sizes)
-		for i, sz := range sizes {
-			tw, th, resize := fitSize(sz[0], sz[1], c[0], c[1])
-			if lw, lh, _ := fitSizeWithTheLoop(sz[0], sz[1], c[0], c[1]); lw != tw || lh != th {
-				t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d, the loop form gave %dx%d", sz, c[0], c[1], tw, th, lw, lh)
-			}
-			if got[i] != [2]int{tw, th} {
-				if mismatches++; mismatches < 20 {
-					t.Errorf("fx size of %v at edge %d, area %d is %v, fitSize gives %dx%d", sz, c[0], c[1], got[i], tw, th)
+	var checked, resized, mismatches atomic.Int64
+	t.Run("combos", func(t *testing.T) {
+		for _, c := range combos {
+			t.Run(fmt.Sprintf("edge %d area %d", c[0], c[1]), func(t *testing.T) {
+				t.Parallel()
+				got := fxSizes(t, env, c[0], c[1], sizes)
+				for i, sz := range sizes {
+					tw, th, resize := fitSize(sz[0], sz[1], c[0], c[1])
+					if lw, lh, _ := fitSizeWithTheLoop(sz[0], sz[1], c[0], c[1]); lw != tw || lh != th {
+						t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d, the loop form gave %dx%d", sz, c[0], c[1], tw, th, lw, lh)
+					}
+					if got[i] != [2]int{tw, th} {
+						if mismatches.Add(1) < 20 {
+							t.Errorf("fx size of %v at edge %d, area %d is %v, fitSize gives %dx%d", sz, c[0], c[1], got[i], tw, th)
+						}
+					}
+					if tw*th > c[1] && (tw > 1 && th > 1) || max(tw, th) > max(c[0], max(sz[0], sz[1])) {
+						t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d exceeds a bound", sz, c[0], c[1], tw, th)
+					}
+					checked.Add(1)
+					if resize {
+						resized.Add(1)
+					}
 				}
-			}
-			if tw*th > c[1] && (tw > 1 && th > 1) || max(tw, th) > max(c[0], max(sz[0], sz[1])) {
-				t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d exceeds a bound", sz, c[0], c[1], tw, th)
-			}
-			checked++
-			if resize {
-				resized++
-			}
+			})
 		}
-	}
-	t.Logf("%d (size, bounds) pairs checked, %d of them resized, %d mismatches", checked, resized, mismatches)
+	})
+	t.Logf("%d (size, bounds) pairs checked, %d of them resized, %d mismatches", checked.Load(), resized.Load(), mismatches.Load())
 }
 
 // The sizing rows the plan names, through ImageMagick: sides round down, so
