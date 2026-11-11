@@ -33,29 +33,25 @@ const (
 	limitOpenFiles = "nofile"
 	limitProcesses = "nproc"
 
-	// sandboxCPUSeconds: the heaviest single process measured on the 12-CPU
-	// host was ImageMagick comparing a 4K video's 64 samples, 25 s of CPU.
-	// Times 4.1, the worst CPU ratio measured on a Raspberry Pi 5 (4K HEVC
-	// decode), times a safety margin of 2, rounded up.
+	// sandboxCPUSeconds is the heaviest measured single process, scaled to
+	// the slowest host with a safety margin (docs/measurements.md).
 	sandboxCPUSeconds = 210
-	// sandboxAddressSize: the largest address-space peak measured was 3.2 GiB
-	// (ImageMagick on a 64 MP frame; it aborts below 3.2 GiB), and ffmpeg's
-	// was 2.0 GiB with 28 threads. 8 GiB is 2.4 times the worst and leaves
-	// room for the per-thread arenas that grow with a host's CPU count.
+	// sandboxAddressSize is a multiple of the worst address-space peak
+	// measured, with room for the per-thread arenas that grow with a host's
+	// CPU count.
 	sandboxAddressSize = 8 << 30
 	// sandboxFileSize: ImageMagick's disk ceiling (4 GiB) stops it first;
 	// this is that plus a quarter, so it catches only a tool that ignores
 	// the policy.
 	sandboxFileSize = 5 << 30
-	// sandboxOpenFiles: the most descriptors sampled was 199, for a
-	// 64-frame animation; 1024 is five times that.
+	// sandboxOpenFiles is a multiple of the most descriptors measured.
 	sandboxOpenFiles = 1024
 	// processHeadroom is how many tasks beyond the user's current number a
-	// run may create; the most measured in one tool was 28 (ffmpeg). The
-	// limit counts every task of the real user, so it bounds forks relative
-	// to the moment the helper starts, and is a bound only where the user
-	// has nothing else running: a container with a dedicated uid. It is not
-	// enforced for root or CAP_SYS_RESOURCE.
+	// run may create, above the most measured in one tool. The limit counts
+	// every task of the real user, so it bounds forks relative to the moment
+	// the helper starts, and is a bound only where the user has nothing else
+	// running: a container with a dedicated uid. It is not enforced for root
+	// or CAP_SYS_RESOURCE.
 	processHeadroom = 512
 )
 

@@ -28,10 +28,8 @@ kind:frames:WxH` (`gif`, `gifu` for full-canvas frames, `webp`) adds an
 animation. `-list` prints the input names.
 
 Two hosts were used. The reference host is a 12-CPU x86_64 machine. The
-Raspberry Pi 5 figures come from the three Raspberry Pi 5 nodes of the first
-consumer's service, which runs in its low-memory configuration; the decision
-and its measurements are also in that consumer's repository, in
-`docs/plans/archive/2026-11-07_unified-pipeline.md` of `davars/winnow`.
+Raspberry Pi 5 figures come from three Raspberry Pi 5 nodes running the
+`LowMemory` profile, one request per 1536Mi pod.
 
 ## Caps and ceilings
 
@@ -89,8 +87,8 @@ times for 4K HEVC decode, and wall time 4.0 times for two 8000x8000 GIF frames
 on the Raspberry Pi 5.
 
 Decoder threads: an 8K 10-bit HLG source peaked at 1811 MiB with 4 ffmpeg
-threads and 1280 MiB with 2, for 28% more time. Sources above 4096x2160 are
-therefore sampled with 2 threads and smaller ones with 4. The HEVC decoder
+threads and 1280 MiB with 2, for 28% more time. Sources with more pixels than
+4096x2160 are therefore sampled with 2 threads and the rest with 4. The HEVC decoder
 holds about one frame per thread plus references.
 
 ## Sandbox limits
@@ -105,6 +103,17 @@ inputs on the reference host:
 - ffmpeg used 2.0 GiB, 9 s and 28 threads on 4K HEVC (decoder frame threads,
   the filter pool and the scaler's threads, which follow the host's CPU
   count).
+
+The values chosen, from those peaks:
+
+- CPU 210 s: the heaviest single process, 25 s, times 4.1 (the worst CPU
+  ratio measured on a Raspberry Pi 5, 4K HEVC decode), times a safety margin
+  of 2, rounded up.
+- Address space 8 GiB: 2.4 times the worst peak (3.2 GiB), leaving room for
+  the per-thread arenas that grow with a host's CPU count.
+- Open files 1024: five times the 199 measured.
+- Tasks: 512 beyond the user's current count, against 28 measured in one tool
+  (ffmpeg).
 - `RLIMIT_NPROC` counts every task of the real user, so it is set relative to
   the count when the helper starts and bounds forks only where the user has
   nothing else running, such as a container with its own uid; it is not
@@ -195,5 +204,15 @@ Video:
 - The seek runs are sequential: one process with all the seeks as separate
   inputs is faster but holds every decoder open at once (14 GB peak on 4K
   HEVC).
-- The select path against the seek path is measured in the comment of
-  `selectMaxPixels` in `media/op_video.go`.
+- `selectMaxPixels` (1e9 decoded pixels, the largest stream read once with a
+  select filter rather than once per seek) was measured on x86 with 8-bit
+  H.264 (veryfast, 250-frame GOPs, noisy test content), 15 and 16 samples,
+  edge 1024. Select is cheaper in wall and CPU time up to about 1.4e9 pixels
+  at 720p, 3.1e9 at 1080p and well beyond 4e9 (not reached) at 4K, and 5 to 20
+  times cheaper on short clips, where seeking pays an ffmpeg start for every
+  sample. The value is the lowest of the crossovers, rounded down, because
+  shorter GOPs make seeks cheaper and 10-bit HEVC was not measured. Both paths
+  are decode-bound, so their costs scale together with the decoder's speed and
+  the crossover in pixels should carry to a slower machine; a slower disk or a
+  startup cost that is larger relative to decoding would move it towards
+  seeking.

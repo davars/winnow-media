@@ -324,7 +324,9 @@ func sampleTimesMS(v videoInfo, maxFrames int) []int64 {
 }
 
 // ffmpegArgs returns the arguments every ffmpeg run starts with: no banner,
-// no stdin, errors only, and the allocation and filter-thread bounds.
+// no stdin, errors only, and the allocation and filter-thread bounds. The
+// decoder gets the same thread count (ffmpegThreadsFor), and ffprobe is run
+// with -threads 4 and the same -max_alloc.
 func ffmpegArgs(threads int) []string {
 	return []string{
 		"-hide_banner", "-nostdin", "-v", "error", "-y",
@@ -336,19 +338,8 @@ func ffmpegArgs(threads int) []string {
 // selectMaxPixels is the largest stream, in decoded pixels (frames times width
 // times height as stored), that is read once with a select filter rather than
 // once per seek. It is below the measured crossover, so that select is the
-// cheaper path wherever it is taken.
-//
-// Measured on x86 with 8-bit H.264 (veryfast, 250-frame GOPs, noisy test
-// content), 15 and 16 samples, edge 1024: select is cheaper in wall and CPU
-// time up to about 1.4e9 pixels at 720p, 3.1e9 at 1080p and well beyond 4e9
-// (not reached) at 4K, and 5 to 20 times cheaper on short clips, where
-// seeking pays an ffmpeg start for every sample. The value is the lowest of
-// the crossovers, rounded down, because shorter GOPs make seeks cheaper and
-// 10-bit HEVC was not measured. Both paths are decode-bound, so their costs
-// scale together with the decoder's speed and the crossover in pixels should
-// carry to a slower machine; a slower disk or a startup cost that is larger
-// relative to decoding would move it towards seeking. The other video
-// measurements are in docs/measurements.md.
+// cheaper path wherever it is taken; the measurement is in
+// docs/measurements.md.
 const selectMaxPixels int64 = 1_000_000_000
 
 // selectLimit is selectMaxPixels; tests set it to force a path.
@@ -465,8 +456,8 @@ func (v videoPlan) selectArgs(dec decoder, inputPath, expr string, frames int, s
 // slower of the stream's declared and average rates, since the declared rate
 // of a variable-rate stream overstates it and so shortens the margin. The
 // margin costs, on average, that many extra decoded frames for each sample,
-// and, at worst, one more GOP when a keyframe falls just inside it (measured
-// in docs/measurements.md).
+// and, at worst, one more GOP when a keyframe falls just inside it (see
+// docs/measurements.md).
 func (v videoPlan) seekMarginUS() int64 {
 	margin := int64(500_000)
 	rate := v.info.rate

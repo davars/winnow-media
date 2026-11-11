@@ -24,7 +24,10 @@ const (
 // one in effect. A Processor is safe for concurrent use.
 //
 // The paths an operation takes, path and dir, may be relative. An operation
-// moves no bytes beyond reading the source and writing into its dir. The
+// moves no bytes beyond reading the source and writing into its dir, where
+// hidden intermediates (dot-files) exist while a call runs and are removed
+// before it returns. The library sets no deadline on a whole operation: a
+// caller that wants one passes a context. The
 // guarantees that span the operations (the gate, the caps, the sandbox, the
 // policy) are in the package documentation.
 type Processor struct {
@@ -313,7 +316,9 @@ func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir st
 //
 // maxFrames 0 means 16; otherwise it must be 1 to 64. Errors, Usage and the
 // state of dir are as for Still; a file with more frames or pixels than the
-// caps allow gives an error wrapping ErrTooLarge.
+// caps allow gives an error wrapping ErrTooLarge. A GIF that ends between
+// blocks without its trailer is accepted, as ImageMagick does; one truncated
+// inside a block, or with a frame outside the logical screen, is refused.
 func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encoding, maxFrames int, dir string) ([]Image, Usage, error) {
 	var ec encoding
 	var frames int
