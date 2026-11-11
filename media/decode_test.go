@@ -699,64 +699,96 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 }
 
 // One Source encodes the same targets again and again, as a caller that keeps
-// it open does, and each variant (reduced for all targets, reduced for each
-// alone, not reduced) writes the same bytes and size every time.
-func TestRepeatedEncodesOfOneJPEGSourceAgree(t *testing.T) {
+// it open does, and every encode writes the same bytes and size as the first
+// encode of a fresh Source, which is made for each variant. For a JPEG the variants are reduced for all
+// targets, reduced for each alone and not reduced; for a TIFF, which is read
+// in full to learn whether it has alpha only when an encode resizes, the first
+// target fits, so that the full read is first made by a later encode.
+func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
-	targets := []Encoding{
+	jpegTargets := []Encoding{
 		{Format: WebP, Quality: 80, MaxEdge: 64, MaxArea: 64 * 64},
 		{Format: WebP, Quality: 80, MaxEdge: 256, MaxArea: 256 * 256},
 		{Format: WebP, Quality: 80, MaxEdge: 333, MaxArea: 30000},
 	}
+	tiffTargets := []Encoding{
+		{Format: WebP, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400},
+		{Format: WebP, Quality: 80, MaxEdge: 64, MaxArea: 64 * 64},
+		{Format: WebP, Quality: 80, MaxEdge: 40, MaxArea: 40 * 40},
+	}
+	type fixture struct {
+		name        string
+		orientation int
+		targets     []Encoding
+		write       func(t *testing.T, dir string) string
+	}
+	var fixtures []fixture
 	for _, sz := range [][2]int{{600, 401}, {1999, 1334}, {2048, 2048}} {
 		for _, orientation := range []int{0, 6} {
-			t.Run(fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation), func(t *testing.T) {
-				t.Parallel()
-				path := filepath.Join(t.TempDir(), "x.jpg")
-				magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+			fixtures = append(fixtures, fixture{fmt.Sprintf("jpeg %dx%d/o%d", sz[0], sz[1], orientation), orientation, jpegTargets,
+				func(t *testing.T, dir string) string {
+					path := filepath.Join(dir, "x.jpg")
+					magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+					return path
+				}})
+		}
+	}
+	fixtures = append(fixtures, fixture{"tiff 16-bit with alpha and a profile", 0, tiffTargets, func(t *testing.T, dir string) string {
+		path := filepath.Join(dir, "x.tif")
+		magick(t, real, "-seed", "7", "-size", "160x120", "plasma:fractal", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel",
+			"-depth", "16", "-profile", writeSRGBProfile(t), "-profile", writeAdobeProfile(t, dir), path)
+		return path
+	}})
+	for _, fx := range fixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			t.Parallel()
+			path := fx.write(t, t.TempDir())
+			type result struct {
+				bytes []byte
+				size  [2]int
+			}
+			open := func() *Source {
 				env, _ := sourceEnv(t)
-				src := openSource(t, env, path, Hints{Orientation: orientation})
-				type result struct {
-					bytes []byte
-					size  [2]int
+				return openSource(t, env, path, Hints{Orientation: fx.orientation})
+			}
+			encode := func(src *Source, reduce bool, ts ...Encoding) []result {
+				t.Helper()
+				src.reduce = reduce
+				out, err := src.Encode(context.Background(), 0, ts...)
+				if err != nil {
+					t.Fatal(err)
 				}
-				encode := func(reduce bool, ts ...Encoding) []result {
-					t.Helper()
-					src.reduce = reduce
-					out, err := src.Encode(context.Background(), 0, ts...)
-					if err != nil {
-						t.Fatal(err)
-					}
-					res := make([]result, len(out))
-					for i, a := range out {
-						res[i] = result{mustReadFile(t, a.Path), [2]int{a.Width, a.Height}}
-						a.Cleanup()
-					}
-					return res
+				res := make([]result, len(out))
+				for i, a := range out {
+					res[i] = result{mustReadFile(t, a.Path), [2]int{a.Width, a.Height}}
+					a.Cleanup()
 				}
-				var first map[string][]result
-				for round := range 3 {
-					got := map[string][]result{"all": encode(true, targets...)}
-					for i, target := range targets {
-						got[fmt.Sprintf("alone %d", i)] = encode(true, target)
-					}
-					got["plain"] = encode(false, targets...)
-					if first == nil {
-						first = got
-						continue
-					}
-					for variant, want := range first {
-						for i := range want {
-							if got[variant][i].size != want[i].size || !bytes.Equal(got[variant][i].bytes, want[i].bytes) {
-								t.Errorf("round %d, %s, target %d: %v, %d bytes; the first round gave %v, %d bytes", round, variant, i,
-									got[variant][i].size, len(got[variant][i].bytes), want[i].size, len(want[i].bytes))
-							}
+				return res
+			}
+			variants := func(source func() *Source) map[string][]result {
+				got := map[string][]result{}
+				// The first target alone, which fits for a TIFF, comes first.
+				for i, target := range fx.targets {
+					got[fmt.Sprintf("alone %d", i)] = encode(source(), true, target)
+				}
+				got["all"] = encode(source(), true, fx.targets...)
+				got["plain"] = encode(source(), false, fx.targets...)
+				return got
+			}
+			want := variants(open)
+			src := open()
+			for round := range 3 {
+				for variant, got := range variants(func() *Source { return src }) {
+					for i := range got {
+						if got[i].size != want[variant][i].size || !bytes.Equal(got[i].bytes, want[variant][i].bytes) {
+							t.Errorf("round %d, %s, target %d: %v, %d bytes; a fresh Source gave %v, %d bytes", round, variant, i,
+								got[i].size, len(got[i].bytes), want[variant][i].size, len(want[variant][i].bytes))
 						}
 					}
 				}
-			})
-		}
+			}
+		})
 	}
 }
 
