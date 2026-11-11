@@ -35,26 +35,44 @@ const hdrToneMap = "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709," +
 	"tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
 
 // videoFilter returns the -vf chain for sampling a frame, or "" when the
-// frame is delivered as decoded. A reduced frame is scaled to rw x rh. HDR is
-// tone-mapped, and every other frame is otherwise sized by the encode stage,
-// like any other image.
+// frame is delivered as decoded. The part of the frame crop names, if any, is
+// cut first. A reduced frame is scaled to rw x rh. HDR is tone-mapped, and
+// every other frame is otherwise sized by the encode stage, like any other
+// image.
 //
 // HDR is scaled before it is tone-mapped: the tone-map runs in 32-bit float
 // and its memory grows with the frame, so it is cheaper on the small target.
 // The scale writes 4:4:4 because the target size can be odd, and zscale
 // rejects a chroma-subsampled frame whose dimensions are not even; the 16-bit
-// format keeps precision for the linearization.
-func videoFilter(hdr, reduced bool, rw, rh int) string {
+// format keeps precision for the linearization. A cropped frame can have odd
+// dimensions whatever its scale, so an HDR frame with a crop always takes that
+// route.
+func videoFilter(hdr, reduced bool, rw, rh int, crop region) string {
 	scale := fmt.Sprintf("scale=%d:%d:flags=lanczos", rw, rh)
+	cut := ""
+	if !crop.zero() {
+		cut = fmt.Sprintf("crop=%d:%d:%d:%d:exact=1", crop.width, crop.height, crop.x, crop.y)
+	}
+	chain := func(parts ...string) string {
+		var kept []string
+		for _, p := range parts {
+			if p != "" {
+				kept = append(kept, p)
+			}
+		}
+		return strings.Join(kept, ",")
+	}
 	switch {
 	case hdr && reduced:
-		return scale + ",format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
+		return chain(cut, scale, "format=yuv444p16le", hdrToneMap, "format=yuv444p")
+	case hdr && cut != "":
+		return chain(cut, "format=yuv444p16le", hdrToneMap, "format=yuv444p")
 	case hdr:
 		return hdrToneMap + ",format=yuv420p"
 	case reduced:
-		return scale
+		return chain(cut, scale)
 	}
-	return ""
+	return cut
 }
 
 // videoReductionMargin is how many times the largest target, in each
@@ -364,6 +382,9 @@ type videoPlan struct {
 	// selectFrames is set when the stream is short enough, in decoded pixels,
 	// to be read once with a select filter instead of once per seek.
 	selectFrames bool
+	// region is the part of the frame the samples show; the zero region is
+	// all of it.
+	region region
 }
 
 // probeChecked probes the video and refuses it if it exceeds a cap. It is the
@@ -381,7 +402,7 @@ func (e Env) probeChecked(ctx context.Context, dec decoder, inputPath string) (v
 // that will be made from them, with videoReductionMargin to spare for SDR and
 // none for HDR.
 func newVideoPlan(info videoInfo, decode encoding) videoPlan {
-	w, h := info.upright()
+	w, h := decode.subject(info.upright())
 	tw, th, resize := fitSize(w, h, decode.maxEdge, decode.maxArea)
 	hdr := isHDRTransfer(info.transfer)
 	rw, rh, reduced := tw, th, resize
@@ -390,7 +411,8 @@ func newVideoPlan(info videoInfo, decode encoding) videoPlan {
 	}
 	return videoPlan{
 		info:         info,
-		filter:       videoFilter(hdr, reduced, rw, rh),
+		filter:       videoFilter(hdr, reduced, rw, rh, decode.region),
+		region:       decode.region,
 		fw:           rw,
 		fh:           rh,
 		reduced:      reduced,
@@ -403,6 +425,9 @@ func newVideoPlan(info videoInfo, decode encoding) videoPlan {
 // planned for q: the same frames, or for SDR frames at least as large, whose
 // margin is then at least q's.
 func (p videoPlan) covers(q videoPlan) bool {
+	if p.region != q.region {
+		return false
+	}
 	if p.fw == q.fw && p.fh == q.fh && p.reduced == q.reduced {
 		return true
 	}
@@ -412,12 +437,13 @@ func (p videoPlan) covers(q videoPlan) bool {
 // source returns what the encode of enc needs to know about the frames. A
 // reduced frame is sized from the source's own size, not its own, since a
 // reduction rounds each side separately and the output must not depend on
-// which of several encodings the frame was reduced for.
+// which of several encodings the frame was reduced for. Frames cut to a
+// region are sized exactly from the region's size.
 func (v videoPlan) source(enc encoding) encodeSource {
-	if !v.reduced {
+	if !v.reduced && v.region.zero() {
 		return encodeSource{}
 	}
-	w, h := v.info.upright()
+	w, h := enc.subject(v.info.upright())
 	tw, th, _ := fitSize(w, h, enc.maxEdge, enc.maxArea)
 	return encodeSource{width: tw, height: th}
 }

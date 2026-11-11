@@ -115,7 +115,8 @@ func (s *Source) decodeVideo(ctx context.Context, encs []encoding) error {
 	w, h := v.info.upright()
 	decode, best := encs[0], 0
 	for _, enc := range encs {
-		tw, th, _ := fitSize(w, h, enc.maxEdge, enc.maxArea)
+		sw, sh := enc.subject(w, h)
+		tw, th, _ := fitSize(sw, sh, enc.maxEdge, enc.maxArea)
 		if tw*th > best {
 			decode, best = enc, tw*th
 		}
