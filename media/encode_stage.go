@@ -50,8 +50,8 @@ type encodeSource struct {
 	// differ from the one computed from the source by a pixel.
 	width, height int
 	// crop, when set, is cut from each frame once it is upright, before it is
-	// sized. upright is the size the frames must have at that point; the
-	// run reports the size it found and is refused if it differs.
+	// sized. upright is the size the frames must have at that point, or zero
+	// when the header read does not settle it.
 	crop    region
 	upright [2]int
 }
@@ -172,8 +172,11 @@ type encodeCheck struct {
 	// signed says the run reports a pixel signature with each frame (see
 	// reportFormat).
 	signed bool
-	// upright is the upright size every frame must report before it is
-	// cropped; the zero value means the run crops nothing and reports none.
+	// crop is the region the run cuts, and upright the upright size every
+	// frame must report before it is cropped. The zero crop means the run cuts
+	// nothing and reports none. A crop with no upright accepts any size the
+	// crop lies inside.
+	crop    region
 	upright [2]int
 }
 
@@ -279,9 +282,11 @@ func frameOps(f encodeFrame, src encodeSource, enc encoding) []string {
 		args = append(args, "-auto-orient")
 	}
 	if !src.crop.zero() {
-		// ImageMagick clips a crop outside the frame without failing, so the
-		// run reports the size it cropped.
-		args = append(args, "-print", uprightPrefix+"%w|%h\\n",
+		// -crop counts from the virtual canvas, whose origin a page offset in
+		// the file moves, so the offset goes first. ImageMagick clips a crop
+		// outside the frame without failing, so the run reports the size it
+		// cropped.
+		args = append(args, "+repage", "-print", uprightPrefix+"%w|%h\\n",
 			"-crop", fmt.Sprintf("%dx%d+%d+%d", src.crop.width, src.crop.height, src.crop.x, src.crop.y), "+repage")
 	}
 	if f.convertTo != "" {
@@ -380,11 +385,11 @@ func splitUpright(out []byte) ([]byte, [][2]int, error) {
 	return []byte(strings.Join(report, "\n")), sizes, nil
 }
 
-// checkUpright returns an error unless the run printed the upright size c
-// expects once for each of frames reported frames, or nothing when c expects
-// no crop.
+// checkUpright returns an error unless the run printed, once for each of
+// frames reported frames, an upright size that c.upright equals (when set) and
+// c.crop lies inside, or nothing when c crops nothing.
 func (c encodeCheck) checkUpright(got [][2]int, frames int) error {
-	if c.upright == [2]int{} {
+	if c.crop.zero() {
 		if len(got) > 0 {
 			return fmt.Errorf("encode reported %d upright sizes for a run that crops nothing", len(got))
 		}
@@ -394,9 +399,12 @@ func (c encodeCheck) checkUpright(got [][2]int, frames int) error {
 		return fmt.Errorf("encode reported %d upright sizes for %d frames", len(got), frames)
 	}
 	for i, size := range got {
-		if size != c.upright {
+		if c.upright != [2]int{} && size != c.upright {
 			return fmt.Errorf("magick: frame %d is %dx%d upright, the region was checked against %dx%d",
 				i, size[0], size[1], c.upright[0], c.upright[1])
+		}
+		if err := c.crop.check(size[0], size[1]); err != nil {
+			return fmt.Errorf("magick: frame %d: %w", i, err)
 		}
 	}
 	return nil

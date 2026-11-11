@@ -80,12 +80,12 @@ func TestStillCapRefusalNamesBothSizes(t *testing.T) {
 	t.Parallel()
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{10000, 7308}, upright: [2]int{10000, 7308}}
 	// A target of 9000 reduces by nothing: 8*2*9000/10000 rounds above 8.
-	err := checkStillSize(s.stored, s.decodedSize(region{}, []encoding{{maxEdge: 9000, maxArea: 81_000_000}}))
+	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 9000, maxArea: 81_000_000}}))
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "10000x7308") {
 		t.Fatalf("err = %v", err)
 	}
 	big := &Source{jpeg: true, reduce: true, stored: [2]int{20000, 16000}, upright: [2]int{20000, 16000}}
-	err = checkStillSize(big.stored, big.decodedSize(region{}, []encoding{{maxEdge: 5000, maxArea: 25_000_000}}))
+	err = checkStillSize(big.stored, big.decodedSize([]encoding{{maxEdge: 5000, maxArea: 25_000_000}}))
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "stored 20000x16000") {
 		t.Fatalf("err = %v, want both sizes", err)
 	}
@@ -108,7 +108,7 @@ func TestStillSideCapAppliesAfterReduction(t *testing.T) {
 	}
 	// Reduced, but still over the side cap.
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{60000, 100}, upright: [2]int{60000, 100}}
-	err := checkStillSize(s.stored, s.decodedSize(region{}, []encoding{{maxEdge: 20000, maxArea: 1 << 40}}))
+	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 20000, maxArea: 1 << 40}}))
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -175,13 +175,13 @@ func TestDecodedSizeIsWhatTheHintDecodes(t *testing.T) {
 		for _, edge := range []int{256, 600, 1024, 2048} {
 			s := &Source{jpeg: true, reduce: true, stored: sz, upright: sz}
 			encs := []encoding{{maxEdge: edge, maxArea: edge * edge}}
-			ops, _ := s.reduction(region{}, encs)
+			ops, _ := s.reduction(encs)
 			if ops == nil {
 				continue
 			}
 			args := append(append([]string{}, ops...), "jpeg:"+path, "-format", "%w %h", "info:")
 			got := strings.Fields(string(magick(t, env, args...)))
-			want := s.decodedSize(region{}, encs)
+			want := s.decodedSize(encs)
 			if got[0] != fmt.Sprint(want[0]) || got[1] != fmt.Sprint(want[1]) {
 				t.Errorf("%dx%d at %d: decoded %v, decodedSize %v", sz[0], sz[1], edge, got, want)
 			}
@@ -339,7 +339,7 @@ func TestPingedDecodeSizeAgreesWithDecodedSize(t *testing.T) {
 			src := openSource(t, env, path, Hints{Still: true})
 			for _, edge := range []int{256, 1024} {
 				encs := []encoding{{maxEdge: edge, maxArea: edge * edge}}
-				ops, _ := src.reduction(region{}, encs)
+				ops, _ := src.reduction(encs)
 				if ops == nil {
 					t.Fatalf("edge %d: no reduction chosen", edge)
 				}
@@ -347,7 +347,7 @@ func TestPingedDecodeSizeAgreesWithDecodedSize(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if want := src.decodedSize(region{}, encs); got != want {
+				if want := src.decodedSize(encs); got != want {
 					t.Errorf("edge %d: ping %v, decodedSize %v", edge, got, want)
 				}
 			}

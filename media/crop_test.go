@@ -115,8 +115,6 @@ func TestRegionIsRefusedWithoutRunningATool(t *testing.T) {
 	}
 }
 
-// The crop follows the orientation and precedes the conversion and the
-// resize, so that pixel work runs on the region only.
 func TestStillImageRefusesARegionOutsideTheFrame(t *testing.T) {
 	env, _ := sourceEnv(t)
 	dir := t.TempDir()
@@ -129,6 +127,8 @@ func TestStillImageRefusesARegionOutsideTheFrame(t *testing.T) {
 	}
 }
 
+// The crop follows the orientation and precedes the conversion and the
+// resize, so that pixel work runs on the region only.
 func TestEncodeArgsCropAfterOrientation(t *testing.T) {
 	src := encodeSource{orientation: "RightTop", crop: region{4, 6, 30, 20}, upright: [2]int{50, 60}, width: 15, height: 10}
 	frame := encodeFrame{input: "pam:/f", convertTo: "/srgb.icc", assign: "/own.icc"}
@@ -137,7 +137,7 @@ func TestEncodeArgsCropAfterOrientation(t *testing.T) {
 	want := []string{
 		"pam:/f",
 		"-orient", "RightTop", "-auto-orient", "-orient", "TopLeft",
-		"-print", `upright|%w|%h\n`, "-crop", "30x20+4+6", "+repage",
+		"+repage", "-print", `upright|%w|%h\n`, "-crop", "30x20+4+6", "+repage",
 		"-profile", "/own.icc", "-profile", "/srgb.icc",
 		"-filter", "Lanczos", "-resize", "15x10!",
 		"-strip", "-depth", "8", "-quality", "80",
@@ -152,7 +152,7 @@ func TestEncodeArgsCropAfterOrientation(t *testing.T) {
 func TestEncodeArgsCropPrecedesTheFitsReturn(t *testing.T) {
 	src := encodeSource{crop: region{1, 2, 3, 4}, upright: [2]int{9, 9}}
 	got := frameOps(encodeFrame{input: "pam:/f", fits: true}, src, webpEncoding(100))
-	want := []string{"-auto-orient", "-print", `upright|%w|%h\n`, "-crop", "3x4+1+2", "+repage"}
+	want := []string{"-auto-orient", "+repage", "-print", `upright|%w|%h\n`, "-crop", "3x4+1+2", "+repage"}
 	if !slices.Equal(got, want) {
 		t.Errorf("ops %q, want %q", got, want)
 	}
@@ -243,7 +243,7 @@ func TestRegionIsCutFromTheUprightPicture(t *testing.T) {
 // The output is the region fitted to the bounds, and its pixels are those of
 // the upright frame cut and resized by ImageMagick directly.
 func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env, calls := sourceEnv(t)
 	path := heicFixtureFile(t, "gradient-righttop")
 	for _, c := range []struct {
 		name   string
@@ -256,6 +256,7 @@ func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
+			before := len(calls())
 			img, err := env.stillRegion(context.Background(), c.r, decoder{"magick", "heic"}, path, pngEncoding(), dir)
 			if err != nil {
 				t.Fatal(err)
@@ -265,6 +266,13 @@ func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
 			}
 			if img.Width != c.w || img.Height != c.h {
 				t.Errorf("output is %dx%d, want fitSize of the region, %dx%d", img.Width, img.Height, c.w, c.h)
+			}
+			if c.resize == "" {
+				for _, call := range calls()[before:] {
+					if slices.Contains(call, "-write") && slices.Contains(call, "-resize") {
+						t.Errorf("a region within the bounds was resized: %q", call)
+					}
+				}
 			}
 			ref := filepath.Join(t.TempDir(), "ref.png")
 			args := []string{
@@ -529,5 +537,56 @@ func TestRegionDoesNotRelaxTheReturnedPixelCap(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("the refused call left %d files", len(entries))
+	}
+}
+
+// A PNG whose orientation -ping cannot see is turned by its decode. The run
+// reports the size it turned to, and a region inside that frame is cut from
+// it, as for a still WebP whose orientation only its decode reveals.
+func TestRegionOfAPNGWhoseOrientationThePingMisses(t *testing.T) {
+	env := requireMagick(t)
+	for _, file := range []string{"exif-after-idat.png", "ztxt-exif.png", "ztxt-after-idat.png"} {
+		t.Run(file, func(t *testing.T) {
+			path := writeFile(t, "content", mustRead(t, filepath.Join("testdata", "orient", file)))
+			var uw, uh int
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(magick(t, env, path+"[0]", "-auto-orient", "-format", "%w %h", "info:"))), "%d %d", &uw, &uh); err != nil {
+				t.Fatal(err)
+			}
+			r := region{0, 0, 1, 1}
+			if _, err := env.stillRegion(context.Background(), r, decoder{"magick", "png"}, path, pngEncoding(), t.TempDir()); err != nil {
+				t.Errorf("region %+v of the %dx%d upright frame: %v", r, uw, uh, err)
+			}
+			if _, err := env.stillRegion(context.Background(), region{0, 0, uw, uh}, decoder{"magick", "png"}, path, pngEncoding(), t.TempDir()); err != nil {
+				t.Errorf("the whole %dx%d upright frame: %v", uw, uh, err)
+			}
+			dir := t.TempDir()
+			_, err := env.stillRegion(context.Background(), region{uw - 1, 0, 2, 2}, decoder{"magick", "png"}, path, pngEncoding(), dir)
+			if err == nil || !strings.Contains(err.Error(), "outside") {
+				t.Errorf("err = %v, want a refusal that the region is outside the %dx%d frame", err, uw, uh)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Errorf("the refused call left %d files", len(entries))
+			}
+		})
+	}
+}
+
+// ImageMagick crops in the coordinates of the virtual canvas, which a PNG's
+// oFFs chunk (or a TIFF's position) offsets from the pixels. The region is in
+// the picture's own pixels, as the output without a region shows them.
+func TestRegionIgnoresAPageOffset(t *testing.T) {
+	env, _ := sourceEnv(t)
+	path := filepath.Join(t.TempDir(), "offset.png")
+	magick(t, env, "-size", "400x300", "gradient:red-blue", "-page", "1000x1000+30+20", path)
+	r := region{100, 50, 200, 200}
+	dir := t.TempDir()
+	img, err := env.stillRegion(context.Background(), r, decoder{"magick", "png"}, path, pngEncoding(), dir)
+	if err != nil {
+		return // a refusal is safe; wrong pixels are not
+	}
+	ref := filepath.Join(t.TempDir(), "ref.png")
+	magick(t, env, path, "+repage", "-crop", sizeAt(r), "+repage", "-filter", "Lanczos", "-resize", "100x100!", "-strip", "-depth", "8", ref)
+	if d := meanAbsoluteDifference(t, env, filepath.Join(dir, img.Name), ref); d > 0.001 {
+		t.Errorf("the %dx%d output differs from the region of the picture by %g", img.Width, img.Height, d)
 	}
 }

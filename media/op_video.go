@@ -51,28 +51,28 @@ func videoFilter(hdr, reduced bool, rw, rh int, crop region) string {
 	scale := fmt.Sprintf("scale=%d:%d:flags=lanczos", rw, rh)
 	cut := ""
 	if !crop.zero() {
-		cut = fmt.Sprintf("crop=%d:%d:%d:%d:exact=1", crop.width, crop.height, crop.x, crop.y)
-	}
-	chain := func(parts ...string) string {
-		var kept []string
-		for _, p := range parts {
-			if p != "" {
-				kept = append(kept, p)
-			}
-		}
-		return strings.Join(kept, ",")
+		cut = cropFilter(crop) + ","
 	}
 	switch {
 	case hdr && reduced:
-		return chain(cut, scale, "format=yuv444p16le", hdrToneMap, "format=yuv444p")
+		return cut + scale + ",format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
 	case hdr && cut != "":
-		return chain(cut, "format=yuv444p16le", hdrToneMap, "format=yuv444p")
+		return cut + "format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
 	case hdr:
 		return hdrToneMap + ",format=yuv420p"
 	case reduced:
-		return chain(cut, scale)
+		return cut + scale
 	}
-	return cut
+	return strings.TrimSuffix(cut, ",")
+}
+
+// cropFilter cuts r. ffmpeg's crop moves a region that overruns the frame back
+// inside it without failing, so the width is made invalid, which fails the
+// run, for a frame that does not hold the region; the filter is configured
+// again for each frame size a stream presents.
+func cropFilter(r region) string {
+	return fmt.Sprintf(`crop=w='if(gte(in_w\,%d)*gte(in_h\,%d)\,%d\,-1)':h=%d:x=%d:y=%d:exact=1`,
+		r.x+r.width, r.y+r.height, r.width, r.height, r.x, r.y)
 }
 
 // videoReductionMargin is how many times the largest target, in each
@@ -773,7 +773,7 @@ func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 	}
 	pattern := strings.ReplaceAll(filepath.Join(s.dir, ".enc-"), "%", "%%") + "%d" + s.enc.ext
 	encoded, err := s.env.runEncode(ctx, encodeArgs(batch, s.src, s.enc, encodeOutput{kind: outputFiles, path: pattern}),
-		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch)), signed: true, upright: s.src.upright})
+		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch)), signed: true, crop: s.src.crop, upright: s.src.upright})
 	if err != nil {
 		return fmt.Errorf("encoding frames %d to %d: %w", s.seen, s.seen+len(batch)-1, err)
 	}

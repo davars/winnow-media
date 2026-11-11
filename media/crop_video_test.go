@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,7 +11,7 @@ import (
 
 func TestVideoFilterWithARegion(t *testing.T) {
 	crop := region{10, 6, 61, 45}
-	const cut = "crop=61:45:10:6:exact=1"
+	const cut = `crop=w='if(gte(in_w\,71)*gte(in_h\,51)\,61\,-1)':h=45:x=10:y=6:exact=1`
 	for _, c := range []struct {
 		name         string
 		hdr, reduced bool
@@ -44,7 +45,7 @@ func TestVideoPlanReducesTheRegion(t *testing.T) {
 	if !plan.reduced || plan.fw != 40 || plan.fh != 30 {
 		t.Errorf("plan reduces to %dx%d (reduced %v), want 40x30, twice the 20x15 target", plan.fw, plan.fh, plan.reduced)
 	}
-	want := "crop=400:300:100:50:exact=1,scale=40:30:flags=lanczos"
+	want := cropFilter(r) + ",scale=40:30:flags=lanczos"
 	if plan.filter != want {
 		t.Errorf("filter = %q, want %q", plan.filter, want)
 	}
@@ -55,7 +56,7 @@ func TestVideoPlanReducesTheRegion(t *testing.T) {
 	// A region that needs no reduction is delivered as cut, and sized exactly.
 	enc.maxEdge, enc.maxArea = 4000, 4000*4000
 	plan = newVideoPlan(info, r, enc)
-	if plan.reduced || plan.fw != 400 || plan.fh != 300 || plan.filter != "crop=400:300:100:50:exact=1" {
+	if plan.reduced || plan.fw != 400 || plan.fh != 300 || plan.filter != cropFilter(r) {
 		t.Errorf("plan = %+v, want the region delivered unscaled", plan)
 	}
 	if got := plan.source(enc); got != (encodeSource{width: 400, height: 300}) {
@@ -79,8 +80,8 @@ func TestVideoRunCropsBeforeScalingAndToneMapping(t *testing.T) {
 		trc  string
 		want string
 	}{
-		{"SDR", "", "crop=40:30:10:6:exact=1,scale=16:12:flags=lanczos"},
-		{"HDR", `,"color_transfer":"arib-std-b67"`, "crop=40:30:10:6:exact=1,scale=8:6:flags=lanczos,format=yuv444p16le," + hdrToneMap + ",format=yuv444p"},
+		{"SDR", "", cropFilter(region{10, 6, 40, 30}) + ",scale=16:12:flags=lanczos"},
+		{"HDR", `,"color_transfer":"arib-std-b67"`, cropFilter(region{10, 6, 40, 30}) + ",scale=8:6:flags=lanczos,format=yuv444p16le," + hdrToneMap + ",format=yuv444p"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			stub := newVideoStub()
@@ -322,5 +323,43 @@ func TestVideoFramesWithoutARegionAreSampledAsBefore(t *testing.T) {
 	plan := newVideoPlan(info, region{}, encoding{maxEdge: 20, maxArea: 400})
 	if plan.filter != "scale=40:30:flags=lanczos" || !plan.region.zero() {
 		t.Errorf("plan = %+v", plan)
+	}
+}
+
+// ffmpeg's crop moves a region that overruns the frame back inside it rather
+// than failing, so a stream whose frames shrink after the probe must not yield
+// a region that was checked only against the probe's size.
+func TestVideoRegionOutsideAFrameThatShrankIsRefused(t *testing.T) {
+	env := requireFFmpeg(t)
+	segment := func(name, src string, offset string) string {
+		path := filepath.Join(t.TempDir(), name)
+		if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+			"-f", "lavfi", "-i", src, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+			"-output_ts_offset", offset, "-f", "mpegts", path); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	// 200x100 for two seconds, then 160x100 with a lime band on its left.
+	wide := segment("a.ts", "color=red:size=200x100:rate=5:duration=2", "0")
+	narrow := segment("b.ts", "color=blue:size=160x100:rate=5:duration=2,drawbox=x=0:y=0:w=60:h=100:color=lime:t=fill", "2")
+	path := filepath.Join(t.TempDir(), "input")
+	if err := os.WriteFile(path, []byte(wide+narrow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 400, maxArea: 400 * 400}
+	dir := t.TempDir()
+	images, err := env.videoFramesPicked(context.Background(), region{100, 0, 100, 50}, unnamedVideoDecoder, path, enc,
+		func(videoInfo) ([]int64, error) { return []int64{3000}, nil }, dir)
+	if err == nil {
+		var got [3]int
+		if len(images) > 0 {
+			got = pixelRGB(t, env, filepath.Join(dir, images[0].Name))
+		}
+		t.Errorf("a region past the 160-pixel frame gave %d images (first about %v)", len(images), got)
 	}
 }
