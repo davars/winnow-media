@@ -67,11 +67,11 @@ func TestEveryFFmpegRunCarriesTheInputBounds(t *testing.T) {
 			return encodeWebPPair(e, ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 64, 200, 80)
 		},
 		"videoFrames": func(e Env, dir string) error {
-			_, err := e.videoFrames(ctx, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 5, dir)
+			_, err := e.videoFrames(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 5, dir)
 			return err
 		},
 		"videoFrameRun": func(e Env, dir string) error {
-			_, err := e.videoFrameRun(ctx, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 0, 3, dir)
+			_, err := e.videoFrameRun(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 100, maxArea: 10000}, 0, 3, dir)
 			return err
 		},
 	}
@@ -170,7 +170,7 @@ func TestVideoOpenStagesSamplesInTheRequestedScratch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer src.Close()
-	_, _ = src.encode(context.Background(), 0, []encoding{{format: WebP, ext: ".webp", quality: 80, maxEdge: 200, maxArea: 200 * 200}})
+	_, _ = src.encode(context.Background(), region{}, 0, []encoding{{format: WebP, ext: ".webp", quality: 80, maxEdge: 200, maxArea: 200 * 200}})
 	if len(stub.runs) == 0 {
 		t.Fatal("no ffmpeg run")
 	}
@@ -386,7 +386,7 @@ func TestVideoSamplesKeepTheDecodersDepth(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := t.TempDir()
-			images, err := env.videoFrames(context.Background(), dec, c.path, encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000}, 2, out)
+			images, err := env.videoFrames(context.Background(), region{}, dec, c.path, encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000}, 2, out)
 			if err != nil || len(images) == 0 {
 				t.Fatalf("images = %v, %v", images, err)
 			}
@@ -420,7 +420,7 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 	c := withRunCounts(env)
 	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 256, maxArea: 256 * 256}
 	out := t.TempDir()
-	images, err := c.videoFrames(context.Background(), sniffedVideoDecoder(src), src, enc, 2, out)
+	images, err := c.videoFrames(context.Background(), region{}, sniffedVideoDecoder(src), src, enc, 2, out)
 	if err != nil || len(images) == 0 {
 		t.Fatalf("images = %v, %v", images, err)
 	}
@@ -694,7 +694,7 @@ func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
 	c := withRunCounts(env)
 	enc := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 40, maxArea: 40 * 40}
 	dec := sniffedVideoDecoder(src)
-	images, err := c.videoFrames(context.Background(), dec, src, enc, 2, t.TempDir())
+	images, err := c.videoFrames(context.Background(), region{}, dec, src, enc, 2, t.TempDir())
 	if err != nil || len(images) == 0 {
 		t.Fatalf("images = %v, %v", images, err)
 	}
@@ -887,7 +887,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		"VideoFrames": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
-				images, err := env.videoFrames(context.Background(), sniffedVideoDecoder(src), src, enc2, 15, dir)
+				images, err := env.videoFrames(context.Background(), region{}, sniffedVideoDecoder(src), src, enc2, 15, dir)
 				return sampled{images, readDir(t, dir)}, err
 			}
 			images, _, err := p.VideoFrames(context.Background(), src, enc, 15, dir)
@@ -897,7 +897,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			dir := t.TempDir()
 			times := []int64{0, 67, 167, 300, 1033, 1200, 1250, 1900}
 			if !processable(src) {
-				images, err := env.videoFramesPicked(context.Background(), sniffedVideoDecoder(src), src, enc2,
+				images, err := env.videoFramesPicked(context.Background(), region{}, sniffedVideoDecoder(src), src, enc2,
 					func(videoInfo) ([]int64, error) { return times, nil }, dir)
 				return sampled{images, readDir(t, dir)}, err
 			}
@@ -907,7 +907,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		"VideoFrameRun": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
-				images, err := env.videoFrameRun(context.Background(), sniffedVideoDecoder(src), src, enc2, 500, 4, dir)
+				images, err := env.videoFrameRun(context.Background(), region{}, sniffedVideoDecoder(src), src, enc2, 500, 4, dir)
 				return sampled{images, readDir(t, dir)}, err
 			}
 			images, _, err := p.VideoFrameRun(context.Background(), src, enc, 500, 4, dir)
@@ -1039,10 +1039,10 @@ func TestSelectIsChosenByDecodedPixelsOnly(t *testing.T) {
 					_ = encodeWebPPair(e, ctx, "/in.mov", filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 32, 64, 80)
 				},
 				"videoFrames": func(e Env, dir string) {
-					_, _ = e.videoFrames(ctx, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 5, dir)
+					_, _ = e.videoFrames(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 5, dir)
 				},
 				"videoFrameRun": func(e Env, dir string) {
-					_, _ = e.videoFrameRun(ctx, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 0, 3, dir)
+					_, _ = e.videoFrameRun(ctx, region{}, decoder{"ffmpeg", "mov"}, "/in.mov", encoding{ext: ".webp", maxEdge: 50, maxArea: 2500}, 0, 3, dir)
 				},
 			}
 			for name, run := range entries {
@@ -1132,7 +1132,7 @@ func (e Env) planVideo(ctx context.Context, dec decoder, inputPath string, decod
 	if err != nil {
 		return videoPlan{}, err
 	}
-	return newVideoPlan(info, decode), nil
+	return newVideoPlan(info, region{}, decode), nil
 }
 
 // encodeWebPPair opens a video and encodes it at two sizes of animated
@@ -1161,6 +1161,6 @@ func encodeWebPPair(e Env, ctx context.Context, inputPath, smallPath, largePath 
 	webp := func(edge int) encoding {
 		return encoding{format: WebP, ext: ".webp", quality: quality, maxEdge: edge, maxArea: edge * edge}
 	}
-	_, err = src.encode(ctx, 0, []encoding{webp(sizeSmall), webp(sizeLarge)})
+	_, err = src.encode(ctx, region{}, 0, []encoding{webp(sizeSmall), webp(sizeLarge)})
 	return err
 }

@@ -141,7 +141,7 @@ func (p *Processor) VideoFramesAt(ctx context.Context, path string, enc Encoding
 			return nil
 		},
 		func(env Env, in admitted) ([]Image, error) {
-			return env.videoFramesPicked(ctx, in.decoder, in.path, ec, func(info videoInfo) ([]int64, error) {
+			return env.videoFramesPicked(ctx, region{}, in.decoder, in.path, ec, func(info videoInfo) ([]int64, error) {
 				for _, t := range times {
 					if err := checkSeekTime(info, t); err != nil {
 						return nil, err
@@ -182,7 +182,7 @@ func (p *Processor) VideoFrameRun(ctx context.Context, path string, enc Encoding
 			return nil
 		},
 		func(env Env, in admitted) ([]Image, error) {
-			return env.videoFrameRun(ctx, in.decoder, in.path, ec, startMS, count, in.dir)
+			return env.videoFrameRun(ctx, region{}, in.decoder, in.path, ec, startMS, count, in.dir)
 		})
 }
 
@@ -218,7 +218,7 @@ func (p *Processor) AnimationFramesAt(ctx context.Context, path string, enc Enco
 			return nil
 		},
 		func(env Env, in admitted) ([]Image, error) {
-			return env.encodeAnimationFrames(ctx, in, ec, func(sourceFrames int) ([]int, error) {
+			return env.encodeAnimationFrames(ctx, region{}, in, ec, func(sourceFrames int) ([]int, error) {
 				if last := selected[len(selected)-1]; last >= sourceFrames {
 					return nil, fmt.Errorf("index %d is outside the animation's %d frames", last, sourceFrames)
 				}

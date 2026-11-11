@@ -451,7 +451,7 @@ func TestVideoSizeCapRefusesBeforeSampling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = env.videoFrames(context.Background(), decoder{"ffmpeg", "mov"}, "in", enc, 4, t.TempDir())
+	_, err = env.videoFrames(context.Background(), region{}, decoder{"ffmpeg", "mov"}, "in", enc, 4, t.TempDir())
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}

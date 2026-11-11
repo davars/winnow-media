@@ -35,26 +35,44 @@ const hdrToneMap = "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709," +
 	"tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
 
 // videoFilter returns the -vf chain for sampling a frame, or "" when the
-// frame is delivered as decoded. A reduced frame is scaled to rw x rh. HDR is
-// tone-mapped, and every other frame is otherwise sized by the encode stage,
-// like any other image.
+// frame is delivered as decoded. The part of the frame crop names, if any, is
+// cut first. A reduced frame is scaled to rw x rh. HDR is tone-mapped, and
+// every other frame is otherwise sized by the encode stage, like any other
+// image.
 //
 // HDR is scaled before it is tone-mapped: the tone-map runs in 32-bit float
 // and its memory grows with the frame, so it is cheaper on the small target.
 // The scale writes 4:4:4 because the target size can be odd, and zscale
 // rejects a chroma-subsampled frame whose dimensions are not even; the 16-bit
-// format keeps precision for the linearization.
-func videoFilter(hdr, reduced bool, rw, rh int) string {
+// format keeps precision for the linearization. A cropped frame can have odd
+// dimensions whatever its scale, so an HDR frame with a crop always takes that
+// route.
+func videoFilter(hdr, reduced bool, rw, rh int, crop region) string {
 	scale := fmt.Sprintf("scale=%d:%d:flags=lanczos", rw, rh)
+	cut := ""
+	if !crop.zero() {
+		cut = cropFilter(crop) + ","
+	}
 	switch {
 	case hdr && reduced:
-		return scale + ",format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
+		return cut + scale + ",format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
+	case hdr && cut != "":
+		return cut + "format=yuv444p16le," + hdrToneMap + ",format=yuv444p"
 	case hdr:
 		return hdrToneMap + ",format=yuv420p"
 	case reduced:
-		return scale
+		return cut + scale
 	}
-	return ""
+	return strings.TrimSuffix(cut, ",")
+}
+
+// cropFilter cuts r. ffmpeg's crop moves a region that overruns the frame back
+// inside it without failing, so the width is made invalid, which fails the
+// run, for a frame that does not hold the region; the filter is configured
+// again for each frame size a stream presents.
+func cropFilter(r region) string {
+	return fmt.Sprintf(`crop=w='if(gte(in_w\,%d)*gte(in_h\,%d)\,%d\,-1)':h=%d:x=%d:y=%d:exact=1`,
+		r.x+r.width, r.y+r.height, r.width, r.height, r.x, r.y)
 }
 
 // videoReductionMargin is how many times the largest target, in each
@@ -364,6 +382,9 @@ type videoPlan struct {
 	// selectFrames is set when the stream is short enough, in decoded pixels,
 	// to be read once with a select filter instead of once per seek.
 	selectFrames bool
+	// region is the part of the frame the samples show; the zero region is
+	// all of it.
+	region region
 }
 
 // probeChecked probes the video and refuses it if it exceeds a cap. It is the
@@ -380,8 +401,8 @@ func (e Env) probeChecked(ctx context.Context, dec decoder, inputPath string) (v
 // delivered at the size decode needs, which is the largest of the encodings
 // that will be made from them, with videoReductionMargin to spare for SDR and
 // none for HDR.
-func newVideoPlan(info videoInfo, decode encoding) videoPlan {
-	w, h := info.upright()
+func newVideoPlan(info videoInfo, r region, decode encoding) videoPlan {
+	w, h := r.subject(info.upright())
 	tw, th, resize := fitSize(w, h, decode.maxEdge, decode.maxArea)
 	hdr := isHDRTransfer(info.transfer)
 	rw, rh, reduced := tw, th, resize
@@ -390,7 +411,8 @@ func newVideoPlan(info videoInfo, decode encoding) videoPlan {
 	}
 	return videoPlan{
 		info:         info,
-		filter:       videoFilter(hdr, reduced, rw, rh),
+		filter:       videoFilter(hdr, reduced, rw, rh, r),
+		region:       r,
 		fw:           rw,
 		fh:           rh,
 		reduced:      reduced,
@@ -403,6 +425,9 @@ func newVideoPlan(info videoInfo, decode encoding) videoPlan {
 // planned for q: the same frames, or for SDR frames at least as large, whose
 // margin is then at least q's.
 func (p videoPlan) covers(q videoPlan) bool {
+	if p.region != q.region {
+		return false
+	}
 	if p.fw == q.fw && p.fh == q.fh && p.reduced == q.reduced {
 		return true
 	}
@@ -412,12 +437,13 @@ func (p videoPlan) covers(q videoPlan) bool {
 // source returns what the encode of enc needs to know about the frames. A
 // reduced frame is sized from the source's own size, not its own, since a
 // reduction rounds each side separately and the output must not depend on
-// which of several encodings the frame was reduced for.
+// which of several encodings the frame was reduced for. Frames cut to a
+// region are sized exactly from the region's size.
 func (v videoPlan) source(enc encoding) encodeSource {
-	if !v.reduced {
+	if !v.reduced && v.region.zero() {
 		return encodeSource{}
 	}
-	w, h := v.info.upright()
+	w, h := v.region.subject(v.info.upright())
 	tw, th, _ := fitSize(w, h, enc.maxEdge, enc.maxArea)
 	return encodeSource{width: tw, height: th}
 }
@@ -504,8 +530,8 @@ type sampledFrame struct {
 }
 
 // videoFrames samples up to maxFrames frames evenly.
-func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
-	return e.videoFramesPicked(ctx, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
+func (e Env) videoFrames(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, maxFrames int, dir string) ([]Image, error) {
+	return e.videoFramesPicked(ctx, r, dec, inputPath, enc, func(info videoInfo) ([]int64, error) {
 		return sampleTimesMS(info, maxFrames), nil
 	}, dir)
 }
@@ -513,16 +539,16 @@ func (e Env) videoFrames(ctx context.Context, dec decoder, inputPath string, enc
 // videoFramesPicked samples the frames at the times pick chooses, given the
 // probe, which must be in ascending order without repeats; sampleVideo reads
 // them.
-func (e Env) videoFramesPicked(ctx context.Context, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
-	return e.encodeVideoFiles(ctx, openRequest{
+func (e Env) videoFramesPicked(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, pick func(videoInfo) ([]int64, error), dir string) ([]Image, error) {
+	return e.encodeVideoFiles(ctx, r, openRequest{
 		path: inputPath, dec: dec, pinned: true, scratch: dir, video: &videoRequest{times: pick},
 	}, enc, dir)
 }
 
 // videoFrameRun samples count consecutive frames from startMS in one ffmpeg
 // run.
-func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
-	return e.encodeVideoFiles(ctx, openRequest{
+func (e Env) videoFrameRun(ctx context.Context, r region, dec decoder, inputPath string, enc encoding, startMS int64, count int, dir string) ([]Image, error) {
+	return e.encodeVideoFiles(ctx, r, openRequest{
 		path: inputPath, dec: dec, pinned: true, scratch: dir,
 		video: &videoRequest{run: &frameRun{startMS: startMS, count: count}},
 	}, enc, dir)
@@ -530,13 +556,13 @@ func (e Env) videoFrameRun(ctx context.Context, dec decoder, inputPath string, e
 
 // encodeVideoFiles opens the video req describes and writes its samples to
 // dir.
-func (e Env) encodeVideoFiles(ctx context.Context, req openRequest, enc encoding, dir string) ([]Image, error) {
+func (e Env) encodeVideoFiles(ctx context.Context, r region, req openRequest, enc encoding, dir string) ([]Image, error) {
 	src, err := e.open(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	defer src.Close()
-	return src.encodeFiles(ctx, enc, dir)
+	return src.encodeFiles(ctx, r, enc, dir)
 }
 
 // sampleVideo writes the frame at or after each of times, which must be
@@ -747,7 +773,7 @@ func (s *sampleEncoder) encode(ctx context.Context, batch []encodeFrame) error {
 	}
 	pattern := strings.ReplaceAll(filepath.Join(s.dir, ".enc-"), "%", "%%") + "%d" + s.enc.ext
 	encoded, err := s.env.runEncode(ctx, encodeArgs(batch, s.src, s.enc, encodeOutput{kind: outputFiles, path: pattern}),
-		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch)), signed: true})
+		encodeCheck{frames: len(batch), bounds: []encodeBound{boundOf(s.enc, s.src)}, outputs: s.batchFiles(len(batch)), signed: true, crop: s.src.crop, upright: s.src.upright})
 	if err != nil {
 		return fmt.Errorf("encoding frames %d to %d: %w", s.seen, s.seen+len(batch)-1, err)
 	}

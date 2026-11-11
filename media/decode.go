@@ -247,6 +247,11 @@ type Source struct {
 	stored [2]int
 	// upright is the size of the canvas after orientation, from the headers.
 	upright [2]int
+	// unsettled is set for a still whose orientation the header read does not
+	// settle: it reports none and the library does not turn the picture
+	// itself. The upright size is then known only from the run that decodes
+	// it.
+	unsettled bool
 	// reduce allows a reduced decode of a JPEG or a still WebP.
 	reduce bool
 	// video is set for a video, whose frames are the samples decoded by the
@@ -372,6 +377,8 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 		s.layout.uw, s.layout.uh = uprightSize(first.width, first.height, cmp.Or(override, tag))
 		s.ref, s.soft, s.jpeg = hdr.ref+"[0]", first.soft, reducible(first.format)
 		s.stored = [2]int{first.width, first.height}
+		s.unsettled = cmp.Or(override, tag) == "" || cmp.Or(override, tag) == "Undefined"
+		s.unsettled = s.unsettled && !libraryTurnsPicture[first.format]
 		if fullReadFormats[first.format] {
 			s.softRef = hdr.ref
 		}
@@ -400,6 +407,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*Source, error) {
 	}
 
 	s.orientation = cmp.Or(override, first.orientation)
+	s.upright[0], s.upright[1] = uprightSize(s.layout.cw, s.layout.ch, s.orientation)
 	s.req = composeRequest{
 		path: req.path, dir: s.dir, selected: s.selected, inFlight: len(s.selected),
 		frames: count, width: s.layout.cw, height: s.layout.ch, consumeTimeout: composeTimeout,
@@ -597,11 +605,47 @@ func (s *Source) framePixels() int {
 }
 
 // sourceOf is what the encode of enc needs to know about the frames.
-func (s *Source) sourceOf(enc encoding) encodeSource {
+func (s *Source) sourceOf(r region, enc encoding) encodeSource {
 	if s.video != nil {
 		return s.video.plan.source(enc)
 	}
-	return encodeSource{orientation: s.orientation}
+	return s.cropped(encodeSource{orientation: s.orientation}, r, enc)
+}
+
+// libraryTurnsPicture are the ImageMagick coders whose decoder applies the
+// file's orientation itself, so the header read already reports the upright
+// size. Membership is by test: TestRegionEdgesAreThoseOfTheUprightFrame proves HEIC.
+var libraryTurnsPicture = map[string]bool{"HEIC": true}
+
+// exactSize is the size of an output of enc that shows the region r.
+func exactSize(r region, enc encoding) (w, h int) {
+	w, h, _ = fitSize(r.width, r.height, enc.maxEdge, enc.maxArea)
+	return w, h
+}
+
+// cropped returns src made to cut the region r, and to size the cut exactly,
+// unless r is the zero region.
+func (s *Source) cropped(src encodeSource, r region, enc encoding) encodeSource {
+	if r.zero() {
+		return src
+	}
+	src.crop = r
+	if !s.unsettled {
+		src.upright = s.upright
+	}
+	src.width, src.height = exactSize(r, enc)
+	return src
+}
+
+// checkRegion returns an error if r is not inside the frame the source shows.
+// Where the header read does not settle the orientation only the shape is
+// checked; the run that decodes the picture reports its size, and the region
+// is checked against that.
+func (s *Source) checkRegion(r region) error {
+	if s.unsettled {
+		return r.shape()
+	}
+	return r.check(s.upright[0], s.upright[1])
 }
 
 // positions returns which of the source's frames a budget of maxFrames
@@ -618,8 +662,8 @@ func (s *Source) positions(maxFrames int) ([]int, error) {
 }
 
 // frameOf returns the encodeFrame of a decoded frame.
-func (s *Source) frameOf(f srcFrame, enc encoding) (encodeFrame, error) {
-	out := encodeFrame{input: "pam:" + f.path, delayCS: -1, filter: filterFor(f.soft), fits: s.fits(enc)}
+func (s *Source) frameOf(f srcFrame, r region, enc encoding) (encodeFrame, error) {
+	out := encodeFrame{input: "pam:" + f.path, delayCS: -1, filter: filterFor(f.soft), fits: s.fits(r, enc)}
 	if f.profile > 0 {
 		srgb, err := s.srgb()
 		if err != nil {
@@ -633,10 +677,10 @@ func (s *Source) frameOf(f srcFrame, enc encoding) (encodeFrame, error) {
 
 // framesAt returns the encodeFrames of the frames at positions, each with the
 // delay the original gives it when delays is set.
-func (s *Source) framesAt(positions []int, enc encoding, delays bool) ([]encodeFrame, error) {
+func (s *Source) framesAt(positions []int, r region, enc encoding, delays bool) ([]encodeFrame, error) {
 	out := make([]encodeFrame, len(positions))
 	for i, p := range positions {
-		f, err := s.frameOf(s.frames[p], enc)
+		f, err := s.frameOf(s.frames[p], r, enc)
 		if err != nil {
 			return nil, err
 		}
@@ -649,8 +693,8 @@ func (s *Source) framesAt(positions []int, enc encoding, delays bool) ([]encodeF
 }
 
 // stillFrame returns the encodeFrame that reads the still.
-func (s *Source) stillFrame(enc encoding) (encodeFrame, error) {
-	f := encodeFrame{input: s.ref, filter: filterFor(s.soft), fits: s.fits(enc)}
+func (s *Source) stillFrame(r region, enc encoding) (encodeFrame, error) {
+	f := encodeFrame{input: s.ref, filter: filterFor(s.soft), fits: s.fits(r, enc)}
 	if s.layout.infos[0].hasICC {
 		srgb, err := s.srgb()
 		if err != nil {
@@ -664,8 +708,9 @@ func (s *Source) stillFrame(enc encoding) (encodeFrame, error) {
 // fits reports whether the source is already within the bounds of enc. The
 // answer does not depend on the orientation: both bounds are symmetric in
 // the two sides.
-func (s *Source) fits(enc encoding) bool {
-	_, _, resize := fitSize(s.upright[0], s.upright[1], enc.maxEdge, enc.maxArea)
+func (s *Source) fits(r region, enc encoding) bool {
+	w, h := r.subject(s.upright[0], s.upright[1])
+	_, _, resize := fitSize(w, h, enc.maxEdge, enc.maxArea)
 	return !resize
 }
 
@@ -835,37 +880,46 @@ func (s *Source) webpDecodeSize(encs []encoding) [2]int {
 
 // encodeStills runs the still encode for the targets and returns what each
 // reported: one ImageMagick run for all of them, except for a WebP.
-func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []string) ([]encodedFrame, error) {
+func (s *Source) encodeStills(ctx context.Context, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
 	if s.webp {
-		return s.encodeWebPStill(ctx, encs, paths)
+		return s.encodeWebPStill(ctx, r, encs, paths)
 	}
-	readOps, sizes, decoded, err := s.decodePlan(ctx, encs)
-	if err != nil {
-		return nil, err
+	// A frame is cut before it is sized, so no reduced decode serves a region.
+	var readOps []string
+	var sizes [][2]int
+	decoded := s.stored
+	if r.zero() {
+		var err error
+		if readOps, sizes, decoded, err = s.decodePlan(ctx, encs); err != nil {
+			return nil, err
+		}
 	}
 	if err := checkStillSize(s.stored, decoded); err != nil {
 		return nil, err
 	}
-	if s.softRef != "" && slices.ContainsFunc(encs, func(e encoding) bool { return !s.fits(e) }) {
+	if s.softRef != "" && slices.ContainsFunc(encs, func(e encoding) bool { return !s.fits(r, e) }) {
 		soft, err := fullSoft(ctx, s.env, s.softRef)
 		if err != nil {
 			return nil, err
 		}
 		s.soft, s.softRef = soft, ""
 	}
-	src := encodeSource{orientation: s.orientation}
+	src := s.cropped(encodeSource{orientation: s.orientation}, r, encs[0])
 	targets := make([]fusedTarget, len(encs))
 	for i, enc := range encs {
-		f, err := s.stillFrame(enc)
+		f, err := s.stillFrame(r, enc)
 		if err != nil {
 			return nil, err
 		}
 		targets[i] = fusedTarget{frame: f, enc: enc, path: paths[i]}
-		if sizes != nil {
+		switch {
+		case !r.zero():
+			targets[i].width, targets[i].height = exactSize(r, enc)
+		case sizes != nil:
 			targets[i].width, targets[i].height = sizes[i][0], sizes[i][1]
 		}
 	}
-	chk := encodeCheck{frames: len(encs), outputs: paths}
+	chk := encodeCheck{frames: len(encs), outputs: paths, crop: src.crop, upright: src.upright}
 	for _, t := range targets {
 		chk.bounds = append(chk.bounds, boundOf(t.enc, t.source(src)))
 	}
@@ -878,8 +932,11 @@ func (s *Source) encodeStills(ctx context.Context, encs []encoding, paths []stri
 // read from the metadata the tool reports. The output size is exact when the
 // decode was reduced and ImageMagick's computation on the oriented frame
 // otherwise.
-func (s *Source) encodeWebPStill(ctx context.Context, encs []encoding, paths []string) ([]encodedFrame, error) {
-	decoded := s.webpDecodeSize(encs)
+func (s *Source) encodeWebPStill(ctx context.Context, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
+	decoded := s.stored
+	if r.zero() {
+		decoded = s.webpDecodeSize(encs)
+	}
 	frame, meta, cleanup, err := s.decodeWebP(ctx, decoded)
 	if err != nil {
 		return nil, err
@@ -890,23 +947,24 @@ func (s *Source) encodeWebPStill(ctx context.Context, encs []encoding, paths []s
 		return nil, err
 	}
 	s.upright[0], s.upright[1] = uprightSize(s.stored[0], s.stored[1], orientation)
+	s.unsettled = false
 	var sizes [][2]int
 	if decoded != s.stored {
 		sizes = s.outputSizes(encs)
 	}
 	res := make([]encodedFrame, len(encs))
 	for i, enc := range encs {
-		src := encodeSource{orientation: orientation}
+		src := s.cropped(encodeSource{orientation: orientation}, r, enc)
 		if sizes != nil {
 			src.width, src.height = sizes[i][0], sizes[i][1]
 		}
-		f, err := s.frameOf(frame, enc)
+		f, err := s.frameOf(frame, r, enc)
 		if err != nil {
 			return nil, err
 		}
 		out, err := s.env.runEncode(ctx,
 			encodeArgs([]encodeFrame{f}, src, enc, encodeOutput{kind: outputStill, path: paths[i]}),
-			encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}})
+			encodeCheck{frames: 1, bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{paths[i]}, crop: src.crop, upright: src.upright})
 		if err != nil {
 			return nil, err
 		}
@@ -1032,18 +1090,21 @@ func (s *Source) Encode(ctx context.Context, maxFrames int, targets ...Encoding)
 			return nil, err
 		}
 	}
-	return s.encode(ctx, maxFrames, encs)
+	return s.encode(ctx, region{}, maxFrames, encs)
 }
 
-func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (out []Artifact, err error) {
+func (s *Source) encode(ctx context.Context, r region, maxFrames int, encs []encoding) (out []Artifact, err error) {
 	if len(encs) == 0 {
 		return nil, errors.New("no targets")
 	}
 	if s.stream {
 		return nil, errors.New("a streaming source encodes frames to files only")
 	}
+	if err := s.checkRegion(r); err != nil {
+		return nil, err
+	}
 	if s.video != nil {
-		if err := s.decodeVideo(ctx, encs); err != nil {
+		if err := s.decodeVideo(ctx, r, encs); err != nil {
 			return nil, err
 		}
 	}
@@ -1076,7 +1137,7 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 		out = append(out, Artifact{Path: path, Cleanup: cleanup})
 	}
 	if s.route == routeStill {
-		res, err := s.encodeStills(ctx, encs, paths)
+		res, err := s.encodeStills(ctx, r, encs, paths)
 		if err != nil {
 			return out, fmt.Errorf("encoding still: %w", err)
 		}
@@ -1087,7 +1148,7 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 		return out, nil
 	}
 	for i, enc := range encs {
-		w, h, kept, err := s.encodeAnimation(ctx, enc, pos, paths[i])
+		w, h, kept, err := s.encodeAnimation(ctx, r, enc, pos, paths[i])
 		if err != nil {
 			return out, err
 		}
@@ -1110,9 +1171,9 @@ func (s *Source) encode(ctx context.Context, maxFrames int, encs []encoding) (ou
 // prevents it, so the file may hold fewer scenes than frames were given. The
 // returned positions are those the scenes show, found by reading the scene
 // delays back (see sceneStarts).
-func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, path string) (w, h int, shown []int, err error) {
-	src := s.sourceOf(enc)
-	frames, err := s.framesAt(pos, enc, true)
+func (s *Source) encodeAnimation(ctx context.Context, r region, enc encoding, pos []int, path string) (w, h int, shown []int, err error) {
+	src := s.sourceOf(r, enc)
+	frames, err := s.framesAt(pos, r, enc, true)
 	if err != nil {
 		return 0, 0, nil, err
 	}
@@ -1126,7 +1187,7 @@ func (s *Source) encodeAnimation(ctx context.Context, enc encoding, pos []int, p
 		delays[i] = frames[i].delayCS
 	}
 	res, err := s.env.runEncode(ctx, encodeArgs(frames, src, enc, encodeOutput{kind: kind, path: path}),
-		encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}})
+		encodeCheck{frames: len(pos), bounds: []encodeBound{boundOf(enc, src)}, outputs: []string{path}, crop: src.crop, upright: src.upright})
 	if err != nil {
 		return 0, 0, nil, fmt.Errorf("encoding animation: %w", err)
 	}
@@ -1208,18 +1269,21 @@ func (s *Source) EncodeFrames(ctx context.Context, enc Encoding, dir string) ([]
 	if err != nil {
 		return nil, err
 	}
-	return s.encodeFiles(ctx, ec, dir)
+	return s.encodeFiles(ctx, region{}, ec, dir)
 }
 
-func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]Image, error) {
+func (s *Source) encodeFiles(ctx context.Context, r region, enc encoding, dir string) ([]Image, error) {
+	if err := s.checkRegion(r); err != nil {
+		return nil, err
+	}
 	if s.video != nil {
-		if err := s.decodeVideo(ctx, []encoding{enc}); err != nil {
+		if err := s.decodeVideo(ctx, r, []encoding{enc}); err != nil {
 			return nil, err
 		}
 	}
 	if s.route == routeStill {
 		name := frameName(0, enc.ext)
-		res, err := s.encodeStills(ctx, []encoding{enc}, []string{filepath.Join(dir, name)})
+		res, err := s.encodeStills(ctx, r, []encoding{enc}, []string{filepath.Join(dir, name)})
 		if err != nil {
 			return nil, fmt.Errorf("encoding still: %w", err)
 		}
@@ -1228,7 +1292,7 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 	var images []Image
 	sel := s.mapping(s.selected)
 	encoder := &sampleEncoder{
-		env: s.env, src: s.sourceOf(enc),
+		env: s.env, src: s.sourceOf(r, enc),
 		enc: enc, dir: dir, framePixels: s.framePixels(),
 		keep: func(i, n, w, h int) {
 			images = append(images, Image{
@@ -1239,7 +1303,7 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 	}
 	if !s.stream {
 		pos, _ := s.positions(0)
-		frames, err := s.framesAt(pos, enc, false)
+		frames, err := s.framesAt(pos, r, enc, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1279,7 +1343,7 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 		if f.profile > 0 {
 			s.placed = append(s.placed, filepath.Join(s.dir, composedProfileName(f.profile)))
 		}
-		ef, err := s.frameOf(sf, enc)
+		ef, err := s.frameOf(sf, r, enc)
 		if err != nil {
 			return err
 		}
@@ -1305,9 +1369,12 @@ func (s *Source) encodeFiles(ctx context.Context, enc encoding, dir string) ([]I
 
 // stillImage writes the first image of a source of one frame to dir as
 // still.<ext> and describes it.
-func (s *Source) stillImage(ctx context.Context, enc encoding, dir string) (Image, error) {
+func (s *Source) stillImage(ctx context.Context, r region, enc encoding, dir string) (Image, error) {
+	if err := s.checkRegion(r); err != nil {
+		return Image{}, err
+	}
 	name := "still" + enc.ext
-	res, err := s.encodeStills(ctx, []encoding{enc}, []string{filepath.Join(dir, name)})
+	res, err := s.encodeStills(ctx, r, []encoding{enc}, []string{filepath.Join(dir, name)})
 	if err != nil {
 		return Image{}, fmt.Errorf("encoding still: %w", err)
 	}

@@ -464,7 +464,7 @@ func TestEncodeFromOneOpenMatchesEncodeRungPerRung(t *testing.T) {
 	src := openSource(t, env, path, Hints{Frames: rungs[0].MaxFrames})
 	for _, r := range rungs {
 		enc := encoding{format: WebP, ext: ".webp", quality: testQuality, maxEdge: r.CeilingPx, maxArea: r.CeilingPx * r.CeilingPx}
-		out, err := src.encode(context.Background(), r.MaxFrames, []encoding{enc})
+		out, err := src.encode(context.Background(), region{}, r.MaxFrames, []encoding{enc})
 		if err != nil {
 			t.Fatalf("rung %+v: %v", r, err)
 		}

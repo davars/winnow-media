@@ -220,13 +220,13 @@ func (in admitted) request(h Hints, pick func(int) ([]int, error), stream bool) 
 
 // encodeAnimationFrames opens the admitted animation with the frames pick
 // chooses and writes them to its output directory.
-func (e Env) encodeAnimationFrames(ctx context.Context, in admitted, enc encoding, pick func(int) ([]int, error)) ([]Image, error) {
+func (e Env) encodeAnimationFrames(ctx context.Context, r region, in admitted, enc encoding, pick func(int) ([]int, error)) ([]Image, error) {
 	src, err := e.open(ctx, in.request(Hints{}, pick, true))
 	if err != nil {
 		return nil, err
 	}
 	defer src.Close()
-	return src.encodeFiles(ctx, enc, in.dir)
+	return src.encodeFiles(ctx, r, enc, in.dir)
 }
 
 // admit checks everything about an operation's input and output directory
@@ -298,7 +298,7 @@ func (p *Processor) Still(ctx context.Context, path string, enc Encoding, dir st
 				return nil, err
 			}
 			defer src.Close()
-			img, err := src.stillImage(ctx, ec, in.dir)
+			img, err := src.stillImage(ctx, region{}, ec, in.dir)
 			return []Image{img}, err
 		})
 	if err != nil {
@@ -331,7 +331,7 @@ func (p *Processor) AnimationFrames(ctx context.Context, path string, enc Encodi
 			return err
 		},
 		func(env Env, in admitted) ([]Image, error) {
-			return env.encodeAnimationFrames(ctx, in, ec, func(sourceFrames int) ([]int, error) {
+			return env.encodeAnimationFrames(ctx, region{}, in, ec, func(sourceFrames int) ([]int, error) {
 				return selectFrames(frameCount(frames, sourceFrames, true), sourceFrames), nil
 			})
 		})
@@ -378,7 +378,7 @@ func (p *Processor) VideoFrames(ctx context.Context, path string, enc Encoding, 
 			return err
 		},
 		func(env Env, in admitted) ([]Image, error) {
-			return env.videoFrames(ctx, in.decoder, in.path, ec, frames, in.dir)
+			return env.videoFrames(ctx, region{}, in.decoder, in.path, ec, frames, in.dir)
 		})
 }
 

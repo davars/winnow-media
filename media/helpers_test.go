@@ -172,12 +172,17 @@ func withProfile(outDir string, profiled bool, fn func(profilePath string) error
 // still encodes the first image of path, read with dec, to dir as the
 // Processor's Still does.
 func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, dir string) (Image, error) {
+	return e.stillRegion(ctx, region{}, dec, path, enc, dir)
+}
+
+// stillRegion is still showing the region r of the picture.
+func (e Env) stillRegion(ctx context.Context, r region, dec decoder, path string, enc encoding, dir string) (Image, error) {
 	src, err := e.open(ctx, openRequest{path: path, dec: dec, pinned: true, caps: true, hints: Hints{Still: true}, scratch: dir})
 	if err != nil {
 		return Image{}, err
 	}
 	defer src.Close()
-	return src.stillImage(ctx, enc, dir)
+	return src.stillImage(ctx, r, enc, dir)
 }
 
 // testScratch is an Env.Scratch that makes directories under the system

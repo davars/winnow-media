@@ -110,17 +110,18 @@ func (s *Source) setSamples(n int) {
 // target is decoded again. A failed decode leaves no samples and keeps the
 // times the source held before it, those Open chose or the last decode
 // found, so that the encode can be retried.
-func (s *Source) decodeVideo(ctx context.Context, encs []encoding) error {
+func (s *Source) decodeVideo(ctx context.Context, r region, encs []encoding) error {
 	v := s.video
 	w, h := v.info.upright()
 	decode, best := encs[0], 0
 	for _, enc := range encs {
-		tw, th, _ := fitSize(w, h, enc.maxEdge, enc.maxArea)
+		sw, sh := r.subject(w, h)
+		tw, th, _ := fitSize(sw, sh, enc.maxEdge, enc.maxArea)
 		if tw*th > best {
 			decode, best = enc, tw*th
 		}
 	}
-	plan := newVideoPlan(v.info, decode)
+	plan := newVideoPlan(v.info, r, decode)
 	if v.decoded && v.plan.covers(plan) {
 		return nil
 	}

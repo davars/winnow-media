@@ -184,7 +184,7 @@ func (e Env) EncodeRung(ctx context.Context, inputPath, mimeType string,
 		format: WebP, ext: ".webp", quality: quality,
 		maxEdge: rung.CeilingPx, maxArea: rung.CeilingPx * rung.CeilingPx,
 	}
-	out, err := src.encode(ctx, budget, []encoding{enc})
+	out, err := src.encode(ctx, region{}, budget, []encoding{enc})
 	if err != nil {
 		return "", nil, 0, 0, nil, err
 	}
