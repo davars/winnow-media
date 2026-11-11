@@ -24,7 +24,7 @@ var ErrTimeLimit = errors.New("time limit exceeded")
 // The caps below are the one place the limits are stated; the ImageMagick
 // policy ceilings are derived from them. Each was set from measurements of the
 // largest inputs it admits, made with internal/cmd/measure on a 12-CPU x86_64
-// host (see the README).
+// host (see docs/measurements.md).
 const (
 	// maxInputBytes is the largest input file, inclusive. It is a requirement
 	// of the callers, not a measurement.
@@ -136,7 +136,7 @@ const (
 	// of map.
 	HighMemory MemoryProfile = iota
 	// LowMemory suits a memory-limited container: 512 MiB of memory and
-	// 1 GiB of map.
+	// 1 GiB of map. Its measurement is in docs/measurements.md.
 	LowMemory
 )
 
