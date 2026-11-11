@@ -77,6 +77,7 @@ func padChunks(n int) []byte {
 // must agree with a full ImageMagick read of every layout, and decode only
 // when the scan cannot answer.
 func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	profile, err := os.ReadFile(writeSRGBProfile(t))
 	if err != nil {
@@ -166,6 +167,7 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 // A file the scan cannot read to its end gives no answer, so its profile is
 // left to the decode.
 func TestWebPICCDeclinesAnUnreadableLayout(t *testing.T) {
+	t.Parallel()
 	image := riffChunk("VP8 ", make([]byte, 21))
 	full := riffWebP(vp8xChunk(webpICCFlag), riffChunk("ICCP", []byte("profile")), image)
 	oversized := slices.Clone(full)

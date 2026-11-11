@@ -82,6 +82,7 @@ func videoInto(t *testing.T, p *Processor, path string, enc Encoding, maxFrames 
 }
 
 func TestVideoFramesRefusals(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	var calls int
 	p.run = func(context.Context, string, ...string) (Result, error) {
@@ -141,6 +142,7 @@ func TestVideoFramesRefusals(t *testing.T) {
 }
 
 func TestVideoSpecPins(t *testing.T) {
+	t.Parallel()
 	pins := map[string]string{}
 	for _, in := range videoSpec.inputs {
 		pins[in.mediaType] = in.decoder.tool + ":" + in.decoder.name
@@ -163,6 +165,7 @@ func TestVideoSpecPins(t *testing.T) {
 }
 
 func TestSampleTimes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		v    videoInfo
@@ -189,6 +192,7 @@ func TestSampleTimes(t *testing.T) {
 }
 
 func TestVideoFramesSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := sdrClip(t, env, "160x120", 10, 16)
@@ -221,6 +225,7 @@ func TestVideoFramesSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 }
 
 func TestVideoFramesShortClips(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 
@@ -255,6 +260,7 @@ func TestVideoFramesShortClips(t *testing.T) {
 }
 
 func TestVideoFramesStaticClipDedupes(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=0x3070c0:size=160x120:rate=10:duration=6",
@@ -269,6 +275,7 @@ func TestVideoFramesStaticClipDedupes(t *testing.T) {
 }
 
 func TestVideoFramesRotatedClipGivesPortrait(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := rotatedClip(t, env)
@@ -288,6 +295,7 @@ func TestVideoFramesRotatedClipGivesPortrait(t *testing.T) {
 }
 
 func TestVideoFramesSizing(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := sdrClip(t, env, "320x240", 10, 4)
@@ -313,6 +321,7 @@ func TestVideoFramesSizing(t *testing.T) {
 }
 
 func TestVideoFramesHDRIsConvertedToSDR(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	green := hlgClip(t, env, []string{"-f", "lavfi", "-i", "color=c=0x00c000:size=320x240:rate=10:duration=2"})
 	p := requireProcessor(t)
@@ -338,6 +347,7 @@ func TestVideoFramesHDRIsConvertedToSDR(t *testing.T) {
 }
 
 func TestIsHDRTransfer(t *testing.T) {
+	t.Parallel()
 	for trc, want := range map[string]bool{
 		"arib-std-b67": true,
 		"smpte2084":    true,
@@ -353,6 +363,7 @@ func TestIsHDRTransfer(t *testing.T) {
 
 // A PQ clip is HDR, as an HLG one is: it is reported so and is tone mapped.
 func TestPQVideoIsHDR(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := writeClip(t, env, ".mp4", append(testsrc("160x120", 10, 2),
 		"-pix_fmt", "yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1",
@@ -379,6 +390,7 @@ func TestPQVideoIsHDR(t *testing.T) {
 }
 
 func TestVideoFramesHDRScalesBeforeToneMapping(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	rec := record(p)
@@ -407,6 +419,7 @@ func TestVideoFramesHDRScalesBeforeToneMapping(t *testing.T) {
 }
 
 func TestVideoFramesHDROddTargetSize(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	clip := hlgClip(t, env, testsrc("320x240", 10, 2))
@@ -422,6 +435,7 @@ func TestVideoFramesHDROddTargetSize(t *testing.T) {
 }
 
 func TestVideoFramesSDRHasNoColourFilter(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	rec := record(p)
@@ -434,6 +448,7 @@ func TestVideoFramesSDRHasNoColourFilter(t *testing.T) {
 }
 
 func TestVideoFramesStripsMetadata(t *testing.T) {
+	t.Parallel()
 	requireExiftool(t)
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -534,6 +549,7 @@ func TestVideoFramesGoldenArgv(t *testing.T) {
 }
 
 func TestParseVideoProbeStreamSelection(t *testing.T) {
+	t.Parallel()
 	stream := func(index int, dispositions string) string {
 		return fmt.Sprintf(`{"index":%d,"codec_type":"video","width":%d,"height":10,"disposition":{%s}}`,
 			index, 100+index, dispositions)
@@ -566,6 +582,7 @@ func TestParseVideoProbeStreamSelection(t *testing.T) {
 // A probe report that is not JSON, names no video stream, or gives the stream
 // no size is an error, not a video of unknown properties.
 func TestParseVideoProbeRefusesUnusableOutput(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, out, want string }{
 		{"empty", "", "parsing probe output"},
 		{"not JSON", "streams: none", "parsing probe output"},
@@ -584,6 +601,7 @@ func TestParseVideoProbeRefusesUnusableOutput(t *testing.T) {
 // The display rotation is reported as 0, 90, 180 or 270, whichever way the
 // container writes it.
 func TestParseVideoProbeNormalisesRotation(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		written float64
 		want    int
@@ -597,6 +615,7 @@ func TestParseVideoProbeNormalisesRotation(t *testing.T) {
 }
 
 func TestVideoFramesSamplesTheDefaultStream(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := writeClip(t, env, ".mp4",
@@ -619,6 +638,7 @@ func TestVideoFramesSamplesTheDefaultStream(t *testing.T) {
 }
 
 func TestCheckSeekTime(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name       string
 		durationMS int64
@@ -641,6 +661,7 @@ func TestCheckSeekTime(t *testing.T) {
 }
 
 func TestCheckVideoInfo(t *testing.T) {
+	t.Parallel()
 	ok := videoInfo{streams: maxStreams, durationMS: maxDurationMS, width: maxDimension, height: maxDimension}
 	if err := checkVideoInfo(ok); err != nil {
 		t.Fatalf("limits are inclusive: %v", err)
@@ -658,6 +679,7 @@ func TestCheckVideoInfo(t *testing.T) {
 }
 
 func TestVideoFramesRefusesOversizedProbeBeforeSampling(t *testing.T) {
+	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	manyStreams := `{"index":0,"codec_type":"video","width":16,"height":16,"duration":"1.0"}`
 	for i := 1; i <= maxStreams; i++ {
@@ -780,6 +802,7 @@ func TestVideoFramesDedupesAcrossBatches(t *testing.T) {
 }
 
 func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	out := filepath.Join(t.TempDir(), "100%d-%03d%%")
@@ -800,6 +823,7 @@ func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
 }
 
 func TestVideoFramesUseFewerThreadsAboveFourK(t *testing.T) {
+	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	cases := []struct {
 		name     string

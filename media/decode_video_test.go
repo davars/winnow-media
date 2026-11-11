@@ -34,6 +34,7 @@ func readFile(t *testing.T, path string) []byte {
 // Frames of a video are its sample times, final once decoded, and the
 // artifacts map each kept frame to its time.
 func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := sdrClip(t, env, "320x240", 10, 4)
 	info, err := probeVideo(context.Background(), env, sniffedVideoDecoder(clip), clip)
@@ -78,6 +79,7 @@ func TestVideoSourceFramesAreSampleTimes(t *testing.T) {
 // which samples its scenes show, and the written file holds exactly those
 // scenes.
 func TestVideoMapsTheScenesTheWriterMerged(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := writeClip(t, env, ".mp4",
 		"-f", "lavfi", "-i", "color=c=red:size=160x120:rate=10:duration=2",
@@ -103,6 +105,7 @@ func TestVideoMapsTheScenesTheWriterMerged(t *testing.T) {
 // Samples that are not reduced and are already within the target are not
 // resampled, as a still is not; a reduced one is.
 func TestVideoSamplesWithinTheTargetAreNotResized(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	small := sdrClip(t, env, "64x48", 10, 2)
 	for _, c := range []struct {
@@ -148,6 +151,7 @@ func TestVideoSamplesWithinTheTargetAreNotResized(t *testing.T) {
 // alone would give. A decode even a little smaller than the margin requires
 // is not reused.
 func TestVideoSourceDecodesAgainForALargerTarget(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := sdrClip(t, env, "1280x720", 10, 3)
 	large := Encoding{Format: WebP, Quality: 80, MaxEdge: 100, MaxArea: 100 * 100}
@@ -190,6 +194,7 @@ func TestVideoSourceDecodesAgainForALargerTarget(t *testing.T) {
 // that target is encoded as it is alone, and the other has the size it has
 // alone. Its bytes may differ, as it is resampled from a larger decode.
 func TestVideoSourceDecodesForTheLargestOutput(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := sdrClip(t, env, "1280x720", 10, 3)
 	small := Encoding{Format: WebP, Quality: 80, MaxEdge: 1280, MaxArea: 256 * 144}
@@ -273,6 +278,7 @@ func TestVideoSourceSurvivesAFailedDecode(t *testing.T) {
 // image route: sniff names a GIF before anything else is looked at, and a
 // file the probe refuses is read as an image.
 func TestOpenKeepsImagesThatLookLikeVideo(t *testing.T) {
+	t.Parallel()
 	env := stagedEnv(requireFFmpeg(t), t.TempDir())
 	img := image.NewPaletted(image.Rect(0, 0, 32, 32), palette.Plan9)
 	for i := range img.Pix {
@@ -307,6 +313,7 @@ func TestOpenKeepsImagesThatLookLikeVideo(t *testing.T) {
 // A QuickTime file that does not open with ftyp is a video, whatever its
 // name: it is read through the mov demuxer and never by ImageMagick.
 func TestOpenReadsQuickTimeWithoutFtyp(t *testing.T) {
+	t.Parallel()
 	real := requireFFmpeg(t)
 	clip := writeClip(t, real, ".mov", append(testsrc("64x48", 10, 2), "-c:v", "mpeg4")...)
 	b := readFile(t, clip)
@@ -342,6 +349,7 @@ func TestOpenReadsQuickTimeWithoutFtyp(t *testing.T) {
 }
 
 func TestOpenVideoRefusesHintsThatDoNotApply(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := sdrClip(t, env, "64x48", 10, 1)
 	for name, h := range map[string]Hints{
@@ -357,6 +365,7 @@ func TestOpenVideoRefusesHintsThatDoNotApply(t *testing.T) {
 }
 
 func TestOpenVideoRefusesOversizedInputBeforeSampling(t *testing.T) {
+	t.Parallel()
 	stub := newVideoStub()
 	stub.probe = strings.Replace(stub.probe, `"width":64,"height":48`, `"width":20000,"height":48`, 1)
 	e := stub.env()
@@ -372,6 +381,7 @@ func TestOpenVideoRefusesOversizedInputBeforeSampling(t *testing.T) {
 
 // The Processor's operations and the Env's Open sample alike.
 func TestOpenVideoMatchesTheProcessorsFrames(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	clip := sdrClip(t, env, "320x240", 10, 4)
@@ -400,6 +410,7 @@ func TestOpenVideoMatchesTheProcessorsFrames(t *testing.T) {
 // named: the bytes pin MP4, MOV, WebM and Matroska, and ffmpeg detects the
 // rest among detectedFormats.
 func TestOpenReadsEveryVideoContainer(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	clip := func(args ...string) string {
 		path := filepath.Join(t.TempDir(), "input")
@@ -448,6 +459,7 @@ func TestOpenReadsEveryVideoContainer(t *testing.T) {
 }
 
 func TestOpenRefusesWhatIsNeitherImageNorVideo(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for name, body := range map[string][]byte{
 		"text":  []byte("not media at all\n"),
@@ -469,6 +481,7 @@ func TestOpenRefusesWhatIsNeitherImageNorVideo(t *testing.T) {
 // The Processor's type set is the sniffed one: a container only the Env reads
 // is refused.
 func TestProcessorVideoOperationsRefuseAnAVI(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "input")
@@ -491,6 +504,7 @@ func TestProcessorVideoOperationsRefuseAnAVI(t *testing.T) {
 // one, whatever the container leads with: the file is never handed to
 // ImageMagick, whose delegate would decode the video.
 func TestOpenRefusesAVideoHintWithoutReadingItAsAnImage(t *testing.T) {
+	t.Parallel()
 	real := requireFFmpeg(t)
 	clip := func(args ...string) []byte {
 		path := filepath.Join(t.TempDir(), "src")

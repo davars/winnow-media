@@ -135,6 +135,7 @@ func forbidScratch(t *testing.T) func() (string, func(), error) {
 // The cap is a property of the input: an oversized stream is refused before
 // any ffmpeg run or scratch directory.
 func TestVideoOpenRefusesOversizedBeforeScratch(t *testing.T) {
+	t.Parallel()
 	for _, size := range [][2]int{{16385, 100}, {100, 16385}} {
 		stub := newVideoStub()
 		stub.probe = fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,"duration":"10"}],"format":{"duration":"10"}}`, size[0], size[1])
@@ -202,6 +203,7 @@ func TestVideoSeeksCountFromTheContainerStart(t *testing.T) {
 }
 
 func TestSniffedVideoDecoder(t *testing.T) {
+	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	garbage := writeFile(t, "input", []byte("not a video"))
 	if got := sniffedVideoDecoder(mp4); got != (decoder{"ffmpeg", "mov"}) {
@@ -218,6 +220,7 @@ func TestSniffedVideoDecoder(t *testing.T) {
 }
 
 func TestReducedSize(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		w, h, tw, th, margin int
 		rw, rh               int
@@ -240,6 +243,7 @@ func TestReducedSize(t *testing.T) {
 }
 
 func TestVideoPlanSourceIsLiteralOnlyForAReducedFrame(t *testing.T) {
+	t.Parallel()
 	info := videoInfo{width: 402, height: 208}
 	small := encoding{maxEdge: 64, maxArea: 64 * 64}
 	if got := (videoPlan{info: info}).source(small); got != (encodeSource{}) {
@@ -316,6 +320,7 @@ func TestWebPPairSeeksEverySample(t *testing.T) {
 }
 
 func TestWebPPairDropsRepeatedFrames(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=red:size=160x120:rate=10:duration=4",
 		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
@@ -334,6 +339,7 @@ func TestWebPPairDropsRepeatedFrames(t *testing.T) {
 // Both outputs come from one reduced decode, and the smaller one is sized
 // from the source, not from the frame reduced for the larger.
 func TestWebPPairSizeAHDRSmallFromTheSource(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := hlgClip(t, env, testsrc("402x208", 10, 3))
 	out := t.TempDir()
@@ -351,6 +357,7 @@ func TestWebPPairSizeAHDRSmallFromTheSource(t *testing.T) {
 // A sample keeps the decoder's depth; the encode writes 8 bits whatever it
 // was.
 func TestVideoSamplesKeepTheDecodersDepth(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	ten := writeClip(t, env, ".mp4", append(testsrc("160x120", 10, 2), "-c:v", "libx264", "-preset", "ultrafast",
 		"-profile:v", "high10", "-pix_fmt", "yuv420p10le")...)
@@ -407,6 +414,7 @@ func vfScale(args []string) string {
 // An SDR frame is decoded at twice the target, not in full, and the output is
 // the size of the upright source fitted to the target.
 func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "3840x2160", 5, 1)
 	c := withRunCounts(env)
@@ -451,6 +459,7 @@ func TestSDRVideoIsDecodedAtTheReducedSize(t *testing.T) {
 // Encoding at two sizes decodes for the larger output, so that output is never
 // upscaled from a frame reduced for the smaller one.
 func TestWebPPairDecodeForTheLargerOutput(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for name, c := range map[string]struct {
 		clip func() string
@@ -506,6 +515,7 @@ func frameNumber(t *testing.T, env Env, path string) int {
 }
 
 func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := offsetClip(t, env)
@@ -544,6 +554,7 @@ func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
 }
 
 func TestParseVideoProbeStartOffset(t *testing.T) {
+	t.Parallel()
 	probe := func(stream, format string) string {
 		return `{"streams":[{"index":0,"codec_type":"video","width":10,"height":10,"start_time":"` + stream +
 			`"}],"format":{"start_time":"` + format + `"}}`
@@ -572,6 +583,7 @@ func TestParseVideoProbeStartOffset(t *testing.T) {
 
 // A seek past the last frame writes nothing, and no sample is kept for it.
 func TestSampleVideoSkipsASeekThatWritesNothing(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "160x120", 10, 2)
 	dec := sniffedVideoDecoder(src)
@@ -597,6 +609,7 @@ func TestSampleVideoSkipsASeekThatWritesNothing(t *testing.T) {
 // With no type named, ffmpeg's detection may not choose a format that opens
 // other files the input lists.
 func TestDetectedFormatsRefuseListFormats(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	real := sdrClip(t, env, "64x48", 10, 1)
 	dir := t.TempDir()
@@ -628,6 +641,7 @@ func TestDetectedFormatsRefuseListFormats(t *testing.T) {
 // Containers that are neither MP4 nor Matroska are still read when no type is
 // named.
 func TestWebPPairReadsOtherContainers(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for ext, codec := range map[string]string{".avi": "mpeg4", ".ts": "mpeg2video", ".flv": "flv", ".wmv": "wmv2", ".mpg": "mpeg2video"} {
 		t.Run(ext, func(t *testing.T) {
@@ -643,6 +657,7 @@ func TestWebPPairReadsOtherContainers(t *testing.T) {
 // Raw MPEG video streams and 3GPP files are read whether or not their brand
 // is one the sniff table names.
 func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	cases := map[string][]string{
 		"mpeg1video": {"-c:v", "mpeg1video", "-r", "25", "-f", "mpeg1video"},
@@ -673,6 +688,7 @@ func TestWebPPairReadsRawMPEGAndThreeGPP(t *testing.T) {
 // A reduction is sized from the upright frame: a rotated 160x120 clip at edge
 // 40 is decoded at 60x80, not at the squashed 107x80 its stored size gives.
 func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	src := rotatedClip(t, env)
 	c := withRunCounts(env)
@@ -710,6 +726,7 @@ func TestRotatedVideoIsReducedInItsUprightAspect(t *testing.T) {
 // is still an upper bound: Matroska's container duration also covers the audio
 // that outlasts this clip's video, so the samples near its end are skipped.
 func TestVideoWithoutStreamDurationUsesTheContainersFromTheStreamStart(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := offsetClip(t, env)
@@ -730,6 +747,7 @@ func TestVideoWithoutStreamDurationUsesTheContainersFromTheStreamStart(t *testin
 }
 
 func TestParseVideoProbeDurationFallbackIsRelativeToTheStream(t *testing.T) {
+	t.Parallel()
 	probe := func(streamDuration string) string {
 		return `{"streams":[{"index":0,"codec_type":"video","width":10,"height":10,"start_time":"2.5","duration":"` +
 			streamDuration + `"}],"format":{"start_time":"0.872","duration":"6.632"}}`
@@ -759,6 +777,7 @@ func TestParseVideoProbeDurationFallbackIsRelativeToTheStream(t *testing.T) {
 // The matroska and mov demuxers, and so WebM, MP4 and QuickTime, are opened
 // when no type is named.
 func TestDetectedFormatsOpenMatroskaWebMAndMov(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	for ext, codec := range map[string]string{".mkv": "libx264", ".webm": "libvpx", ".mp4": "libx264", ".mov": "libx264"} {
 		t.Run(ext, func(t *testing.T) {
@@ -826,23 +845,31 @@ func readDir(t *testing.T, dir string) map[string][]byte {
 func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
-	clips := map[string]string{
-		"sdr 8-bit":     sdrClip(t, env, "320x240", 10, 4),
-		"sdr 10-bit":    tenBitClip(t, env),
-		"hlg":           closedGOPHLG(t, env),
-		"rotated":       rotatedClip(t, env),
-		"late start":    offsetClip(t, env),
-		"variable rate": vfrClip(t, env),
-		"reduced 720p":  sdrClip(t, env, "1280x720", 10, 3),
-		"timescale 600": writeClip(t, env, ".mov", append(testsrc("320x240", 30, 2), "-c:v", "libx264", "-preset", "ultrafast",
-			"-pix_fmt", "yuv420p", "-g", "15", "-video_track_timescale", "600")...),
-		"open GOP": writeClip(t, env, ".mp4", append(testsrc("320x240", 10, 6), "-c:v", "libx265", "-preset", "ultrafast",
-			"-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-x265-params", "keyint=10:open-gop=1:bframes=3:log-level=error")...),
-		"fractional offset": fractionalOffsetTS(t, env),
-		"low-rate open GOP": writeClip(t, env, ".mp4", append(testsrc("160x120", 2, 12), "-c:v", "libx265", "-preset", "ultrafast",
-			"-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-x265-params",
-			"keyint=6:min-keyint=6:open-gop=1:bframes=8:b-adapt=0:scenecut=0:rc-lookahead=10:log-level=error")...),
-		"static content": writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=blue:size=160x120:rate=10:duration=3", "-c:v", "libx264", "-pix_fmt", "yuv420p"),
+	clips := map[string]func(t *testing.T) string{
+		"sdr 8-bit":     func(t *testing.T) string { return sdrClip(t, env, "320x240", 10, 4) },
+		"sdr 10-bit":    func(t *testing.T) string { return tenBitClip(t, env) },
+		"hlg":           func(t *testing.T) string { return closedGOPHLG(t, env) },
+		"rotated":       func(t *testing.T) string { return rotatedClip(t, env) },
+		"late start":    func(t *testing.T) string { return offsetClip(t, env) },
+		"variable rate": func(t *testing.T) string { return vfrClip(t, env) },
+		"reduced 720p":  func(t *testing.T) string { return sdrClip(t, env, "1280x720", 10, 3) },
+		"timescale 600": func(t *testing.T) string {
+			return writeClip(t, env, ".mov", append(testsrc("320x240", 30, 2), "-c:v", "libx264", "-preset", "ultrafast",
+				"-pix_fmt", "yuv420p", "-g", "15", "-video_track_timescale", "600")...)
+		},
+		"open GOP": func(t *testing.T) string {
+			return writeClip(t, env, ".mp4", append(testsrc("320x240", 10, 6), "-c:v", "libx265", "-preset", "ultrafast",
+				"-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-x265-params", "keyint=10:open-gop=1:bframes=3:log-level=error")...)
+		},
+		"fractional offset": func(t *testing.T) string { return fractionalOffsetTS(t, env) },
+		"low-rate open GOP": func(t *testing.T) string {
+			return writeClip(t, env, ".mp4", append(testsrc("160x120", 2, 12), "-c:v", "libx265", "-preset", "ultrafast",
+				"-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-x265-params",
+				"keyint=6:min-keyint=6:open-gop=1:bframes=8:b-adapt=0:scenecut=0:rc-lookahead=10:log-level=error")...)
+		},
+		"static content": func(t *testing.T) string {
+			return writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=blue:size=160x120:rate=10:duration=3", "-c:v", "libx264", "-pix_fmt", "yuv420p")
+		},
 	}
 	enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 100}
 	enc2 := encoding{format: WebP, ext: ".webp", quality: 80, maxEdge: 100, maxArea: 100 * 100}
@@ -856,8 +883,8 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 		_, err = videoSpec.decoderFor(mt)
 		return err == nil
 	}
-	entries := map[string]func(src string) (sampled, error){
-		"VideoFrames": func(src string) (sampled, error) {
+	entries := map[string]func(t *testing.T, src string) (sampled, error){
+		"VideoFrames": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
 				images, err := env.videoFrames(context.Background(), sniffedVideoDecoder(src), src, enc2, 15, dir)
@@ -866,7 +893,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			images, _, err := p.VideoFrames(context.Background(), src, enc, 15, dir)
 			return sampled{images, readDir(t, dir)}, err
 		},
-		"VideoFramesAt": func(src string) (sampled, error) {
+		"VideoFramesAt": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			times := []int64{0, 67, 167, 300, 1033, 1200, 1250, 1900}
 			if !processable(src) {
@@ -877,7 +904,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			images, _, err := p.VideoFramesAt(context.Background(), src, enc, times, dir)
 			return sampled{images, readDir(t, dir)}, err
 		},
-		"VideoFrameRun": func(src string) (sampled, error) {
+		"VideoFrameRun": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
 				images, err := env.videoFrameRun(context.Background(), sniffedVideoDecoder(src), src, enc2, 500, 4, dir)
@@ -886,7 +913,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			images, _, err := p.VideoFrameRun(context.Background(), src, enc, 500, 4, dir)
 			return sampled{images, readDir(t, dir)}, err
 		},
-		"Env.Open": func(src string) (sampled, error) {
+		"Env.Open": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			staged := env
 			staged.Scratch = testScratch
@@ -904,41 +931,78 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			_, err = source.Encode(context.Background(), 0, openTargets...)
 			return sampled{nil, readDir(t, dir)}, err
 		},
-		"encodeWebPPair": func(src string) (sampled, error) {
+		"encodeWebPPair": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			err := encodeWebPPair(env, context.Background(), src, filepath.Join(dir, "s.webp"), filepath.Join(dir, "l.webp"), 48, 100, 80)
 			return sampled{nil, readDir(t, dir)}, err
 		},
 	}
-	for clip, src := range clips {
-		for entry, run := range entries {
-			t.Run(clip+"/"+entry, func(t *testing.T) {
-				forceSelectLimit(t, 0)
-				seek, err := run(src)
-				if err != nil {
+	// The limit is a package variable, so the seek runs and the select runs
+	// are two phases, each running its cases in parallel.
+	paths := map[string]string{}
+	keep := t.TempDir()
+	t.Run("clips", func(t *testing.T) {
+		var mu sync.Mutex
+		for clip, build := range clips {
+			t.Run(clip, func(t *testing.T) {
+				t.Parallel()
+				// The clip outlives the subtest that built it.
+				built := build(t)
+				path := filepath.Join(keep, strings.ReplaceAll(clip, " ", "_")+filepath.Ext(built))
+				if err := os.WriteFile(path, mustReadFile(t, built), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				forceSelectLimit(t, selectMaxPixels)
-				once, err := run(src)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(seek.files) == 0 {
-					t.Fatal("seek wrote nothing")
-				}
-				if !slices.Equal(seek.images, once.images) {
-					t.Errorf("images differ:\nseek   %+v\nselect %+v", seek.images, once.images)
-				}
-				for name, want := range seek.files {
-					if got, ok := once.files[name]; !ok || !bytes.Equal(got, want) {
-						t.Errorf("%s differs between seek and select", name)
-					}
-				}
-				if len(seek.files) != len(once.files) {
-					t.Errorf("seek wrote %d files, select %d", len(seek.files), len(once.files))
-				}
+				mu.Lock()
+				paths[clip] = path
+				mu.Unlock()
 			})
 		}
+	})
+	type cell struct{ clip, entry string }
+	results := map[string]map[cell]sampled{}
+	for _, phase := range []struct {
+		name  string
+		limit int64
+	}{{"seek", 0}, {"select", selectMaxPixels}} {
+		got := map[cell]sampled{}
+		results[phase.name] = got
+		t.Run(phase.name, func(t *testing.T) {
+			forceSelectLimit(t, phase.limit)
+			var mu sync.Mutex
+			for clip, src := range paths {
+				for entry, run := range entries {
+					t.Run(clip+"/"+entry, func(t *testing.T) {
+						t.Parallel()
+						s, err := run(t, src)
+						if err != nil {
+							t.Fatal(err)
+						}
+						mu.Lock()
+						got[cell{clip, entry}] = s
+						mu.Unlock()
+					})
+				}
+			}
+		})
+	}
+	for c, seek := range results["seek"] {
+		once := results["select"][c]
+		t.Run(c.clip+"/"+c.entry, func(t *testing.T) {
+			if len(seek.files) == 0 {
+				t.Fatal("seek wrote nothing")
+			}
+			if !slices.Equal(seek.images, once.images) {
+				t.Errorf("images differ:\nseek   %+v\nselect %+v", seek.images, once.images)
+			}
+			for name, want := range seek.files {
+				if got, ok := once.files[name]; !ok || !bytes.Equal(got, want) {
+					t.Errorf("%s differs between seek and select", name)
+				}
+			}
+			if len(seek.files) != len(once.files) {
+				t.Errorf("seek wrote %d files, select %d", len(seek.files), len(once.files))
+			}
+		})
 	}
 }
 

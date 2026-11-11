@@ -33,6 +33,7 @@ func countingEnv(env Env) (Env, func() [][]string) {
 // ProbeFrames reads headers only and applies no size caps: it reports a still
 // and an animation of any size, with one -ping read.
 func TestProbeFramesReportsLargeInputFromHeaders(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	const width, height = 8000, 6501
 	// Made by magick, so that this process does not hold the pixels: a tool
@@ -90,6 +91,7 @@ func TestProbeFramesReportsLargeInputFromHeaders(t *testing.T) {
 // Only a still can lose its profile to the header-only read, so a still is
 // read in full once its size is known to be within the caps.
 func TestProbeFramesReportsProfilesFromHeaders(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	srgb, err := os.ReadFile(writeSRGBProfile(t))
@@ -135,6 +137,7 @@ func TestProbeFramesReportsProfilesFromHeaders(t *testing.T) {
 }
 
 func TestProbeFramesDoesNotDecodeAnAnimation(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, calls := countingEnv(real)
 	if _, err := env.ProbeFrames(context.Background(), writeFile(t, "content", oneColourGIF(t, 64, 64, 3)), "image/gif"); err != nil {

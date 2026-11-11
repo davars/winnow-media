@@ -99,6 +99,7 @@ func fusedFixtures() []fusedFixture {
 // profile, then the same encode over that. Both are built by encodeArgs, so
 // the fusion is the only difference.
 func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	ctx := context.Background()
 	destination := writeSRGBProfile(t)

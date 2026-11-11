@@ -193,6 +193,7 @@ func TestHostileAnimatedWebPsAreRefusedOrBounded(t *testing.T) {
 // would have had to make), over the damaged files, and checks that it fails
 // with nothing written.
 func TestWebPFramesRefusesDamagedAnimations(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {
@@ -267,6 +268,7 @@ func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
 // TestWebPFramesRefusesBadArguments checks the tool's own validation, which
 // holds whoever calls it.
 func TestWebPFramesRefusesBadArguments(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {
@@ -331,6 +333,7 @@ func TestWebPFramesRefusesBadArguments(t *testing.T) {
 // TestWebPFramesWaitsForConsumedFrames checks the tool's backpressure: with
 // two frames in flight it writes two and waits until the first is deleted.
 func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {
@@ -368,20 +371,20 @@ func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
 			}
 		}
 	}()
-	next := func() (string, bool) {
+	next := func(wait time.Duration) (string, bool) {
 		select {
 		case l, ok := <-lines:
 			return l, ok
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(wait):
 			return "", false
 		}
 	}
 	for i := range 2 {
-		if l, ok := next(); !ok || !strings.HasPrefix(l, strconv.Itoa(i)+" ") {
+		if l, ok := next(30 * time.Second); !ok || !strings.HasPrefix(l, strconv.Itoa(i)+" ") {
 			t.Fatalf("frame %d: line %q, ok %v", i, l, ok)
 		}
 	}
-	if l, ok := next(); ok {
+	if l, ok := next(200 * time.Millisecond); ok {
 		t.Fatalf("a third frame, %q, was written with two in flight and none consumed", l)
 	}
 	if got := dirNames(t, dir); !slices.Equal(got, []string{gifSampleName(0), gifSampleName(1)}) {
@@ -459,6 +462,7 @@ func TestWebPFramesCleansUpWhenAMagickRunFails(t *testing.T) {
 // last selected one are not decoded: a file whose later frames are corrupt
 // still yields the earlier ones.
 func TestWebPFramesStopsAfterTheLastSelectedFrame(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	exe, err := tool.Resolve(webpFramesTool)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/davars/winnow-media/tool"
@@ -209,6 +210,7 @@ func reducedAndReference(t *testing.T, path string, h Hints, target Encoding, wa
 // near-square ones, upright and turned by a hint, and a source is decoded once
 // for all its targets.
 func TestScaledWebPDecodeKeepsTheOutputSize(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	targets := []Encoding{
@@ -233,73 +235,78 @@ func TestScaledWebPDecodeKeepsTheOutputSize(t *testing.T) {
 	sweeps = append(sweeps, sweep{[2]int{201, 600}, targets})
 	// Large enough that a 1024 and a 2048 target both reduce.
 	sweeps = append(sweeps, sweep{[2]int{5712, 4284}, []Encoding{edge(1024), edge(2048)}})
-	reduced, stored := 0, 0
-	for _, orientation := range []int{0, 6} {
-		for i, sw := range sweeps {
-			if orientation != 0 && (i%3 != 2 || sw.size[0] >= 4000) {
-				continue
-			}
-			sz, ts := sw.size, sw.targets
-			name := fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation)
-			path := gradientWebP(t, real, sz[0], sz[1])
-			env, calls := sourceEnv(t)
-			src := openSource(t, env, path, Hints{Orientation: orientation})
-			hinted, err := src.Encode(context.Background(), 0, ts...)
-			if err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			decoded := decodedAt(calls())
-			if len(decoded) != 1 {
-				t.Fatalf("%s: webp-frames decoded %d times for %d targets, want 1", name, len(decoded), len(ts))
-			}
-			if want := src.webpDecodeSize(resolveAll(t, ts)); decoded[0] != want {
-				t.Errorf("%s: decoded at %v, webpDecodeSize says %v", name, decoded[0], want)
-			}
-			if decoded[0] == src.stored {
-				stored++
-			} else {
-				reduced += len(ts)
-				// A reduced decode keeps twice every output's size, so the
-				// resize that follows has detail to work from.
-				dw, dh := decoded[0][0], decoded[0][1]
-				if orientation == 6 {
-					dw, dh = dh, dw
+	var reduced, stored atomic.Int64
+	t.Run("sweep", func(t *testing.T) {
+		for _, orientation := range []int{0, 6} {
+			for i, sw := range sweeps {
+				if orientation != 0 && (i%3 != 2 || sw.size[0] >= 4000) {
+					continue
 				}
-				for i, h := range hinted {
-					if dw < 2*h.Width || dh < 2*h.Height {
-						t.Errorf("%s target %d: decoded %dx%d upright for a %dx%d output", name, i, dw, dh, h.Width, h.Height)
-					}
-				}
-			}
-			for i, target := range ts {
-				plain, _ := magickReference(t, path, Hints{Orientation: orientation}, target)
-				if hinted[i].Width != plain.Width || hinted[i].Height != plain.Height {
-					t.Errorf("%s target %d: %dx%d, ImageMagick's full decode %dx%d", name, i,
-						hinted[i].Width, hinted[i].Height, plain.Width, plain.Height)
-				}
-				// Alone, the target may decode at a different size from the
-				// group's.
-				if i == 0 {
-					one, err := src.Encode(context.Background(), 0, target)
+				sz, ts := sw.size, sw.targets
+				name := fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation)
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					path := gradientWebP(t, real, sz[0], sz[1])
+					env, calls := sourceEnv(t)
+					src := openSource(t, env, path, Hints{Orientation: orientation})
+					hinted, err := src.Encode(context.Background(), 0, ts...)
 					if err != nil {
 						t.Fatalf("%s: %v", name, err)
 					}
-					if one[0].Width != plain.Width || one[0].Height != plain.Height {
-						t.Errorf("%s target %d alone: %dx%d, ImageMagick's full decode %dx%d", name, i,
-							one[0].Width, one[0].Height, plain.Width, plain.Height)
+					decoded := decodedAt(calls())
+					if len(decoded) != 1 {
+						t.Fatalf("%s: webp-frames decoded %d times for %d targets, want 1", name, len(decoded), len(ts))
 					}
-					one[0].Cleanup()
-				}
-			}
-			for _, h := range hinted {
-				h.Cleanup()
+					if want := src.webpDecodeSize(resolveAll(t, ts)); decoded[0] != want {
+						t.Errorf("%s: decoded at %v, webpDecodeSize says %v", name, decoded[0], want)
+					}
+					if decoded[0] == src.stored {
+						stored.Add(1)
+					} else {
+						reduced.Add(int64(len(ts)))
+						// A reduced decode keeps twice every output's size, so the
+						// resize that follows has detail to work from.
+						dw, dh := decoded[0][0], decoded[0][1]
+						if orientation == 6 {
+							dw, dh = dh, dw
+						}
+						for i, h := range hinted {
+							if dw < 2*h.Width || dh < 2*h.Height {
+								t.Errorf("%s target %d: decoded %dx%d upright for a %dx%d output", name, i, dw, dh, h.Width, h.Height)
+							}
+						}
+					}
+					for i, target := range ts {
+						plain, _ := magickReference(t, path, Hints{Orientation: orientation}, target)
+						if hinted[i].Width != plain.Width || hinted[i].Height != plain.Height {
+							t.Errorf("%s target %d: %dx%d, ImageMagick's full decode %dx%d", name, i,
+								hinted[i].Width, hinted[i].Height, plain.Width, plain.Height)
+						}
+						// Alone, the target may decode at a different size from the
+						// group's.
+						if i == 0 {
+							one, err := src.Encode(context.Background(), 0, target)
+							if err != nil {
+								t.Fatalf("%s: %v", name, err)
+							}
+							if one[0].Width != plain.Width || one[0].Height != plain.Height {
+								t.Errorf("%s target %d alone: %dx%d, ImageMagick's full decode %dx%d", name, i,
+									one[0].Width, one[0].Height, plain.Width, plain.Height)
+							}
+							one[0].Cleanup()
+						}
+					}
+					for _, h := range hinted {
+						h.Cleanup()
+					}
+				})
 			}
 		}
+	})
+	if reduced.Load() < 20 {
+		t.Errorf("only %d encodes were decoded reduced: the sweep no longer exercises the route", reduced.Load())
 	}
-	if reduced < 20 {
-		t.Errorf("only %d encodes were decoded reduced: the sweep no longer exercises the route", reduced)
-	}
-	if stored == 0 {
+	if stored.Load() == 0 {
 		t.Error("no group was decoded at the stored size: the sweep no longer exercises that branch")
 	}
 }
@@ -308,6 +315,7 @@ func TestScaledWebPDecodeKeepsTheOutputSize(t *testing.T) {
 // decoded file. That holds while fitSize is symmetric under swapping width and
 // height, over the bounds an Encoding resolves to.
 func TestFitSizeIsSymmetricUnderTurning(t *testing.T) {
+	t.Parallel()
 	r := rand.New(rand.NewSource(1))
 	for i := 0; i < 200000; i++ {
 		w, h := 1+r.Intn(16383), 1+r.Intn(16383)
@@ -336,6 +344,7 @@ func resolveAll(t *testing.T, ts []Encoding) []encoding {
 // stored aspect, and is used only when it is at most 7/8 of the stored size;
 // otherwise the stored size is decoded.
 func TestScaledWebPReductionChoice(t *testing.T) {
+	t.Parallel()
 	enc := func(edge int) encoding { return encoding{maxEdge: edge, maxArea: edge * edge} }
 	s := &Source{webp: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
 	for _, c := range []struct {
@@ -396,6 +405,7 @@ func TestScaledWebPReductionChoice(t *testing.T) {
 // channel and 99.9% of channel values within 14 levels. A wrongly turned,
 // unconverted or unblended output differs by far more.
 func TestScaledWebPMatchesTheFullDecode(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	adobe := mustAdobeProfile(t)
@@ -468,6 +478,7 @@ func TestScaledWebPMatchesTheFullDecode(t *testing.T) {
 // just recorded: the Adobe RGB file comes out as the full decode's
 // conversion, and not as the same pixels without the profile.
 func TestScaledWebPConvertsItsProfile(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	plain := stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80")
@@ -486,6 +497,7 @@ func TestScaledWebPConvertsItsProfile(t *testing.T) {
 // An animation, including one of a single frame, is composited by webp-frames
 // frame by frame whatever the targets, never decoded as a scaled still.
 func TestAnimatedWebPIsNotDecodedAsAScaledStill(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	still := stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80")
@@ -526,6 +538,7 @@ func TestAnimatedWebPIsNotDecodedAsAScaledStill(t *testing.T) {
 // decode a still WebP reduced, and give the size and pixels the full decode
 // gives.
 func TestScaledWebPThroughTheProcessorAndEnv(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	p := requireProcessor(t)
@@ -571,6 +584,7 @@ func TestScaledWebPThroughTheProcessorAndEnv(t *testing.T) {
 // leaves nothing of the source, the profile included, in a directory whose
 // owner removes it.
 func TestScaledWebPLeavesNoDecodedFrame(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	path := withWebPChunk(t, stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80"), "icc", mustAdobeProfile(t))
@@ -615,6 +629,7 @@ func readDirNames(t *testing.T, dir string) []string {
 // The tool's still mode agrees with the header it is told, never scales up,
 // and refuses animations.
 func TestWebPFramesStillMode(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	exe, err := tool.Resolve(webpFramesTool)
@@ -778,6 +793,7 @@ func tiffOrientation(order binary.AppendByteOrder, typ, count, value uint16, aft
 // for edge- and area-bounded targets, and sources where the two orientations
 // round differently.
 func TestWebPDecodeSizeIsTheSameForEitherOrientation(t *testing.T) {
+	t.Parallel()
 	var targets []encoding
 	for _, e := range []int{100, 333, 640, 1024, 2048} {
 		targets = append(targets, encoding{maxEdge: e, maxArea: e * e}, encoding{maxEdge: 100000, maxArea: e * e * 3 / 4},
@@ -846,6 +862,7 @@ func toolOrientation(t *testing.T, path string) (n int, ok bool, err error) {
 // applies, for every layout it answers for, and it declines the layouts it
 // cannot be sure of.
 func TestWebPStillOrientationAgreesWithImageMagick(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	const w, h = 300, 200
@@ -951,6 +968,7 @@ func TestWebPStillOrientationAgreesWithImageMagick(t *testing.T) {
 // The files of one directory that differ only in their EXIF orientation are
 // read with the orientation each carries.
 func TestScaledWebPOrientationsEachTurnTheOutput(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	base := stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80")
@@ -990,6 +1008,7 @@ func fullReads(calls [][]string) int {
 // the stored size when no reduction pays, and never by the fused
 // ImageMagick decode.
 func TestStillWebPIsDecodedByWebPFramesAtEveryTarget(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	small := stillWebP(t, photoPNG(t, real, 640, 480, false), "-q", "80")
@@ -1039,6 +1058,7 @@ func TestStillWebPIsDecodedByWebPFramesAtEveryTarget(t *testing.T) {
 // webp-frames; only its orientation is asked of ImageMagick, by one read of
 // the whole image, and not at all when a hint replaces it.
 func TestUncertainWebPOrientationIsAskedOfImageMagickAlone(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	le := binary.LittleEndian
@@ -1091,6 +1111,7 @@ func TestUncertainWebPOrientationIsAskedOfImageMagickAlone(t *testing.T) {
 // decode was reduced, the shared bounds otherwise. A run that reports another
 // size is an error and leaves no output.
 func TestWebPStillEncodesAreChecked(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	path := stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80")
@@ -1148,6 +1169,7 @@ func TestWebPStillEncodesAreChecked(t *testing.T) {
 // reduction in libwebp does not relax the cap: lossless and alpha images are
 // decoded at full size before they are scaled.
 func TestWebPOverTheStoredSizeCapIsRefusedBeforeAnyDecode(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	big := filepath.Join(t.TempDir(), "big.png")
@@ -1185,6 +1207,7 @@ func TestWebPOverTheStoredSizeCapIsRefusedBeforeAnyDecode(t *testing.T) {
 // A file with an uncertain profile and an uncertain orientation is read whole
 // once, for the orientation: the tool reports the profile.
 func TestOneWholeImageReadForAnUncertainWebP(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	simple := mustReadFile(t, stillWebP(t, photoPNG(t, real, 900, 600, false), "-q", "80"))
@@ -1207,6 +1230,7 @@ func TestOneWholeImageReadForAnUncertainWebP(t *testing.T) {
 // A decode that fails leaves nothing in the scratch directory, the profile
 // included: when the tool fails after writing it, and when it fails to decode.
 func TestFailedWebPDecodeLeavesNoProfile(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	simple := mustReadFile(t, stillWebP(t, photoPNG(t, real, 900, 600, false), "-q", "80"))
@@ -1250,6 +1274,7 @@ func TestFailedWebPDecodeLeavesNoProfile(t *testing.T) {
 
 // The tool writes no profile for an image it fails to decode.
 func TestWebPFramesStillWritesNoProfileForAFailedDecode(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	exe, err := tool.Resolve(webpFramesTool)
@@ -1278,6 +1303,7 @@ func TestWebPFramesStillWritesNoProfileForAFailedDecode(t *testing.T) {
 // the output of Open and Encode has the size of ImageMagick's. A file
 // ImageMagick cannot read is refused, not decoded.
 func TestCraftedWebPsAreOrientedAsImageMagickOrientsThem(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	files, err := filepath.Glob(filepath.Join("testdata", "webp-orient", "*.webp"))
@@ -1347,6 +1373,7 @@ func TestCraftedWebPsAreOrientedAsImageMagickOrientsThem(t *testing.T) {
 // the file with the right size, and another excess is refused as ImageMagick
 // refuses it.
 func TestAnimatedWebPWithAnOversizedRIFFSizeIsRepaired(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	exact := mustReadFile(t, buildWebP(t, webpCase{codec: "lossy", frames: 3}))
@@ -1388,6 +1415,7 @@ func TestAnimatedWebPWithAnOversizedRIFFSizeIsRepaired(t *testing.T) {
 // spelling is read whatever the flag. (libwebp's mux refuses a file whose XMP
 // flag and chunk disagree, so the tool's own flag test never decides this.)
 func TestXMPChunkWithItsFlagClearIsNotReported(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	for name, c := range map[string]struct {
 		file  string

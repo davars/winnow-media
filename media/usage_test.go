@@ -6,6 +6,7 @@ import (
 )
 
 func TestUsageOfNilState(t *testing.T) {
+	t.Parallel()
 	if got := UsageOf(nil); got != nil {
 		t.Fatalf("UsageOf(nil) = %+v, want nil", got)
 	}

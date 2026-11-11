@@ -23,6 +23,7 @@ import (
 // bounds are 1 level of alpha, 1 level of colour where both come out opaque
 // and 2 levels of colour where both are partly transparent.
 func TestWebPFramesMatchCoalesce(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	for _, codec := range []string{"lossy", "lossless", "mixed"} {
@@ -166,6 +167,7 @@ func resolvedFrames(t *testing.T, maxFrames int) int {
 // stored, and that of a profiled one is the stored pixels with the profile
 // assigned and converted to sRGB, which the old path never did.
 func TestAnimatedWebPFramesMatchTheImageMagickPath(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	p := requireProcessor(t)
@@ -264,6 +266,7 @@ func TestAnimatedWebPFramesMatchTheImageMagickPath(t *testing.T) {
 // checks that the frames, whose pixels carry no EXIF, come out rotated and
 // sized to match.
 func TestHeaderOrientationIsAppliedToAnimatedWebP(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
 	inner := p.run

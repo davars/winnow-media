@@ -87,6 +87,7 @@ func readNRGBA(t *testing.T, path string) *image.NRGBA {
 }
 
 func TestCompositorMatchesMagickCoalesce(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	const w, h = 24, 20
 	full := image.Rect(0, 0, w, h)
@@ -350,6 +351,7 @@ func TestCompositorMemoryDoesNotGrowWithFrameCount(t *testing.T) {
 // a graphic control extension has the disposal of the frame before it, as in
 // ImageMagick.
 func TestFrameWithoutGraphicControlInheritsDisposal(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	const w, h = 40, 30
 	// Frame 0 has disposal 2 and a small rectangle; frame 1 has no extension.

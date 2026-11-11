@@ -135,13 +135,21 @@ func fakeTool(args []string) {
 		for i := 0; i < len(b); i += 4096 {
 			b[i] = 1
 		}
-		end := time.Now().Add(time.Duration(busy) * time.Millisecond)
+		// Spin on the process's own CPU time: a wall-clock deadline gives
+		// less CPU than asked when other tests share the cores.
 		n := 0
-		for time.Now().Before(end) {
+		for cpuTime() < time.Duration(busy)*time.Millisecond {
 			n++
 		}
 		fmt.Println(len(b), n > 0)
 	}
+}
+
+// cpuTime is the user plus system time the process has used so far.
+func cpuTime() time.Duration {
+	var ru syscall.Rusage
+	check(syscall.Getrusage(syscall.RUSAGE_SELF, &ru))
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
 
 func check(err error) {

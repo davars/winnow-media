@@ -39,6 +39,7 @@ func rungArgs(t *testing.T, env Env, path, mime string, maxFrames int) (string, 
 // ImageMagick is handed the selected frames of a many-frame animation, one
 // full canvas each, and never the file or an instruction to composite it whole.
 func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	levels, delays := make([]int, 40), make([]int, 40)
@@ -96,6 +97,7 @@ func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
 // gone cannot be hidden by the one after it. The tool is a real webp-frames
 // whose report is rewritten.
 func TestOpenRefusesACompositorReportOfTheWrongFrames(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
@@ -133,6 +135,7 @@ func TestOpenRefusesACompositorReportOfTheWrongFrames(t *testing.T) {
 
 // A still WebP is decoded to exactly one image.
 func TestEncodeRefusesAStillWebPDecodeThatWritesTheWrongImages(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	path := stillWebP(t, photoPNG(t, real, 300, 200, false), "-q", "80")
@@ -174,6 +177,7 @@ func TestEncodeRefusesAStillWebPDecodeThatWritesTheWrongImages(t *testing.T) {
 // compositor that writes one frame more or fewer than were selected, and
 // leaves nothing behind.
 func TestAnimationFramesRefuseACompositorThatWritesTheWrongFrames(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
 	for _, c := range []struct {
@@ -217,6 +221,7 @@ func TestAnimationFramesRefuseACompositorThatWritesTheWrongFrames(t *testing.T) 
 // A one-frame GIF is composited like any other: the type decides the decoder,
 // not the frame count.
 func TestEncodeRungCompositesAOneFrameGIF(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
@@ -241,6 +246,7 @@ func TestEncodeRungCompositesAOneFrameGIF(t *testing.T) {
 // animation, encodes as one frame with the profile ProbeFrames reports from
 // its chunk list.
 func TestEncodeRungEncodesAProfiledStillWebPAsAnAnimation(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	path := filepath.Join(t.TempDir(), "content")
@@ -266,6 +272,7 @@ func TestEncodeRungEncodesAProfiledStillWebPAsAnAnimation(t *testing.T) {
 // The artifact is what ImageMagick makes of the whole animation when it can
 // hold it: the same bytes, delays included, for opaque frames.
 func TestEncodeRungMatchesTheWholeFileEncode(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	levels, delays := []int{10, 70, 130, 190, 250}, []int{0, 20, 7, 33, 20}
@@ -297,6 +304,7 @@ func TestEncodeRungMatchesTheWholeFileEncode(t *testing.T) {
 // Frames tagged with a profile are converted from it, and untagged frames are
 // not.
 func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	adobe := writeAdobeProfile(t, t.TempDir())
@@ -346,6 +354,7 @@ func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
 // Consecutive frames that are the same after the resize are encoded once and
 // the mapping says so.
 func TestEncodeRungDropsConsecutiveDuplicateFrames(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	path := writeGrayAnimGIF(t, real, []int{50, 50, 50, 200, 200, 90}, []int{5, 5, 5, 5, 5, 5})
@@ -368,6 +377,7 @@ func TestEncodeRungDropsConsecutiveDuplicateFrames(t *testing.T) {
 // A request cancelled after the header read stops the compositing before
 // ImageMagick runs.
 func TestEncodeRungStopsCompositingWhenCancelled(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -401,6 +411,7 @@ func TestEncodeRungStopsCompositingWhenCancelled(t *testing.T) {
 // The staging directory holds the artifact and nothing else, whether the
 // encode succeeds or fails.
 func TestEncodeRungLeavesNoScratchFiles(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	staging := t.TempDir()
 	env := stagedEnv(real, staging)
@@ -440,6 +451,7 @@ func TestEncodeRungLeavesNoScratchFiles(t *testing.T) {
 // decoding anything: the only tool run is the -ping header read. A file at a
 // cap is not refused.
 func TestEncodeRungRefusesAnimationsOverTheCapsBeforeDecoding(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	const side = maxFramePixels / 6500
 	if side*6500 != maxFramePixels {
@@ -502,6 +514,7 @@ func TestEncodeRungRefusesAnimationsOverTheCapsBeforeDecoding(t *testing.T) {
 
 // A WebP animation is read and capped as a GIF is.
 func TestEncodeRungRefusesOversizeWebPAnimationsBeforeDecoding(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	const height = 6500
@@ -534,6 +547,7 @@ func TestEncodeRungRefusesOversizeWebPAnimationsBeforeDecoding(t *testing.T) {
 
 // Frames that are not the file's own headers are an error, before any decode.
 func TestEncodeRungRefusesFramesThatDifferFromTheHeaders(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := writeFile(t, "content", oneColourGIF(t, 8, 8, 4))
 	other, err := real.ProbeFrames(context.Background(), writeFile(t, "content", oneColourGIF(t, 8, 8, 3)), "image/gif")
@@ -566,6 +580,7 @@ func TestEncodeRungRefusesFramesThatDifferFromTheHeaders(t *testing.T) {
 // A compositor that reports fewer frames than were selected, or an encode that
 // reports fewer rows, is an error and not a short mapping.
 func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
@@ -613,6 +628,7 @@ func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
 // The compositor refuses a GIF that is not what the header read described: a
 // different frame count, canvas or set of profiled frames.
 func TestGIFJobRefusesAFileThatDiffersFromTheHeaderRead(t *testing.T) {
+	t.Parallel()
 	path := writeFile(t, "content", oneColourGIF(t, 8, 8, 3))
 	for _, c := range []struct {
 		name string
@@ -636,6 +652,7 @@ func TestGIFJobRefusesAFileThatDiffersFromTheHeaderRead(t *testing.T) {
 
 // Decoding stops between frames when the context is cancelled.
 func TestGIFJobStopsBetweenFramesWhenCancelled(t *testing.T) {
+	t.Parallel()
 	path := writeFile(t, "content", oneColourGIF(t, 8, 8, 6))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -654,6 +671,7 @@ func TestGIFJobStopsBetweenFramesWhenCancelled(t *testing.T) {
 // Each frame is converted by the profile it carries, and a frame that gets
 // another profile than the first is not given the first's.
 func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	adobe := mustAdobeProfile(t)
@@ -699,6 +717,7 @@ func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
 // every coalesced frame, which the compositors handle per frame. The
 // operation accepts it; EncodeRung, which composites the same way, must too.
 func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	p := requireProcessor(t)
 	dir := t.TempDir()
@@ -734,6 +753,7 @@ func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
 // A one-frame animation is decoded once, by the encode, and maps to its one
 // frame.
 func TestEncodeRungDecodesAOneFrameAnimationOnce(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
@@ -755,6 +775,7 @@ func TestEncodeRungDecodesAOneFrameAnimationOnce(t *testing.T) {
 // AnimationFrames refuses it, with ErrUnsupportedType naming the type found
 // and before any pixel is decoded.
 func TestEncodeRungRefusesOtherFormatsAsAnimationFramesDoes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
 	tiff := filepath.Join(t.TempDir(), "multi.tif")
@@ -793,6 +814,7 @@ func TestEncodeRungRefusesOtherFormatsAsAnimationFramesDoes(t *testing.T) {
 // A profiled still gets its sRGB destination from the profile the package
 // embeds when the caller supplies no file, as a composited animation does.
 func TestEncodeRungStillWithoutProfilePathUsesTheEmbeddedProfile(t *testing.T) {
+	t.Parallel()
 	var encodes [][]string
 	env := stagedEnv(Env{Run: func(_ context.Context, _ string, args ...string) (Result, error) {
 		if slices.Contains(args, "identify") {

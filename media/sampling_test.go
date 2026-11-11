@@ -121,6 +121,7 @@ func readFrames(t *testing.T, dir string, images []Image) [][]byte {
 }
 
 func TestProbeVideo(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	ctx := context.Background()
@@ -164,6 +165,7 @@ func TestProbeVideo(t *testing.T) {
 }
 
 func TestProbeAnimation(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	ctx := context.Background()
 
@@ -197,6 +199,7 @@ func TestProbeAnimation(t *testing.T) {
 }
 
 func TestVideoFramesAt(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	ctx := context.Background()
@@ -465,6 +468,7 @@ func TestVideoFrameRun(t *testing.T) {
 }
 
 func TestAnimationFramesAt(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	ctx := context.Background()
 
@@ -574,6 +578,7 @@ func TestAnimationFramesAt(t *testing.T) {
 // of the display delays before it, a stored delay below 20 ms counting as
 // 100 ms. It is the Frame.SourceTimeMS of the same frame.
 func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	ctx := context.Background()
@@ -631,6 +636,7 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 // An index at or past the frame count is refused by the gate after the header
 // read, not by the compositor: the error is the gate's and no compositor runs.
 func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		src    func(t *testing.T) string
 		frames int
@@ -663,6 +669,7 @@ func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *
 // WebP too, and the header read of the animation operations reports the
 // still's profile.
 func TestProbeAnimationDoesNotDecodeAStillWebP(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	p := requireProcessor(t)

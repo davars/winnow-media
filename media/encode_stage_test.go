@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -34,6 +35,7 @@ func webpEncoding(edge int) encoding {
 // after it has been oriented, for the encoding's bounds, and never as a size
 // computed from the header.
 func TestEncodeArgsAskForTheSizeOfTheOrientedFrame(t *testing.T) {
+	t.Parallel()
 	enc := webpEncoding(100)
 	args := encodeArgs([]encodeFrame{{input: "pam:/in"}}, encodeSource{}, enc, encodeOutput{kind: outputStill, path: "/out.webp"})
 	w, h := fitExpr(enc.maxEdge, enc.maxArea)
@@ -166,6 +168,7 @@ func sweepSizes(areas []int) [][2]int {
 // The fx expressions give fitSize's size, to the pixel, for every bound the
 // encodings allow, and fitSize agrees with the iterative oracle.
 func TestFitExprEqualsFitSize(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	edges := []int{16, 24, 100, 1024, 2048, 2576, 16384}
 	areas := []int{256, 768, 100000, 1048576, 3_750_000, 4194304, 100_000_000}
@@ -177,34 +180,40 @@ func TestFitExprEqualsFitSize(t *testing.T) {
 		}
 	}
 	sizes := sweepSizes(areas)
-	var checked, resized, mismatches int
-	for _, c := range combos {
-		got := fxSizes(t, env, c[0], c[1], sizes)
-		for i, sz := range sizes {
-			tw, th, resize := fitSize(sz[0], sz[1], c[0], c[1])
-			if lw, lh, _ := fitSizeWithTheLoop(sz[0], sz[1], c[0], c[1]); lw != tw || lh != th {
-				t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d, the loop form gave %dx%d", sz, c[0], c[1], tw, th, lw, lh)
-			}
-			if got[i] != [2]int{tw, th} {
-				if mismatches++; mismatches < 20 {
-					t.Errorf("fx size of %v at edge %d, area %d is %v, fitSize gives %dx%d", sz, c[0], c[1], got[i], tw, th)
+	var checked, resized, mismatches atomic.Int64
+	t.Run("combos", func(t *testing.T) {
+		for _, c := range combos {
+			t.Run(fmt.Sprintf("edge %d area %d", c[0], c[1]), func(t *testing.T) {
+				t.Parallel()
+				got := fxSizes(t, env, c[0], c[1], sizes)
+				for i, sz := range sizes {
+					tw, th, resize := fitSize(sz[0], sz[1], c[0], c[1])
+					if lw, lh, _ := fitSizeWithTheLoop(sz[0], sz[1], c[0], c[1]); lw != tw || lh != th {
+						t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d, the loop form gave %dx%d", sz, c[0], c[1], tw, th, lw, lh)
+					}
+					if got[i] != [2]int{tw, th} {
+						if mismatches.Add(1) < 20 {
+							t.Errorf("fx size of %v at edge %d, area %d is %v, fitSize gives %dx%d", sz, c[0], c[1], got[i], tw, th)
+						}
+					}
+					if tw*th > c[1] && (tw > 1 && th > 1) || max(tw, th) > max(c[0], max(sz[0], sz[1])) {
+						t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d exceeds a bound", sz, c[0], c[1], tw, th)
+					}
+					checked.Add(1)
+					if resize {
+						resized.Add(1)
+					}
 				}
-			}
-			if tw*th > c[1] && (tw > 1 && th > 1) || max(tw, th) > max(c[0], max(sz[0], sz[1])) {
-				t.Errorf("fitSize(%v, edge %d, area %d) = %dx%d exceeds a bound", sz, c[0], c[1], tw, th)
-			}
-			checked++
-			if resize {
-				resized++
-			}
+			})
 		}
-	}
-	t.Logf("%d (size, bounds) pairs checked, %d of them resized, %d mismatches", checked, resized, mismatches)
+	})
+	t.Logf("%d (size, bounds) pairs checked, %d of them resized, %d mismatches", checked.Load(), resized.Load(), mismatches.Load())
 }
 
 // The sizing rows the plan names, through ImageMagick: sides round down, so
 // 4000x3001 at 2048 is 2048x1536.
 func TestFitExprRoundsDown(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	for _, c := range []struct {
 		w, h, edge, area int
@@ -226,6 +235,7 @@ func TestFitExprRoundsDown(t *testing.T) {
 
 // A rung's size, read back from the run that wrote it, is the fitSize one.
 func TestEncodeRungSizesWithFitSize(t *testing.T) {
+	t.Parallel()
 	env := stagedEnv(requireMagick(t), t.TempDir())
 	path := filepath.Join(t.TempDir(), "wide.png")
 	magick(t, env, "-size", "800x601", "gradient:red-blue", path)
@@ -251,6 +261,7 @@ func TestEncodeRungSizesWithFitSize(t *testing.T) {
 // The order of the stages: orient, then convert, then flatten (JPEG only),
 // then resize, and strip last, for every kind of output.
 func TestEncodeArgsStages(t *testing.T) {
+	t.Parallel()
 	src := encodeSource{orientation: "RightTop"}
 	frame := encodeFrame{input: "pam:/f", convertTo: "/srgb.icc", assign: "/own.icc", delayCS: 7}
 	for _, c := range []struct {
@@ -302,6 +313,7 @@ func TestEncodeArgsStages(t *testing.T) {
 // Several frames are each read inside their own parentheses, and each frame
 // is converted by its own profile.
 func TestEncodeArgsPerFrameProfiles(t *testing.T) {
+	t.Parallel()
 	frames := []encodeFrame{
 		{input: "pam:/a", convertTo: "/srgb.icc", assign: "/a.icc"},
 		{input: "pam:/b"},
@@ -324,6 +336,7 @@ func TestEncodeArgsPerFrameProfiles(t *testing.T) {
 
 // An unprofiled frame is never given a profile, however many are available.
 func TestEncodeArgsDoNotAssignAProfile(t *testing.T) {
+	t.Parallel()
 	args := encodeArgs([]encodeFrame{{input: "pam:/a", assign: "/a.icc"}}, encodeSource{},
 		webpEncoding(100), encodeOutput{kind: outputStill, path: "/o.webp"})
 	if slices.Contains(args, "-profile") {
@@ -332,6 +345,7 @@ func TestEncodeArgsDoNotAssignAProfile(t *testing.T) {
 }
 
 func TestEncodeArgsAnimationDelays(t *testing.T) {
+	t.Parallel()
 	args := encodeArgs([]encodeFrame{{input: "pam:/a", delayCS: 0}, {input: "pam:/b", delayCS: 33}, {input: "pam:/c", delayCS: -1}},
 		encodeSource{}, webpEncoding(100), encodeOutput{kind: outputAnimation, path: "/o.webp"})
 	for _, want := range [][]string{
@@ -346,6 +360,7 @@ func TestEncodeArgsAnimationDelays(t *testing.T) {
 // A frame that keeps its own delay keeps it after a frame that set one: a
 // delay setting outlives the parentheses it was given in.
 func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	dir := t.TempDir()
 	a, d7, out := filepath.Join(dir, "a.png"), filepath.Join(dir, "d7.gif"), filepath.Join(dir, "out.webp")
@@ -366,6 +381,7 @@ func TestAFrameKeepingItsDelayKeepsItAfterADelayedFrame(t *testing.T) {
 }
 
 func TestParseEncoded(t *testing.T) {
+	t.Parallel()
 	got, err := parseEncoded([]byte("abc|12|8\ndef|6|4\n"), true)
 	want := []encodedFrame{{"abc", 12, 8}, {"def", 6, 4}}
 	if err != nil || !slices.Equal(got, want) {
@@ -510,6 +526,7 @@ func withHeaderOrientation(p *Processor, name string) {
 // an animated WebP composited outside ImageMagick, and a one-frame
 // animation.
 func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	src := quadrants(48, 32)
 	srcPNG := writePNG(t, src, "quad.png")
@@ -524,6 +541,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		want := upright(quadrants(24, 16), n)
 
 		t.Run(name+"/still read from the file", func(t *testing.T) {
+			t.Parallel()
 			tiff := filepath.Join(t.TempDir(), "q.tif")
 			magick(t, real, srcPNG, "-orient", name, tiff)
 			ec, _ := enc.resolve()
@@ -539,6 +557,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/rung still given the orientation", func(t *testing.T) {
+			t.Parallel()
 			env := stagedEnv(real, t.TempDir())
 			content := writeFile(t, "content", mustRead(t, srcPNG))
 			frames, err := env.ProbeFrames(context.Background(), content, "image/png")
@@ -558,6 +577,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/rung GIF given the orientation", func(t *testing.T) {
+			t.Parallel()
 			env := stagedEnv(real, t.TempDir())
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			other := writePNG(t, quadrantsShifted(48, 32), "other.png")
@@ -582,6 +602,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/rung one-frame GIF given the orientation", func(t *testing.T) {
+			t.Parallel()
 			env := stagedEnv(real, t.TempDir())
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			magick(t, real, srcPNG, gif)
@@ -603,6 +624,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/GIF composited by the operation", func(t *testing.T) {
+			t.Parallel()
 			p := requireProcessor(t)
 			withHeaderOrientation(p, name)
 			gif := filepath.Join(t.TempDir(), "q.gif")
@@ -620,6 +642,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/animated WebP composited by the operation", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
 			withHeaderOrientation(p, name)
@@ -645,6 +668,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/WebP still with the orientation in an EXIF chunk, rung", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			env := stagedEnv(real, t.TempDir())
 			plain := filepath.Join(t.TempDir(), "q.webp")
@@ -667,6 +691,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/WebP still with the orientation in an EXIF chunk, operation", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
 			plain := filepath.Join(t.TempDir(), "q.webp")
@@ -679,6 +704,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		// ImageMagick may or may not apply the EXIF orientation of an
 		// animation; either way the size must be that of the picture.
 		t.Run(name+"/one-frame animated WebP with an EXIF chunk", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
 			path := withWebPChunk(t, buildWebP(t, webpCase{codec: "lossless", frames: 1}), "exif", exifOrientation(uint16(n)))
@@ -721,6 +747,7 @@ func quadrantsShifted(w, h int) *image.NRGBA {
 // Every output of every route is free of metadata, including the converted
 // sRGB profile the encode itself applied.
 func TestEveryOutputIsStripped(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	adobe := writeAdobeProfile(t, t.TempDir())
 	srgb := writeSRGBProfile(t)
@@ -784,6 +811,7 @@ func TestEveryOutputIsStripped(t *testing.T) {
 // data, in a text chunk or in an XMP packet, is oriented by what the decode
 // finds, and sized for the picture that results, not for the header.
 func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	ctx := context.Background()
 	const edge = 32
@@ -867,6 +895,7 @@ func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
 
 // A source of more than 8 bits per channel is written as an 8-bit PNG.
 func TestOutputsAreEightBit(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	ec, _ := Encoding{Format: PNG}.resolve()

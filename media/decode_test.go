@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -49,6 +50,7 @@ func encodeFilters(calls [][]string) []string {
 }
 
 func TestOpenRoutesByTypeAndStructureNotFrameCount(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	dir := t.TempDir()
@@ -103,6 +105,7 @@ func TestOpenRoutesByTypeAndStructureNotFrameCount(t *testing.T) {
 }
 
 func TestOpenRequiresScratch(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	env.Stage, env.Scratch = stagedEnv(env, t.TempDir()).Stage, nil
 	png := filepath.Join(t.TempDir(), "x.png")
@@ -113,6 +116,7 @@ func TestOpenRequiresScratch(t *testing.T) {
 }
 
 func TestSourceCloseRemovesScratch(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	var dirs []string
 	env := stagedEnv(real, t.TempDir())
@@ -137,6 +141,7 @@ func TestSourceCloseRemovesScratch(t *testing.T) {
 
 // The filter follows what the source declares, whichever decoder reads it.
 func TestFilterFollowsTheSourceFrame(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	dir := t.TempDir()
@@ -188,6 +193,7 @@ func TestFilterFollowsTheSourceFrame(t *testing.T) {
 
 // A still and the same image composited choose the same filter.
 func TestStillAndCompositedEquivalentsChooseTheSameFilter(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
 	ctx := context.Background()
@@ -260,6 +266,7 @@ func writeWebPFramePNG(t *testing.T, k int, alpha bool) string {
 // What the -ping header read declares agrees with what a full decode of the
 // same file declares, for every still format, after completeProfile.
 func TestHeaderReadDeclaresWhatTheDecoderDoes(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -346,6 +353,7 @@ func pngDeclaresSoft(t *testing.T, path string) bool {
 
 // The compositors that read a GIF decode no frame after the last one selected.
 func TestGIFCompositorStopsAfterTheLastSelectedFrame(t *testing.T) {
+	t.Parallel()
 	env, _ := sourceEnv(t)
 	g := oneColourGIF(t, 8, 8, 3)
 	last := bytes.LastIndex(g, []byte{0x2C, 0, 0, 0, 0})
@@ -368,6 +376,7 @@ func TestGIFCompositorStopsAfterTheLastSelectedFrame(t *testing.T) {
 // A rung's budget selects, among the frames the first rung decoded, the source
 // frames it selects of the whole file, for every halving ladder from 16.
 func TestEncodeSelectionOnAHalvingLadderMatchesTheFileRelativeOne(t *testing.T) {
+	t.Parallel()
 	for sourceFrames := 1; sourceFrames <= 400; sourceFrames++ {
 		decoded := selectFrames(frameCount(16, sourceFrames, true), sourceFrames)
 		s := &Source{route: routeGIF, selected: decoded}
@@ -390,6 +399,7 @@ func TestEncodeSelectionOnAHalvingLadderMatchesTheFileRelativeOne(t *testing.T) 
 // Any budget selects among the decoded frames: an odd one is not an error,
 // and a GIF opened as a still takes any budget as a TIFF does.
 func TestEncodeSelectsAmongTheDecodedFramesForAnyBudget(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env, _ := sourceEnv(t)
 	levels := make([]int, 40)
@@ -441,6 +451,7 @@ func multiPageTIFF(t *testing.T, env Env) string {
 // One decode serves every rung: the mapping of each Encode is that of the
 // rung encoded alone.
 func TestEncodeFromOneOpenMatchesEncodeRungPerRung(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	env := stagedEnv(real, t.TempDir())
 	path := writeGrayAnimGIF(t, real, []int{10, 30, 60, 90, 120, 150, 180, 210, 240, 20, 50, 80, 110, 140, 170, 200, 230, 5, 35, 65}, repeatInt(5, 20))
@@ -483,6 +494,7 @@ func repeatInt(v, n int) []int {
 // A still is decoded once for all its targets, and each target is what it
 // would be alone.
 func TestEncodeTwoTargetsOfAStillEqualsTwoEncodes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "x.png")
 	magick(t, real, "-size", "300x200", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "60%", "+channel", path)
@@ -521,6 +533,7 @@ func TestEncodeTwoTargetsOfAStillEqualsTwoEncodes(t *testing.T) {
 // Each target of an animation drops the frames that are the same at its own
 // size, so its mapping is its own.
 func TestEachTargetOfAnAnimationHasItsOwnMapping(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	// Frame 1 differs from frame 0 in one pixel by 12 levels: distinct at
 	// full size, identical once shrunk eightfold.
@@ -546,6 +559,7 @@ func TestEachTargetOfAnAnimationHasItsOwnMapping(t *testing.T) {
 }
 
 func TestHintsOrientationReplacesTheFilesOwn(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "x.png")
 	magick(t, real, "-size", "40x20", "xc:red", path)
@@ -570,6 +584,7 @@ func TestHintsOrientationReplacesTheFilesOwn(t *testing.T) {
 }
 
 func TestEncodeFramesWritesOneFilePerFrame(t *testing.T) {
+	t.Parallel()
 	env, _ := sourceEnv(t)
 	path := writeFile(t, "a.gif", oneColourGIF(t, 16, 16, 3))
 	dir := t.TempDir()
@@ -586,6 +601,7 @@ func TestEncodeFramesWritesOneFilePerFrame(t *testing.T) {
 // ImageMagick sizes the reduced and unreduced decodes of a JPEG alike, for
 // every target and a sweep of source sizes that includes near-square ones.
 func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	dir := t.TempDir()
 	targets := []Encoding{
@@ -600,60 +616,188 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 			[2]int{side, 2*side/3 + 1}, [2]int{side/3 + 1, side})
 	}
 	sizes = append(sizes, [2]int{4000, 3001}, [2]int{5712, 4284}, [2]int{8064, 6048}, [2]int{13632, 3058})
+	// A large case decodes a JPEG of up to 48 megapixels in each of its
+	// encodes, so those take turns.
+	large := make(chan struct{}, 4)
 	for _, orientation := range []int{0, 6} {
 		for i, sz := range sizes {
 			if orientation != 0 && i%4 != 0 {
 				continue
 			}
 			name := fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation)
-			path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+".jpg")
-			magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+			isLarge := sz[0] >= 4000
 			ts := targets
-			if sz[0] >= 4000 {
+			if isLarge {
 				ts = append(slices.Clone(targets),
 					Encoding{Format: WebP, Quality: 80, MaxEdge: 1024, MaxArea: 1024 * 1024},
 					Encoding{Format: WebP, Quality: 80, MaxEdge: 2048, MaxArea: 2048 * 2048})
 			}
-			env, _ := sourceEnv(t)
-			src := openSource(t, env, path, Hints{Orientation: orientation})
-			hinted, err := src.Encode(context.Background(), 0, ts...)
-			if err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			// Each target alone is the path of a ladder rung.
-			alone := make([]Artifact, len(ts))
-			for i, target := range ts {
-				one, err := src.Encode(context.Background(), 0, target)
-				if err != nil {
-					t.Fatalf("%s: %v", name, err)
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+".jpg")
+				magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+				// encode returns the sizes of the outputs of one encode of
+				// the file, each encode on its own Source.
+				encode := func(reduce bool, targets ...Encoding) func() ([][2]int, error) {
+					env, _ := sourceEnv(t)
+					src := openSource(t, env, path, Hints{Orientation: orientation})
+					src.reduce = reduce
+					return func() ([][2]int, error) {
+						if isLarge {
+							large <- struct{}{}
+							defer func() { <-large }()
+						}
+						out, err := src.Encode(context.Background(), 0, targets...)
+						if err != nil {
+							return nil, err
+						}
+						sizes := make([][2]int, len(out))
+						for i, a := range out {
+							sizes[i] = [2]int{a.Width, a.Height}
+							a.Cleanup()
+						}
+						return sizes, nil
+					}
 				}
-				alone[i] = one[0]
-			}
-			src.reduce = false
-			plain, err := src.Encode(context.Background(), 0, ts...)
-			if err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			for i := range ts {
-				if hinted[i].Width != plain[i].Width || hinted[i].Height != plain[i].Height {
-					t.Errorf("%s target %d: reduced %dx%d, full decode %dx%d", name, i,
-						hinted[i].Width, hinted[i].Height, plain[i].Width, plain[i].Height)
+				// The encodes are independent, and run alongside one
+				// another, so that the case's last encode is not queued
+				// behind the other tests.
+				var wg sync.WaitGroup
+				var plain, hinted [][2]int
+				var plainErr, hintedErr error
+				alone := make([][][2]int, len(ts))
+				aloneErr := make([]error, len(ts))
+				run := func(f func()) {
+					wg.Add(1)
+					go func() { defer wg.Done(); f() }()
 				}
-				if alone[i].Width != plain[i].Width || alone[i].Height != plain[i].Height {
-					t.Errorf("%s target %d alone: reduced %dx%d, full decode %dx%d", name, i,
-						alone[i].Width, alone[i].Height, plain[i].Width, plain[i].Height)
+				planPlain, planHinted := encode(false, ts...), encode(true, ts...)
+				run(func() { plain, plainErr = planPlain() })
+				run(func() { hinted, hintedErr = planHinted() })
+				// Each target alone is the path of a ladder rung.
+				for i, target := range ts {
+					plan := encode(true, target)
+					run(func() { alone[i], aloneErr[i] = plan() })
 				}
-				hinted[i].Cleanup()
-				alone[i].Cleanup()
-				plain[i].Cleanup()
-			}
+				wg.Wait()
+				if plainErr != nil || hintedErr != nil {
+					t.Fatalf("all targets: full decode %v, reduced %v", plainErr, hintedErr)
+				}
+				for i := range ts {
+					if hinted[i] != plain[i] {
+						t.Errorf("target %d: reduced %dx%d, full decode %dx%d", i, hinted[i][0], hinted[i][1], plain[i][0], plain[i][1])
+					}
+					if aloneErr[i] != nil {
+						t.Errorf("target %d alone: %v", i, aloneErr[i])
+					} else if alone[i][0] != plain[i] {
+						t.Errorf("target %d alone: reduced %dx%d, full decode %dx%d", i, alone[i][0][0], alone[i][0][1], plain[i][0], plain[i][1])
+					}
+				}
+			})
 		}
+	}
+}
+
+// One Source encodes the same targets again and again, as a caller that keeps
+// it open does, and every encode writes the same bytes and size as the first
+// encode of a fresh Source, which is made for each variant. For a JPEG the variants are reduced for all
+// targets, reduced for each alone and not reduced; for a TIFF, which is read
+// in full to learn whether it has alpha only when an encode resizes, the first
+// target fits, so that the full read is first made by a later encode.
+func TestRepeatedEncodesOfOneSourceAgree(t *testing.T) {
+	t.Parallel()
+	real := requireMagick(t)
+	jpegTargets := []Encoding{
+		{Format: WebP, Quality: 80, MaxEdge: 64, MaxArea: 64 * 64},
+		{Format: WebP, Quality: 80, MaxEdge: 256, MaxArea: 256 * 256},
+		{Format: WebP, Quality: 80, MaxEdge: 333, MaxArea: 30000},
+	}
+	tiffTargets := []Encoding{
+		{Format: WebP, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400},
+		{Format: WebP, Quality: 80, MaxEdge: 64, MaxArea: 64 * 64},
+		{Format: WebP, Quality: 80, MaxEdge: 40, MaxArea: 40 * 40},
+	}
+	type fixture struct {
+		name        string
+		orientation int
+		targets     []Encoding
+		write       func(t *testing.T, dir string) string
+	}
+	var fixtures []fixture
+	for _, sz := range [][2]int{{600, 401}, {1999, 1334}, {2048, 2048}} {
+		for _, orientation := range []int{0, 6} {
+			fixtures = append(fixtures, fixture{
+				fmt.Sprintf("jpeg %dx%d/o%d", sz[0], sz[1], orientation), orientation, jpegTargets,
+				func(t *testing.T, dir string) string {
+					path := filepath.Join(dir, "x.jpg")
+					magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+					return path
+				},
+			})
+		}
+	}
+	fixtures = append(fixtures, fixture{"tiff 16-bit with alpha and a profile", 0, tiffTargets, func(t *testing.T, dir string) string {
+		path := filepath.Join(dir, "x.tif")
+		magick(t, real, "-seed", "7", "-size", "160x120", "plasma:fractal", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel",
+			"-depth", "16", "-profile", writeSRGBProfile(t), "-profile", writeAdobeProfile(t, dir), path)
+		return path
+	}})
+	for _, fx := range fixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			t.Parallel()
+			path := fx.write(t, t.TempDir())
+			type result struct {
+				bytes []byte
+				size  [2]int
+			}
+			open := func() *Source {
+				env, _ := sourceEnv(t)
+				return openSource(t, env, path, Hints{Orientation: fx.orientation})
+			}
+			encode := func(src *Source, reduce bool, ts ...Encoding) []result {
+				t.Helper()
+				src.reduce = reduce
+				out, err := src.Encode(context.Background(), 0, ts...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				res := make([]result, len(out))
+				for i, a := range out {
+					res[i] = result{mustReadFile(t, a.Path), [2]int{a.Width, a.Height}}
+					a.Cleanup()
+				}
+				return res
+			}
+			variants := func(source func() *Source) map[string][]result {
+				got := map[string][]result{}
+				// The first target alone, which fits for a TIFF, comes first.
+				for i, target := range fx.targets {
+					got[fmt.Sprintf("alone %d", i)] = encode(source(), true, target)
+				}
+				got["all"] = encode(source(), true, fx.targets...)
+				got["plain"] = encode(source(), false, fx.targets...)
+				return got
+			}
+			want := variants(open)
+			src := open()
+			for round := range 3 {
+				for variant, got := range variants(func() *Source { return src }) {
+					for i := range got {
+						if got[i].size != want[variant][i].size || !bytes.Equal(got[i].bytes, want[variant][i].bytes) {
+							t.Errorf("round %d, %s, target %d: %v, %d bytes; a fresh Source gave %v, %d bytes", round, variant, i,
+								got[i].size, len(got[i].bytes), want[variant][i].size, len(want[variant][i].bytes))
+						}
+					}
+				}
+			}
+		})
 	}
 }
 
 // The reduction is the smallest eighth that covers twice the largest target
 // on both sides, and is not used when it would not reduce.
 func TestJPEGSizeReductionChoice(t *testing.T) {
+	t.Parallel()
 	s := &Source{jpeg: true, reduce: true, stored: [2]int{6000, 4000}, upright: [2]int{6000, 4000}}
 	enc := func(edge int) encoding { return encoding{maxEdge: edge, maxArea: edge * edge} }
 	for _, c := range []struct {
@@ -699,6 +843,7 @@ func TestJPEGSizeReductionChoice(t *testing.T) {
 // does, with and without the JPEG reduction: the same decode, written to a
 // 16-bit PAM and encoded from that.
 func TestFusedAndMaterialisedEncodesAgreeOnTwoTargetsAndReducedJPEG(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -821,6 +966,7 @@ func oneFrameAnimatedWebP(t *testing.T, path string, icc []byte, alpha bool) str
 // honours its ICC profile, as its still twin is by ImageMagick: both are
 // converted, not labelled.
 func TestOneFrameAnimatedWebPWithAProfileIsConverted(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	real := requireMagick(t)
 	still := filepath.Join(t.TempDir(), "still.webp")
@@ -848,6 +994,7 @@ func TestOneFrameAnimatedWebPWithAProfileIsConverted(t *testing.T) {
 
 // A source that fails to open leaves no scratch directory behind.
 func TestFailedOpenRemovesScratch(t *testing.T) {
+	t.Parallel()
 	var dirs []string
 	env, _ := sourceEnv(t)
 	env.Scratch = func() (string, func(), error) {
@@ -874,6 +1021,7 @@ func TestFailedOpenRemovesScratch(t *testing.T) {
 // The Processor decodes a profiled GIF into its output directory while it
 // encodes; when it returns, only the frames are left there.
 func TestStreamedProfiledGIFLeavesOnlyFrames(t *testing.T) {
+	t.Parallel()
 	p := requireProcessor(t)
 	var specs []gifFrameSpec
 	for i := range 3 {
@@ -893,6 +1041,7 @@ func TestStreamedProfiledGIFLeavesOnlyFrames(t *testing.T) {
 // The decode that settles whether a TIFF declares alpha is made only when an
 // encode resizes, since only a resize uses the filter.
 func TestFullReadForAStillRunsOnlyWhenAnEncodeResizes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "a.tif")
 	magick(t, real, "-size", "64x48", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel", path)
@@ -928,6 +1077,7 @@ func TestFullReadForAStillRunsOnlyWhenAnEncodeResizes(t *testing.T) {
 // The full read is made once for a Source, by the first encode that resizes,
 // and its answer serves every later encode.
 func TestFullReadIsMadeOnceAcrossEncodes(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "a.tif")
 	magick(t, real, "-size", "64x48", "gradient:red-blue", "-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel", path)
@@ -967,6 +1117,7 @@ func TestFullReadIsMadeOnceAcrossEncodes(t *testing.T) {
 // writes the bytes of the materialised encode, for sources whose filter is
 // Mitchell and Lanczos.
 func TestSourceEncodeEqualsMaterialisedForPNGs(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	ctx := context.Background()
 	alpha := []string{"-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel"}

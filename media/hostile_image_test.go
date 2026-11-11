@@ -237,6 +237,7 @@ func TestWebPOfMaximumDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
 }
 
 func TestLosslessWebPFixtureIsOneColour(t *testing.T) {
+	t.Parallel()
 	env := requireMagick(t)
 	path := writeFile(t, "small.webp", losslessWebP(64, 48))
 	out := string(magick(t, env, "webp:"+path, "-format", "%w %h %k", "info:"))
@@ -435,6 +436,7 @@ func gifWithFrames(t *testing.T, lsdW, lsdH int, rects [][4]int) []byte {
 // compositor would allocate twice over. Both the probe and the encode must
 // refuse it before any canvas exists.
 func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
+	t.Parallel()
 	data := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
 	t.Run("ProbeAnimation", func(t *testing.T) {
 		p := requireProcessor(t)
@@ -472,6 +474,7 @@ func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
 // scenes than LimitArgs allows, and every caller of the shared reader gets
 // ErrTooLarge naming the ceiling.
 func TestHeaderReadMapsTheListLengthCeilingToErrTooLarge(t *testing.T) {
+	t.Parallel()
 	data := manyFrameGIF(1, 1, 2100)
 	t.Run("ProbeFrames", func(t *testing.T) {
 		env := requireMagick(t)
@@ -509,6 +512,7 @@ func TestHeaderReadMapsTheListLengthCeilingToErrTooLarge(t *testing.T) {
 // A GIF without a logical screen is composited on the extent of its frames,
 // which scanGIF bounds before any canvas is allocated.
 func TestScanGIFBoundsTheExtentOfAZeroLogicalScreen(t *testing.T) {
+	t.Parallel()
 	wide := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
 	if _, err := scanGIF(wide, 10); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("scanGIF of a 268 MP extent: err = %v, want ErrTooLarge", err)

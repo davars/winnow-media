@@ -81,6 +81,7 @@ func frameHashes(p *Processor, input []string) (string, error) {
 }
 
 func TestMOVExternalDataReference(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	data := sdrClip(t, env, "160x120", 10, 2)
@@ -119,6 +120,7 @@ func TestMOVExternalDataReference(t *testing.T) {
 }
 
 func TestDemuxerOptionsAreKnownToTheirDemuxer(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	mov := sdrClip(t, env, "160x120", 10, 1)
 	mkv := writeClip(t, env, ".mkv", append(testsrc("160x120", 10, 1), "-c:v", "libx264", "-preset", "ultrafast")...)
@@ -131,6 +133,7 @@ func TestDemuxerOptionsAreKnownToTheirDemuxer(t *testing.T) {
 }
 
 func TestInputArgs(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		demuxer string
 		want    string
@@ -151,6 +154,7 @@ func hlsPlaylist(segment string) []byte {
 }
 
 func TestHLSPlaylistClaimedAsMP4(t *testing.T) {
+	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	segment := filepath.Join(t.TempDir(), "segment.mp4")
@@ -197,6 +201,7 @@ func TestHLSPlaylistClaimedAsMP4(t *testing.T) {
 // ffmpeg's defaults already refuse these segments; TestInputArgs pins the
 // whitelist argument itself.
 func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
+	t.Parallel()
 	requireFFmpeg(t)
 	// Unsandboxed, so that the whitelist is the only thing between the
 	// demuxer and the network.
@@ -230,6 +235,7 @@ func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
 // The sandbox refuses the socket itself, so a tool whose own whitelist
 // allowed the network still cannot reach it.
 func TestSandboxBlocksNetworkSegmentsWhenTheWhitelistAllowsThem(t *testing.T) {
+	t.Parallel()
 	requireFFmpeg(t)
 	p := requireProcessor(t)
 	var hits atomic.Int32

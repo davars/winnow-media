@@ -34,6 +34,7 @@ func policyValue(t *testing.T, rules []policyRule, name string) string {
 }
 
 func TestHighMemoryIsTheZeroValueAndTheDefaultFlags(t *testing.T) {
+	t.Parallel()
 	if HighMemory != MemoryProfile(0) {
 		t.Fatal("HighMemory is not the zero value")
 	}
@@ -53,6 +54,7 @@ func TestHighMemoryIsTheZeroValueAndTheDefaultFlags(t *testing.T) {
 }
 
 func TestLowMemoryFlagsAndPolicyAgree(t *testing.T) {
+	t.Parallel()
 	flags := LowMemory.LimitArgs()
 	s, err := LowMemory.settings()
 	if err != nil {
@@ -103,6 +105,7 @@ func assertLimited(t *testing.T, argv []string, profile MemoryProfile) {
 // Every route that runs magick passes through Env.runMagick, whatever its
 // own arguments.
 func TestMagickRoutesCarryTheProfile(t *testing.T) {
+	t.Parallel()
 	frame := encodeFrame{input: "pam:/in"}
 	enc := webpEncoding(100)
 	routes := map[string]func(Env) error{
@@ -178,6 +181,7 @@ func TestMagickRoutesCarryTheProfile(t *testing.T) {
 }
 
 func TestUnknownMemoryProfileIsRefused(t *testing.T) {
+	t.Parallel()
 	bad := MemoryProfile(99)
 	if bad.Valid() || !HighMemory.Valid() || !LowMemory.Valid() {
 		t.Error("Valid is wrong")
@@ -212,6 +216,7 @@ func TestUnknownMemoryProfileIsRefused(t *testing.T) {
 }
 
 func TestProcessorInstallsTheProfile(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		profile       MemoryProfile
 		memory, mapLm string
@@ -258,6 +263,7 @@ func TestProcessorInstallsTheProfile(t *testing.T) {
 // Every magick run of a Source, whichever encode path it takes, carries the
 // Env's profile.
 func TestSourceRunsCarryTheProfile(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	env, calls := sourceEnv(t)
 	env.Memory = LowMemory
@@ -301,6 +307,7 @@ func TestSourceRunsCarryTheProfile(t *testing.T) {
 }
 
 func TestProcessorVideoRunsCarryTheProfile(t *testing.T) {
+	t.Parallel()
 	requireWebPBuilders(t)
 	src := sdrClip(t, requireFFmpeg(t), "160x120", 10, 4)
 	p := requireProcessorWith(t, LowMemory)
