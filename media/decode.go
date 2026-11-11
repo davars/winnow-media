@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -100,7 +101,10 @@ const (
 
 // openRequest is what Env.Open and the Processor's operations share.
 type openRequest struct {
+	// path names the input to the tools. file, when set, is the descriptor
+	// the Go side reads the input from and the one the tools' path reopens.
 	path  string
+	file  *os.File
 	hints Hints
 	// dec pins the coder, and so the type, of the input when pinned is set;
 	// otherwise the type comes from the bytes.
@@ -133,6 +137,9 @@ type openRequest struct {
 	video *videoRequest
 }
 
+// input is where the Go side reads the request's input from.
+func (r openRequest) input() input { return input{f: r.file, path: r.path} }
+
 // headerRead is what the header read of a file decided.
 type headerRead struct {
 	route  route
@@ -148,7 +155,7 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 	if req.pinned {
 		coder = req.dec.name
 	} else {
-		kind, err := sniffFile(req.path)
+		kind, err := sniffFile(req.input())
 		switch {
 		case err == nil:
 			switch kind {
@@ -166,7 +173,7 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 	switch {
 	case coder == "gif":
 		h.route = routeGIF
-	case coder == "webp" && webpAnimated(req.path):
+	case coder == "webp" && webpAnimated(req.input()):
 		h.route = routeWebP
 	}
 	// A still asked for alone reads the headers of its first image only.
@@ -227,7 +234,7 @@ func (e Env) readSource(ctx context.Context, req openRequest) (headerRead, error
 		if req.allScenes && h.route == routeStill {
 			profiled, profileRef = h.scenes[:1], h.ref+"[0]"
 		}
-		if err := completeProfile(ctx, e, profileRef, req.path, profiled); err != nil {
+		if err := completeProfile(ctx, e, profileRef, req.input(), profiled); err != nil {
 			return headerRead{}, err
 		}
 	}
@@ -357,7 +364,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*EnvSource, error) {
 	// was not opened as one.
 	var videoErr error
 	if req.video == nil && !req.pinned {
-		route, dec := videoRouteOf(req.path)
+		route, dec := videoRouteOf(req.input())
 		vreq := req
 		vreq.dec, vreq.pinned, vreq.video = dec, true, &videoRequest{}
 		switch route {
@@ -388,7 +395,7 @@ func (e Env) open(ctx context.Context, req openRequest) (*EnvSource, error) {
 	req.webpProfileFromTool = true
 	hdr, err := e.readSource(ctx, req)
 	if err != nil {
-		if !req.pinned && notImage(req.path, err) {
+		if !req.pinned && notImage(req.input(), err) {
 			if videoErr == nil {
 				videoErr = e.probeOtherVideo(ctx, req)
 				if videoErr == nil {
@@ -506,11 +513,11 @@ func (e Env) scratchFor(req openRequest) (dir string, cleanup func(), err error)
 // notImage reports whether err, from reading the headers of the file at path,
 // leaves open that the file is a video: its bytes name no type, and the
 // failure is not a refusal or a cancelled run.
-func notImage(path string, err error) bool {
+func notImage(in input, err error) bool {
 	if errors.Is(err, ErrTooLarge) || errors.Is(err, ErrUnsupportedType) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	_, serr := sniffFile(path)
+	_, serr := sniffFile(in)
 	return errors.Is(serr, ErrUnsupportedType)
 }
 

@@ -443,7 +443,7 @@ func TestReuseSecondEncodeDecodesNoOriginal(t *testing.T) {
 	p := requireProcessor(t)
 	rec := record(p)
 	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
-	link := src.link
+	link := src.ref
 	encodeAll(t, src, Select{}, Encoding{Format: PNG, MaxEdge: 64})
 	before := rec.count()
 	encodeAll(t, src, Select{Region: Region{X: 10, Y: 10, Width: 80, Height: 40}}, Encoding{Format: JPEG, MaxEdge: 64}, Encoding{Format: WebP, MaxEdge: 32})

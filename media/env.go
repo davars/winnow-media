@@ -25,11 +25,19 @@
 //
 // A Source is one open input. Open reads only headers (a still's or
 // animation's) or runs one ffprobe (a video); no pixel is decoded until an
-// Encode. A Source holds no process or file descriptor between calls, only
-// what the next call needs, in a private directory under the Processor's own;
-// each Encode has its own Usage. The Source records the file's device, inode,
-// size and modification and status-change times when it is opened and checks
-// them before every Encode, which refuses a file that changed.
+// Encode. A Source holds no process between calls, only what the next call
+// needs, in a private directory under the Processor's own, and the input file
+// open until Close; each Encode has its own Usage. Open opens the input once.
+// The size check, the type sniff and Go's reads of the file use that
+// descriptor everywhere. On Linux the tools read it too, as /dev/fd/3, so
+// replacing or relinking the path after Open changes nothing that is read;
+// elsewhere a tool reads through a link to the path, and only the per-Encode
+// check guards it. The Source records the file's device, inode, size and
+// modification and status-change times when it is opened and checks them on
+// the descriptor before every Encode, which refuses a file that changed; a
+// rename over the path, an unlink or a new link changes the file's
+// status-change time, so it is refused too. A writer of the same file between
+// that check and a tool's read is not excluded.
 //
 //   - A still is decoded and encoded in one ImageMagick run per Encode (a JPEG
 //     at a reduced size when its targets are small, a still WebP at a reduced
@@ -84,11 +92,12 @@
 // so is every animation and video type: the operations that read only those
 // refuse other content without a tool run. Other content is named by the one
 // header read that the decode needs, under the generated policy, and the coder
-// it reports is looked up in the table of Types. The input is read through an
-// extensionless link in the Source's private directory, so no tool is given
-// the file's name or can let it choose the format; the decoder is then pinned
-// to the type found. OpenOptions.Type replaces all of this with a type the
-// caller names, which must be in Config.Types.
+// it reports is looked up in the table of Types. No tool is given the file's
+// name or can let it choose the format: on Linux a tool is given /dev/fd/3,
+// the descriptor Open holds, and elsewhere an extensionless link in the
+// Source's private directory. The decoder is then pinned to the type found.
+// OpenOptions.Type replaces all of this with a type the caller names, which
+// must be in Config.Types.
 //
 // The type must be in Config.Types and be read by the operation, else the
 // call gives an error wrapping ErrUnsupportedType, which names the type
@@ -132,8 +141,9 @@
 // tool and its descendants; a killed helper takes the tool with it.
 //
 // The tool's environment and arguments are exactly those the Processor
-// passes, and it inherits only descriptors 0, 1 and 2: the helper marks the
-// rest close-on-exec (close_range, Linux 5.11) before starting it. Nothing
+// passes, and it inherits descriptors 0, 1 and 2 and, when the run reads an
+// input, that input as descriptor 3; the helper marks every other descriptor
+// close-on-exec (close_range, Linux 5.11) before starting it. Nothing
 // about the helper reaches it, and the consumer gets no process-wide side
 // effect. The GIF compositor and webp-frames are tools of this kind: the first
 // is the program's own executable, started with a marker its package init
@@ -259,7 +269,9 @@ type Scratcher func() (dir string, cleanup func(), err error)
 // "ffmpeg"); it must also be able to run "webp-frames" for a WebP. Stage is
 // required by the methods that produce an output file (EncodeRung,
 // EnvSource.Encode); Scratch is required by Open and EncodeRung, which keep
-// decoded frames in it until the source is closed.
+// decoded frames in it until the source is closed. An Env's Runner receives
+// only arguments, so its methods name the input by its path, which the tools
+// open for themselves.
 //
 // Deprecated: use Processor, which runs every tool itself.
 type Env struct {

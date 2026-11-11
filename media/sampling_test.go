@@ -688,7 +688,7 @@ func TestProbeAnimationDoesNotDecodeAStillWebP(t *testing.T) {
 				t.Fatalf("info %+v, err %v", info, err)
 			}
 			var m meter
-			hdr, err := p.env(&m).readSource(context.Background(), openRequest{path: path, dec: decoder{"magick", "webp"}, pinned: true, caps: true})
+			hdr, err := p.env(&m, nil).readSource(context.Background(), openRequest{path: path, dec: decoder{"magick", "webp"}, pinned: true, caps: true})
 			layout := hdr.layout
 			if err != nil || len(layout.infos) != 1 || layout.infos[0].hasICC != (name == "profiled") {
 				t.Fatalf("layout %+v, err %v; want hasICC %t", layout, err, name == "profiled")

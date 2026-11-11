@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
-	"os"
 	"slices"
 	"strings"
 )
@@ -36,15 +35,14 @@ func unrecognized(what string) error {
 // refuses a file that does name one.
 var errUnnamed = unrecognized("unrecognized content")
 
-// sniffFile returns the media type of the file at path from its leading
-// bytes alone.
-func sniffFile(path string) (string, error) {
-	f, err := os.Open(path)
+// sniffFile returns the media type of the input from its leading bytes alone.
+func sniffFile(in input) (string, error) {
+	r, done, err := in.open()
 	if err != nil {
 		return "", fmt.Errorf("source: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	buf, err := io.ReadAll(io.LimitReader(f, sniffBytes))
+	defer done()
+	buf, err := io.ReadAll(io.LimitReader(r, sniffBytes))
 	if err != nil {
 		return "", fmt.Errorf("source: %w", err)
 	}
@@ -227,15 +225,15 @@ const (
 	routeLooksLike
 )
 
-// videoRouteOf returns the route of the file at path and, for a video route,
-// its decoder. A file sniff names an image type is never looked at further.
-func videoRouteOf(path string) (videoRoute, decoder) {
-	f, err := os.Open(path)
+// videoRouteOf returns the route of the input and, for a video route, its
+// decoder. A file sniff names an image type is never looked at further.
+func videoRouteOf(in input) (videoRoute, decoder) {
+	r, done, err := in.open()
 	if err != nil {
 		return routeNotVideo, decoder{}
 	}
-	defer func() { _ = f.Close() }()
-	buf, err := io.ReadAll(io.LimitReader(f, sniffBytes))
+	defer done()
+	buf, err := io.ReadAll(io.LimitReader(r, sniffBytes))
 	if err != nil {
 		return routeNotVideo, decoder{}
 	}

@@ -299,7 +299,7 @@ func TestHeaderReadDeclaresWhatTheDecoderDoes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := completeProfile(ctx, env, ref, path, scenes); err != nil {
+			if err := completeProfile(ctx, env, ref, input{path: path}, scenes); err != nil {
 				t.Fatal(err)
 			}
 			if fullReadFormats[scenes[0].format] {

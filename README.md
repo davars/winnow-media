@@ -110,9 +110,12 @@ For a `Processor`, stated in full in the
 [package documentation](media/env.go)
 (`go doc github.com/davars/winnow-media/media`):
 
-- **Gate.** The input must be a regular file within `Caps.MaxInputBytes`. Its
-  type comes from its bytes, never its name (it is read through an
-  extensionless link), must be in `Config.Types`, and the decoder is pinned to
+- **Gate.** The input must be a regular file within `Caps.MaxInputBytes`. It is
+  opened once; the checks and Go's reads use that descriptor, and on Linux so
+  do the tools' (`/dev/fd/3`, not the path), so a file put at the path
+  afterwards is never read. Elsewhere the tools read through a link to the
+  path, which the per-`Encode` identity check guards. Its type comes from its
+  bytes, never its name, must be in `Config.Types`, and the decoder is pinned to
   it. The coder allow-list of the generated policy is built from `Types`, so
   content cannot choose another.
 - **Caps.** Input size, pixel counts and frame count are bounded by

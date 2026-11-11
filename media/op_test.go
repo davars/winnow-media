@@ -929,8 +929,7 @@ func TestGoldenArgv(t *testing.T) {
 	}
 }
 
-// neutralLinkDir matches the directory of the extensionless link a Processor
-// reads its input through.
+// neutralLinkDir matches the input directory of a Processor.
 var neutralLinkDir = regexp.MustCompile(`/[^\s:]*/tmp/in-[A-Za-z0-9]+`)
 
 // goldenArgv renders the recorded invocations with the input and output
@@ -940,6 +939,9 @@ func goldenArgv(calls [][]string, out string) string {
 	for _, call := range calls {
 		for _, arg := range call {
 			arg = neutralLinkDir.ReplaceAllLiteralString(arg, "$IN")
+			// Off Linux a tool reads the input through a link, which the
+			// golden files name as on Linux.
+			arg = strings.ReplaceAll(arg, "$IN/input", inputFDPath)
 			arg = strings.ReplaceAll(arg, out, "$OUT")
 			b.WriteString(strconv.Quote(arg))
 			b.WriteByte('\n')

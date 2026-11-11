@@ -43,6 +43,8 @@ type Processor struct {
 	// start runs one process: the sandbox helper, or the direct runner.
 	start runner
 	run   Runner
+	// openInput opens an input's file; tests replace it.
+	openInput func(path string) (*os.File, error)
 	// compose runs the frame compositor of a GIF or animated WebP; tests
 	// replace it.
 	compose func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
@@ -138,7 +140,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	for _, typ := range types {
 		accepts[typ] = true
 	}
-	p := &Processor{dir: dir, res: res, caps: limits, types: types, accepts: accepts, tools: tools, start: start}
+	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, tools: tools, start: start}
 	p.run = p.runTool
 	p.compose = p.composeFrames
 	rules := processorPolicy(res, types)
@@ -260,18 +262,19 @@ func (t *headTailBuffer) bytes() []byte {
 type meter struct{ usage Usage }
 
 // env returns an Env that runs through the Processor and adds each run to m.
-func (p *Processor) env(m *meter) Env {
+// Each run it starts inherits in, when not nil, as descriptor 3.
+func (p *Processor) env(m *meter, in *os.File) Env {
 	res, limits := p.res, p.caps
 	return Env{
 		resources: &res,
 		caps:      &limits,
 		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
-			res, err := p.run(ctx, name, args...)
+			res, err := p.run(withInput(ctx, in), name, args...)
 			m.add(res.Usage)
 			return res, err
 		},
 		compose: func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) error {
-			usage, err := p.compose(ctx, req, onFrame)
+			usage, err := p.compose(withInput(ctx, in), req, onFrame)
 			m.add(usage)
 			return err
 		},
@@ -285,10 +288,12 @@ func (m *meter) add(u *Usage) {
 	}
 }
 
-// admitted is an input that passed the gate. path names it by a neutral link
-// in dir, a directory of the Processor's that release removes.
+// admitted is an input that passed the gate. file is the descriptor every
+// later read of the input goes through, and ref what the tools call it. dir is
+// a directory of the Processor's that release removes; the caller closes file.
 type admitted struct {
-	path, dir string
+	file     *os.File
+	ref, dir string
 	// abs is the input's own absolute path and id its identity when it was
 	// admitted.
 	abs     string
@@ -309,32 +314,52 @@ type accepted struct {
 	typ  string
 }
 
-// admitInput checks everything about an input that can be checked before
-// pixels are read. The input must be a regular file within Caps.MaxInputBytes;
+// admitInput opens the input once and checks everything about it that can be
+// checked before pixels are read, through that descriptor alone, so that
+// replacing the file at path afterwards changes nothing that was checked or
+// that is read. The input must be a regular file within Caps.MaxInputBytes;
 // its type must be one of Config.Types that the operation reads. A GIF, WebP,
 // ISO base media or EBML file is typed by its leading bytes before any tool
 // runs, and every animation and video type is of that kind. Other content is
 // named by one header read under the generated policy, which allows only the
 // coders of Config.Types, so the content can select no other. A type the
 // caller names is used as it is, with no sniff or header read to name one.
-func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path string) (admitted, error) {
-	path, err := filepath.Abs(path)
+func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path string) (in admitted, err error) {
+	path, err = filepath.Abs(path)
 	if err != nil {
 		return admitted{}, err
 	}
-	info, err := os.Stat(path)
+	// The mode is judged before the open, which can have effects on a device;
+	// the descriptor must then be the file that was judged.
+	pre, err := os.Stat(path)
 	if err != nil {
 		return admitted{}, fmt.Errorf("source: %w", err)
 	}
-	if !info.Mode().IsRegular() {
+	if !pre.Mode().IsRegular() {
 		return admitted{}, fmt.Errorf("source %s is not a regular file", path)
+	}
+	f, err := p.openInput(path)
+	if err != nil {
+		return admitted{}, fmt.Errorf("source: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+		}
+	}()
+	info, err := f.Stat()
+	if err != nil {
+		return admitted{}, fmt.Errorf("source: %w", err)
+	}
+	if a, b := idOf(pre), idOf(info); a.dev != b.dev || a.ino != b.ino || !info.Mode().IsRegular() {
+		return admitted{}, fmt.Errorf("source %s changed while it was opened", path)
 	}
 	if info.Size() > p.caps.inputBytes {
 		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
 	}
 	typ := a.typ
 	if typ == "" {
-		if typ, err = sniffFile(path); err != nil && !errors.Is(err, errUnnamed) {
+		if typ, err = sniffFile(input{f: f}); err != nil && !errors.Is(err, errUnnamed) {
 			return admitted{}, err
 		}
 	}
@@ -345,18 +370,23 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path s
 		if err := p.checkType(typ, a.kind); err != nil {
 			return admitted{}, err
 		}
-		if typ == typeWebP && a.kind&kindAnimation == 0 && webpAnimated(path) {
+		if typ == typeWebP && a.kind&kindAnimation == 0 && webpAnimated(input{f: f}) {
 			return admitted{}, unrecognized("an animated WebP is read by the animation operations")
 		}
 	}
-	link, release, err := p.neutralLink(path)
+	dir, release, err := p.inputDir()
 	if err != nil {
 		return admitted{}, err
 	}
-	in := admitted{path: link, dir: filepath.Dir(link), abs: path, id: idOf(info), release: release}
+	ref, err := inputRef(dir, path)
+	if err != nil {
+		release()
+		return admitted{}, err
+	}
+	in = admitted{file: f, ref: ref, dir: dir, abs: path, id: idOf(info), release: release}
 	if typ == "" {
 		var coder string
-		if typ, coder, in.scenes, err = p.detectType(ctx, m, link, a.kind); err != nil {
+		if typ, coder, in.scenes, err = p.detectType(ctx, m, f, ref, a.kind); err != nil {
 			release()
 			return admitted{}, err
 		}
@@ -379,30 +409,24 @@ func (p *Processor) checkType(typ string, kind mediaKind) error {
 	return nil
 }
 
-// neutralLink makes an extensionless link to path in a new directory of the
-// Processor's, so that no tool is given the file's name. release removes it.
-func (p *Processor) neutralLink(path string) (link string, release func(), err error) {
-	dir, err := os.MkdirTemp(p.tmpDir(), "in-")
+// inputDir makes the directory of one input under the Processor's temporary
+// directory. release removes it.
+func (p *Processor) inputDir() (dir string, release func(), err error) {
+	dir, err = os.MkdirTemp(p.tmpDir(), "in-")
 	if err != nil {
 		return "", nil, err
 	}
-	release = func() { _ = os.RemoveAll(dir) }
-	link = filepath.Join(dir, "input")
-	if err := os.Symlink(path, link); err != nil {
-		release()
-		return "", nil, err
-	}
-	return link, release, nil
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
 }
 
-// detectType reads the headers of every image of the file link names under the
-// Processor's policy. It returns the type the coder that read them maps to,
-// which must be one the operation accepts, the coder, and the headers, which
-// the operation then does not read again. A TIFF whose first
-// image is a reduced-resolution subfile, as the preview of a camera raw
-// file is, is refused: the file's own type is not TIFF.
-func (p *Processor) detectType(ctx context.Context, m *meter, link string, kind mediaKind) (typ, coder string, scenes []sceneHeader, err error) {
-	scenes, err = identifyHeadersAs(ctx, p.env(m), link+stillScenes, true, gateHeaderFormat)
+// detectType reads the headers of every image of the file f holds, which ref
+// names to the tool, under the Processor's policy. It returns the type the
+// coder that read them maps to, which must be one the operation accepts, the
+// coder, and the headers, which the operation then does not read again. A TIFF
+// whose first image is a reduced-resolution subfile, as the preview of a camera
+// raw file is, is refused: the file's own type is not TIFF.
+func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref string, kind mediaKind) (typ, coder string, scenes []sceneHeader, err error) {
+	scenes, err = identifyHeadersAs(ctx, p.env(m, f), ref+stillScenes, true, gateHeaderFormat)
 	if err != nil {
 		if msg := err.Error(); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
 			(strings.Contains(msg, "security policy") || strings.Contains(msg, "no decode delegate")) {

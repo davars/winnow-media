@@ -129,7 +129,7 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 	} {
 		path := writeBytes(t, c.file)
 		read, err := real.Run(context.Background(), "magick", "identify", "-format", "%[profiles]", path)
-		if has, known := webpICC(path); err != nil {
+		if has, known := webpICC(input{path: path}); err != nil {
 			// ImageMagick refuses the file, so there is no profile to agree
 			// with; the scan must still leave it to the decode.
 			t.Logf("%s: refused by ImageMagick", c.name)
@@ -182,11 +182,11 @@ func TestWebPICCDeclinesAnUnreadableLayout(t *testing.T) {
 		"unknown first chunk":       riffWebP(riffChunk("JUNK", []byte("xx")), vp8xChunk(webpICCFlag), image),
 		"empty VP8X":                zeroVP8X,
 	} {
-		if has, known := webpICC(writeBytes(t, file)); known {
+		if has, known := webpICC(input{path: writeBytes(t, file)}); known {
 			t.Errorf("%s: webpICC = %t, known; want no answer", name, has)
 		}
 	}
-	if has, known := webpICC(filepath.Join(t.TempDir(), "missing")); known {
+	if has, known := webpICC(input{path: filepath.Join(t.TempDir(), "missing")}); known {
 		t.Errorf("missing file: webpICC = %t, known; want no answer", has)
 	}
 }

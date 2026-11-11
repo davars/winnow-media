@@ -111,16 +111,19 @@ func (i Info) clone() Info {
 }
 
 // Source is an input file the Processor opened, from which Encode writes
-// images. It holds no process or file descriptor between calls. Calls on one
-// Source are serialised; Sources run in parallel. A Source is safe for
-// concurrent use.
+// images. It holds no process between calls, and the input file open until
+// Close. Calls on one Source are serialised; Sources run in parallel. A Source
+// is safe for concurrent use.
 type Source struct {
 	p *Processor
 	// mu serialises calls and guards every field below up to imu.
-	mu       sync.Mutex
-	closed   bool
+	mu     sync.Mutex
+	closed bool
+	// file is the input, opened once by Open and read through for the
+	// Source's life; ref is what the tools call it.
+	file     *os.File
 	path     string
-	link     string
+	ref      string
 	dir      string
 	release  func()
 	id       fileID
@@ -165,6 +168,11 @@ type Source struct {
 // ErrUnsupportedType or ErrTooLarge. The Usage covers the tool runs of the
 // call, also when it fails.
 //
+// Open opens the file once. The checks and Go's reads use that descriptor; on
+// Linux so do the tools', so a file put at path afterwards is not read.
+// Elsewhere a tool reads through a link to the path, and only the per-Encode
+// identity check guards it.
+//
 // The caller must Close the Source, or close the Processor.
 func (p *Processor) Open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {
 	src, usage, err := p.openKinds(ctx, path, opts, kindStill|kindAnimation|kindVideo)
@@ -186,11 +194,11 @@ func (p *Processor) openKinds(ctx context.Context, path string, opts OpenOptions
 		return nil, m.usage, err
 	}
 	src := &Source{
-		p: p, path: in.abs, link: in.path, dir: in.dir, release: in.release, id: in.id,
+		p: p, file: in.file, path: in.abs, ref: in.ref, dir: in.dir, release: in.release, id: in.id,
 		typ: in.typ, override: override, dec: in.decoder,
 	}
 	src.reuse = opts.Reuse
-	env := p.env(&m)
+	env := p.env(&m, src.file)
 	if in.decoder.tool == "ffmpeg" {
 		err = src.openVideo(ctx, env, opts)
 	} else {
@@ -204,6 +212,7 @@ func (p *Processor) openKinds(ctx context.Context, path string, opts OpenOptions
 	}
 	if err != nil {
 		in.release()
+		_ = in.file.Close()
 		return nil, m.usage, err
 	}
 	return src, m.usage, nil
@@ -223,7 +232,7 @@ func (s *Source) applied(tag string) string {
 
 func (s *Source) openImage(ctx context.Context, env Env, in admitted) error {
 	s.req = openRequest{
-		path: in.path, dec: in.decoder, pinned: true, caps: true, scenes: in.scenes,
+		path: in.ref, file: in.file, dec: in.decoder, pinned: true, caps: true, scenes: in.scenes,
 		allScenes: true, webpProfileFromTool: true,
 	}
 	hdr, err := env.readSource(ctx, s.req)
@@ -283,7 +292,7 @@ func (s *Source) openAnimation(env Env) error {
 	s.upright = [2]int{s.layout.uw, s.layout.uh}
 	s.frames = map[int]srcFrame{}
 	s.compose = composeRequest{
-		path: s.link, dir: s.dir, frames: count, width: s.layout.cw, height: s.layout.ch,
+		path: s.ref, dir: s.dir, frames: count, width: s.layout.cw, height: s.layout.ch,
 	}
 	if hdr.route == routeWebP {
 		s.compose.external = webpFramesTool
@@ -311,7 +320,7 @@ func (s *Source) openVideo(ctx context.Context, env Env, opts OpenOptions) error
 	if opts.Orientation != 0 {
 		return errors.New("orientation does not apply to a video")
 	}
-	info, err := env.probeChecked(ctx, s.dec, s.link)
+	info, err := env.probeChecked(ctx, s.dec, s.ref)
 	if err != nil {
 		return err
 	}
@@ -333,8 +342,9 @@ func (s *Source) Info() Info {
 	return s.info.clone()
 }
 
-// Close removes the Source's scratch. It is idempotent, and waits for a call
-// that is running. Images already written are not affected.
+// Close closes the input and removes the Source's scratch. It is idempotent,
+// and waits for a call that is running. Images already written are not
+// affected.
 func (s *Source) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -345,13 +355,14 @@ func (s *Source) Close() error {
 	s.release()
 	s.p.forget(s)
 	s.stills, s.frames, s.kept = nil, nil, nil
-	return nil
+	return s.file.Close()
 }
 
-// checkIdentity returns an error unless the input is the file the Source was
-// opened on, unchanged.
+// checkIdentity returns an error unless the open input is as it was when the
+// Source was opened. It asks the descriptor, so a file put in place of the
+// path is not the question; a rewrite of the file itself is.
 func (s *Source) checkIdentity() error {
-	info, err := os.Stat(s.path)
+	info, err := s.file.Stat()
 	if err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
@@ -371,7 +382,8 @@ func (s *Source) checkIdentity() error {
 //
 // dir must exist and be empty; on failure it is emptied again. The Source is
 // checked against the file it was opened on first: if that file changed, the
-// call is refused. A Select that does not apply to the Source's kind, or a
+// call is refused. A rename over the path, an unlink or a new link changes the
+// file's status-change time, so it counts as a change. A Select that does not apply to the Source's kind, or a
 // region outside a frame whose size is settled, is refused before any tool
 // runs. The Usage covers the tool runs of this call alone, also when it fails.
 func (s *Source) Encode(ctx context.Context, dir string, sel Select, targets ...Encoding) ([]Image, Usage, error) {
@@ -422,7 +434,7 @@ func (s *Source) encode(ctx context.Context, dir string, sel Select, targets []E
 			return nil, m.usage, err
 		}
 	}
-	env := s.p.env(&m)
+	env := s.p.env(&m, s.file)
 	images, err := inDir(dir, func() ([]Image, error) {
 		switch s.kind {
 		case Still:
@@ -463,7 +475,7 @@ func (s *Source) stillAt(ctx context.Context, env Env, i int) (*EnvSource, error
 	es := s.stills[i]
 	if !s.profiled[i] {
 		scenes := s.hdr.scenes[i : i+1]
-		if err := completeProfile(ctx, env, s.hdr.ref+"["+strconv.Itoa(i)+"]", s.link, scenes); err != nil {
+		if err := completeProfile(ctx, env, s.hdr.ref+"["+strconv.Itoa(i)+"]", s.req.input(), scenes); err != nil {
 			return nil, err
 		}
 		s.profiled[i] = true
@@ -687,7 +699,7 @@ func (s *Source) encodeVideo(ctx context.Context, env Env, dir string, fr Frames
 		return nil, err
 	}
 	src, err := env.videoFromProbe(openRequest{
-		path: s.link, dec: s.dec, pinned: true, scratch: s.dir,
+		path: s.ref, file: s.file, dec: s.dec, pinned: true, scratch: s.dir,
 		video: &videoRequest{times: func(videoInfo) ([]int64, error) { return times, nil }, run: run},
 	}, s.probe)
 	if err != nil {

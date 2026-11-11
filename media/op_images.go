@@ -56,18 +56,18 @@ type sceneHeader struct {
 
 // completeProfile fills in hasICC for the one scene of a file whose coder
 // does not report its profile under -ping. ref is the identify input the
-// headers were read from, path the file it names. A WebP is answered by its
+// headers were read from, in the file it names. A WebP is answered by its
 // chunk list when the layout allows (see webpICC) and decoded otherwise; a
 // JXL is always decoded, as libjxl gives every JXL a profile. The decode is
 // bounded only by whatever caps the caller applied to the headers first. A
 // file of more than one scene is left as read.
-func completeProfile(ctx context.Context, env Env, ref, path string, scenes []sceneHeader) error {
+func completeProfile(ctx context.Context, env Env, ref string, in input, scenes []sceneHeader) error {
 	if len(scenes) != 1 {
 		return nil
 	}
 	switch scenes[0].format {
 	case "WEBP":
-		if hasICC, known := webpICC(path); known {
+		if hasICC, known := webpICC(in); known {
 			scenes[0].hasICC = hasICC
 			return nil
 		}

@@ -117,7 +117,7 @@ func TestResourcesReachTheirTargets(t *testing.T) {
 	}
 
 	var m meter
-	env := p.env(&m)
+	env := p.env(&m, nil)
 	var ran [][]string
 	inner := env.Run
 	env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {

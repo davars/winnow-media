@@ -246,7 +246,7 @@ func TestProcessorInstallsTheResources(t *testing.T) {
 			}
 			var m meter
 			var ran []string
-			env := p.env(&m)
+			env := p.env(&m, nil)
 			inner := env.Run
 			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
 				ran = args

@@ -237,7 +237,7 @@ func (e Env) ProbeFrames(ctx context.Context, inputPath, mimeType string) ([]Fra
 	if err != nil {
 		return nil, err
 	}
-	if err := completeProfile(ctx, e, ref, inputPath, scenes); err != nil {
+	if err := completeProfile(ctx, e, ref, input{path: inputPath}, scenes); err != nil {
 		return nil, err
 	}
 	frames := make([]FrameInfo, len(scenes))

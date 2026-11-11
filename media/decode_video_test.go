@@ -325,7 +325,7 @@ func TestOpenReadsQuickTimeWithoutFtyp(t *testing.T) {
 	for _, name := range []string{"noext", "clip.mov"} {
 		t.Run(name, func(t *testing.T) {
 			path := writeFile(t, name, b)
-			if _, err := sniffFile(path); !errors.Is(err, ErrUnsupportedType) {
+			if _, err := sniffFile(input{path: path}); !errors.Is(err, ErrUnsupportedType) {
 				t.Fatalf("sniff = %v, want it to name no type", err)
 			}
 			counted := withRunCounts(stagedEnv(real, t.TempDir()))

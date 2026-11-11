@@ -34,6 +34,9 @@ func directRunner(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (
 	}
 	cmd := exec.CommandContext(ctx, spec.Tool, spec.Args...)
 	cmd.Env, cmd.Dir = spec.Env, spec.Dir
+	if spec.Input != nil {
+		cmd.ExtraFiles = []*os.File{spec.Input}
+	}
 	cmd.Stdout, cmd.Stderr = outW, errW
 	cmd.SysProcAttr = directProcAttr()
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

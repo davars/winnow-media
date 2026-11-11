@@ -802,7 +802,7 @@ func TestDetectedFormatsOpenMatroskaWebMAndMov(t *testing.T) {
 			if _, err := runVideoProbe(context.Background(), env, decoder{"ffmpeg", ""}, src, probeEntries); err != nil {
 				t.Fatal(err)
 			}
-			if mt, err := sniffFile(src); err != nil || mt == "" {
+			if mt, err := sniffFile(input{path: src}); err != nil || mt == "" {
 				t.Errorf("sniff = %q, %v", mt, err)
 			}
 		})
@@ -894,7 +894,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 	// processable reports whether the Processor accepts the clip's type; the
 	// others, such as MPEG-TS, are read only through the Env entries.
 	processable := func(src string) bool {
-		mt, err := sniffFile(src)
+		mt, err := sniffFile(input{path: src})
 		if err != nil {
 			return false
 		}
@@ -1162,7 +1162,7 @@ func encodeWebPPair(e Env, ctx context.Context, inputPath, smallPath, largePath 
 		outputs = outputs[1:]
 		return path, func() { _ = os.Remove(path) }, nil
 	}
-	route, dec := videoRouteOf(inputPath)
+	route, dec := videoRouteOf(input{path: inputPath})
 	if route == routeNotVideo {
 		dec = unnamedVideoDecoder
 	}

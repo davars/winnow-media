@@ -16,6 +16,10 @@ type runSpec struct {
 	Args []string
 	Env  []string
 	Dir  string
+	// Input, when not nil, is a regular file the process inherits as
+	// descriptor 3, open for reading. The caller keeps it open until the run
+	// ends; the runner does not close it.
+	Input *os.File
 }
 
 // toolResult is how a run ended, when the runner delivered a report.
@@ -44,6 +48,9 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	if !ok {
 		return Result{}, fmt.Errorf("unknown tool %q", name)
 	}
+	if err := requireInput(inputOf(ctx), args); err != nil {
+		return Result{}, err
+	}
 	tmp, err := p.runTempDir()
 	if err != nil {
 		return Result{}, err
@@ -51,7 +58,7 @@ func (p *Processor) runTool(ctx context.Context, name string, args ...string) (R
 	defer func() { _ = os.RemoveAll(tmp) }()
 	var stdout bytes.Buffer
 	var stderr headTailBuffer
-	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir}, &stdout, &stderr)
+	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir, Input: inputOf(ctx)}, &stdout, &stderr)
 	tail := bytes.TrimSpace(stderr.bytes())
 	return Result{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
 }
@@ -80,12 +87,15 @@ func runError(ctx context.Context, name string, res toolResult, err error, tail 
 // compositor finishes it; if it fails the compositor is stopped and its error
 // returned. The usage returned covers the compositor.
 func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+	if err := requireInput(inputOf(ctx), req.args()); err != nil {
+		return nil, err
+	}
 	tmp, err := p.runTempDir()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	spec := runSpec{Args: req.args(), Dir: p.dir}
+	spec := runSpec{Args: req.args(), Dir: p.dir, Input: inputOf(ctx)}
 	name := "gif compositor"
 	if req.external != "" {
 		path, ok := p.tools[req.external]

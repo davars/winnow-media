@@ -694,3 +694,47 @@ func TestSandboxedFailuresNameTheHelper(t *testing.T) {
 		t.Errorf("err = %v, want one that names the sandbox helper and the failed start", err)
 	}
 }
+
+// A tool in the sandbox finds the input on descriptor 3 and holds no other
+// descriptor of the helper's, and opening /dev/fd/3 gives it a read offset of
+// its own: two opens each see the whole file though the descriptor sits
+// mid-file.
+func TestSandboxHandsTheToolTheInputOnDescriptorThree(t *testing.T) {
+	t.Parallel()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString("0123456789"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(4, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	script := "read -r a <" + inputFDPath + "; read -r b <" + inputFDPath + "; echo $a $b; for f in /proc/self/fd/*; do echo ${f##*/}; done"
+	spec := runSpec{Tool: sh, Args: []string{"-c", script}, Env: []string{}, Dir: t.TempDir(), Input: f}
+	var errOut strings.Builder
+	if _, err := sandboxRunner(rlimitsFor(Resources{}.withDefaults()))(context.Background(), spec, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(out.String())
+	if len(fields) < 3 || fields[0] != "0123456789" || fields[1] != "0123456789" {
+		t.Fatalf("the tool printed %q (stderr %q), want the whole file from each open, then its descriptors", out.String(), errOut.String())
+	}
+	// The listing itself holds one more descriptor, the directory it reads.
+	var extra int
+	for _, fd := range fields[2:] {
+		if n, err := strconv.Atoi(fd); err != nil || n > 3 {
+			extra++
+		}
+	}
+	if extra > 1 {
+		t.Errorf("the tool holds descriptors %v, want only 0 to 3", fields[2:])
+	}
+}

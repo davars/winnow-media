@@ -45,6 +45,10 @@ const (
 	processHeadroom = 512
 )
 
+// inputHelperFD is the descriptor the helper receives the input on: after the
+// status and lifeline descriptors.
+const inputHelperFD = 5
+
 // rlimitNproc is RLIMIT_NPROC, which package syscall does not name.
 const rlimitNproc = 6
 
@@ -75,6 +79,11 @@ type helperConfig struct {
 	Args  []string
 	Env   []string
 	Dir   string
+	// Input is the file the tool inherits as descriptor 3. It travels
+	// as the helper's descriptor inputHelperFD, not in the JSON.
+	Input *os.File `json:"-"`
+	// HasInput tells the helper that descriptor inputHelperFD is the input.
+	HasInput bool
 	// Limits are the resource limits the helper applies to itself.
 	Limits rlimits
 	// Fault makes the helper skip one guard so that tests can check that the
@@ -194,6 +203,10 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 	cmd.Args = []string{"winnow-media-sandbox"}
 	cmd.Env = []string{helperEnv + "=1"}
 	cmd.ExtraFiles = []*os.File{statusW, lifeR}
+	if cfg.Input != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, cfg.Input)
+		cfg.HasInput = true
+	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Cancel = func() error { return lifeW.Close() }
 	cmd.WaitDelay = 5 * time.Second
@@ -225,7 +238,7 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 func sandboxRunner(limits rlimits) runner {
 	return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
 		res, err := runHelper(ctx, helperConfig{
-			Tool: spec.Tool, Args: spec.Args, Env: spec.Env, Dir: spec.Dir, Limits: limits,
+			Tool: spec.Tool, Args: spec.Args, Env: spec.Env, Dir: spec.Dir, Input: spec.Input, Limits: limits,
 		}, stdout, stderr)
 		if err != nil {
 			err = fmt.Errorf("sandbox helper: %w", err)
@@ -245,8 +258,8 @@ func (r helperResult) toolResult() toolResult {
 // helperMain is the sandbox helper: it applies the sandbox to itself, runs
 // the tool as its child and then removes every process left under it. It
 // reads its configuration from descriptor 4, writes its report to
-// descriptor 3 and does not return. The tool inherits only descriptors 0, 1
-// and 2.
+// descriptor 3 and does not return. The tool inherits descriptors 0, 1 and 2,
+// and the input, when there is one, as descriptor 3.
 func helperMain() {
 	// Pdeathsig fires when the thread that started the tool exits, so the
 	// thread must live as long as the helper.
@@ -305,6 +318,9 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 
 	cmd := exec.Command(cfg.Tool, cfg.Args...)
 	cmd.Env, cmd.Dir = cfg.Env, cfg.Dir
+	if cfg.HasInput {
+		cmd.ExtraFiles = []*os.File{os.NewFile(inputHelperFD, "input")}
+	}
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := cmd.Start(); err != nil {

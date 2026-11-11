@@ -1213,7 +1213,7 @@ func TestOneWholeImageReadForAnUncertainWebP(t *testing.T) {
 	simple := mustReadFile(t, stillWebP(t, photoPNG(t, real, 900, 600, false), "-q", "80"))
 	// An empty ICCP chunk leaves the profile for a whole-image read to settle.
 	path := webpWithFlags(t, simple, 900, 600, webpICCFlag|webpEXIFFlag, riffChunk("ICCP", nil), ifd0(ifdEntry(0x8769, 4, 1, 26)))
-	if _, ok := webpICC(path); ok {
+	if _, ok := webpICC(input{path: path}); ok {
 		t.Fatal("the profile is not uncertain")
 	}
 	env, calls := sourceEnv(t)

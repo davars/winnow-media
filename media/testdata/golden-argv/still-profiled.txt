@@ -18,7 +18,7 @@
 "-ping"
 "-format"
 "%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|%[tiff:subfiletype]|END\n"
-"heic:$IN/input[0-2048]"
+"heic:/dev/fd/3[0-2048]"
 
 "magick"
 "-limit"
@@ -36,7 +36,7 @@
 "-limit"
 "time"
 "300"
-"heic:$IN/input[0]"
+"heic:/dev/fd/3[0]"
 "-auto-orient"
 "-profile"
 "$IN/.srgb2014.icc"

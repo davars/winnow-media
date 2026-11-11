@@ -65,7 +65,7 @@ func TestSniff(t *testing.T) {
 func TestSniffFileIgnoresName(t *testing.T) {
 	t.Parallel()
 	path := writeFile(t, "image.gif", []byte("\x89PNG\r\n\x1a\n"))
-	if got, err := sniffFile(path); !errors.Is(err, ErrUnsupportedType) {
+	if got, err := sniffFile(input{path: path}); !errors.Is(err, ErrUnsupportedType) {
 		t.Errorf("sniffFile = %q, %v; want ErrUnsupportedType", got, err)
 	}
 }

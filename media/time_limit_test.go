@@ -158,7 +158,7 @@ func TestEncodeTimeLimitThroughTheProcessorPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(p.dir, "policy.xml"), policyXML(rules), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := p.env(&meter{})
+	env := p.env(&meter{}, nil)
 
 	_, err := env.runEncode(context.Background(), slowEncode(src, out), slowEncodeCheck(out))
 	if !errors.Is(err, ErrTimeLimit) {

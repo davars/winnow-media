@@ -20,7 +20,7 @@ const (
 )
 
 // webpICC reports from its chunk headers alone whether ImageMagick reads an
-// ICC profile from the WebP at path. known is false when the file's layout is
+// ICC profile from the WebP in. known is false when the file's layout is
 // not one whose answer is certain, and the caller must decode the file to
 // find out.
 //
@@ -32,12 +32,12 @@ const (
 // bare image chunk. ICC profile means the VP8X ICC flag is set and an ICCP
 // chunk exists; in an animation the profile applies to its frames. Only chunk
 // headers are read, at most maxWebPChunks of them, never chunk data.
-func webpICC(path string) (hasICC, known bool) {
-	f, err := os.Open(path)
+func webpICC(in input) (hasICC, known bool) {
+	f, done, err := in.open()
 	if err != nil {
 		return false, false
 	}
-	defer func() { _ = f.Close() }()
+	defer done()
 
 	var riff [12]byte
 	if _, err := io.ReadFull(f, riff[:]); err != nil {
@@ -97,16 +97,16 @@ func webpICC(path string) (hasICC, known bool) {
 	return iccp == 1, true
 }
 
-// webpAnimated reports whether the WebP at path has the VP8X animation flag
+// webpAnimated reports whether the WebP in has the VP8X animation flag
 // set. It reads only the first chunk header and its flags byte. A file that
 // is not a WebP with a leading VP8X chunk is not animated, as no decoder
 // reads an animation from it.
-func webpAnimated(path string) bool {
-	f, err := os.Open(path)
+func webpAnimated(in input) bool {
+	f, done, err := in.open()
 	if err != nil {
 		return false
 	}
-	defer func() { _ = f.Close() }()
+	defer done()
 	var head [21]byte
 	if _, err := io.ReadFull(f, head[:]); err != nil {
 		return false

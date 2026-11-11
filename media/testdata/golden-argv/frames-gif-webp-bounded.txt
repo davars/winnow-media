@@ -18,7 +18,7 @@
 "-ping"
 "-format"
 "%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|END\n"
-"gif:$IN/input"
+"gif:/dev/fd/3"
 
 "magick"
 "-limit"
