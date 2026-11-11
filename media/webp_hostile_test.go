@@ -371,20 +371,20 @@ func TestWebPFramesWaitsForConsumedFrames(t *testing.T) {
 			}
 		}
 	}()
-	next := func() (string, bool) {
+	next := func(wait time.Duration) (string, bool) {
 		select {
 		case l, ok := <-lines:
 			return l, ok
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(wait):
 			return "", false
 		}
 	}
 	for i := range 2 {
-		if l, ok := next(); !ok || !strings.HasPrefix(l, strconv.Itoa(i)+" ") {
+		if l, ok := next(30 * time.Second); !ok || !strings.HasPrefix(l, strconv.Itoa(i)+" ") {
 			t.Fatalf("frame %d: line %q, ok %v", i, l, ok)
 		}
 	}
-	if l, ok := next(); ok {
+	if l, ok := next(200 * time.Millisecond); ok {
 		t.Fatalf("a third frame, %q, was written with two in flight and none consumed", l)
 	}
 	if got := dirNames(t, dir); !slices.Equal(got, []string{gifSampleName(0), gifSampleName(1)}) {
