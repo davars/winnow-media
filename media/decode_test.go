@@ -586,6 +586,7 @@ func TestEncodeFramesWritesOneFilePerFrame(t *testing.T) {
 // ImageMagick sizes the reduced and unreduced decodes of a JPEG alike, for
 // every target and a sweep of source sizes that includes near-square ones.
 func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	dir := t.TempDir()
 	targets := []Encoding{
@@ -600,53 +601,71 @@ func TestJPEGSizeReductionKeepsTheOutputSize(t *testing.T) {
 			[2]int{side, 2*side/3 + 1}, [2]int{side/3 + 1, side})
 	}
 	sizes = append(sizes, [2]int{4000, 3001}, [2]int{5712, 4284}, [2]int{8064, 6048}, [2]int{13632, 3058})
+	// A large case decodes a JPEG of up to 48 megapixels in each of its
+	// encodes, so those take turns.
+	large := make(chan struct{}, 4)
 	for _, orientation := range []int{0, 6} {
 		for i, sz := range sizes {
 			if orientation != 0 && i%4 != 0 {
 				continue
 			}
 			name := fmt.Sprintf("%dx%d/o%d", sz[0], sz[1], orientation)
-			path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+".jpg")
-			magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+			isLarge := sz[0] >= 4000
 			ts := targets
-			if sz[0] >= 4000 {
+			if isLarge {
 				ts = append(slices.Clone(targets),
 					Encoding{Format: WebP, Quality: 80, MaxEdge: 1024, MaxArea: 1024 * 1024},
 					Encoding{Format: WebP, Quality: 80, MaxEdge: 2048, MaxArea: 2048 * 2048})
 			}
-			env, _ := sourceEnv(t)
-			src := openSource(t, env, path, Hints{Orientation: orientation})
-			hinted, err := src.Encode(context.Background(), 0, ts...)
-			if err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			// Each target alone is the path of a ladder rung.
-			alone := make([]Artifact, len(ts))
-			for i, target := range ts {
-				one, err := src.Encode(context.Background(), 0, target)
-				if err != nil {
-					t.Fatalf("%s: %v", name, err)
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				path := filepath.Join(dir, strings.ReplaceAll(name, "/", "_")+".jpg")
+				magick(t, real, "-size", strconv.Itoa(sz[0])+"x"+strconv.Itoa(sz[1]), "gradient:red-blue", "-quality", "50", path)
+				// encode runs one encode of the file, taking its turn when
+				// the file is large, and returns the artifacts.
+				encode := func(t *testing.T, reduce bool, targets ...Encoding) []Artifact {
+					t.Helper()
+					if isLarge {
+						large <- struct{}{}
+						defer func() { <-large }()
+					}
+					env, _ := sourceEnv(t)
+					src := openSource(t, env, path, Hints{Orientation: orientation})
+					src.reduce = reduce
+					out, err := src.Encode(context.Background(), 0, targets...)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						for _, a := range out {
+							a.Cleanup()
+						}
+					})
+					return out
 				}
-				alone[i] = one[0]
-			}
-			src.reduce = false
-			plain, err := src.Encode(context.Background(), 0, ts...)
-			if err != nil {
-				t.Fatalf("%s: %v", name, err)
-			}
-			for i := range ts {
-				if hinted[i].Width != plain[i].Width || hinted[i].Height != plain[i].Height {
-					t.Errorf("%s target %d: reduced %dx%d, full decode %dx%d", name, i,
-						hinted[i].Width, hinted[i].Height, plain[i].Width, plain[i].Height)
+				plain := encode(t, false, ts...)
+				t.Run("all targets", func(t *testing.T) {
+					t.Parallel()
+					hinted := encode(t, true, ts...)
+					for i := range ts {
+						if hinted[i].Width != plain[i].Width || hinted[i].Height != plain[i].Height {
+							t.Errorf("target %d: reduced %dx%d, full decode %dx%d", i,
+								hinted[i].Width, hinted[i].Height, plain[i].Width, plain[i].Height)
+						}
+					}
+				})
+				// Each target alone is the path of a ladder rung.
+				for i, target := range ts {
+					t.Run(fmt.Sprintf("target %d alone", i), func(t *testing.T) {
+						t.Parallel()
+						alone := encode(t, true, target)
+						if alone[0].Width != plain[i].Width || alone[0].Height != plain[i].Height {
+							t.Errorf("reduced %dx%d, full decode %dx%d",
+								alone[0].Width, alone[0].Height, plain[i].Width, plain[i].Height)
+						}
+					})
 				}
-				if alone[i].Width != plain[i].Width || alone[i].Height != plain[i].Height {
-					t.Errorf("%s target %d alone: reduced %dx%d, full decode %dx%d", name, i,
-						alone[i].Width, alone[i].Height, plain[i].Width, plain[i].Height)
-				}
-				hinted[i].Cleanup()
-				alone[i].Cleanup()
-				plain[i].Cleanup()
-			}
+			})
 		}
 	}
 }
