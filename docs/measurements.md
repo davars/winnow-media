@@ -115,12 +115,21 @@ inputs on the reference host:
 
 ## Deployment model
 
-The measured model is one request per pod, on a 1536Mi pod with the
-`LowMemory` profile, with scratch on a disk-backed `emptyDir` (never `medium:
-Memory`) with a `sizeLimit` of about 8Gi, holding ImageMagick's temporary
-directory and the processor's scratch. ImageMagick's pixel cache is
-memory-mapped there, so its pages must be reclaimable under the memory limit:
-the node needs real disk, since reclaiming writes those pages back.
+The measured model is one request per pod:
+
+- a memory limit of 1536Mi per request in flight, with the `LowMemory`
+  profile;
+- scratch on a disk-backed `emptyDir` (never `medium: Memory`) with a
+  `sizeLimit` of about 8Gi, holding ImageMagick's temporary directory and the
+  processor's scratch. ImageMagick's pixel cache is memory-mapped there, so
+  its pages must be reclaimable under the memory limit;
+- an `ephemeral-storage` request covering the volume;
+- real disk on every node that can run the pod, since reclaiming writes those
+  pages back.
+
+Landlock is not used because the Raspberry Pi 5 nodes this was built for have
+none; file confinement rests on the container, as the package documentation
+requires of a deployment.
 
 Anonymous memory and total cgroup peak on a Raspberry Pi 5 (arm64), for the
 largest inputs admitted:
