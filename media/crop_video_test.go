@@ -363,3 +363,48 @@ func TestVideoRegionOutsideAFrameThatShrankIsRefused(t *testing.T) {
 		t.Errorf("a region past the 160-pixel frame gave %d images (first about %v)", len(images), got)
 	}
 }
+
+// A shrink between two samples fails the call whichever way the samples are
+// read, and leaves none of them, the one taken before the shrink included.
+func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
+	env := requireFFmpeg(t)
+	segment := func(name, src string) string {
+		path := filepath.Join(t.TempDir(), name)
+		if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+			"-f", "lavfi", "-i", src, "-c:v", "libx264", "-preset", "ultrafast", "-g", "5", "-pix_fmt", "yuv420p", path); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	a := segment("a.ts", "color=red:size=200x100:rate=5:duration=2")
+	b := segment("b.ts", "color=blue:size=160x100:rate=5:duration=2")
+	list := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(list, []byte("file '"+a+"'\nfile '"+b+"'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	joined := filepath.Join(t.TempDir(), "joined.ts")
+	if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+		"-f", "concat", "-safe", "0", "-i", list, "-c", "copy", joined); err != nil {
+		t.Fatal(err)
+	}
+	path := stage(t, joined)
+	for name, limit := range map[string]int64{"seek": 0, "select": 1 << 40} {
+		t.Run(name, func(t *testing.T) {
+			forceSelectLimit(t, limit)
+			enc := encoding{format: PNG, ext: ".png", quality: 80, maxEdge: 400, maxArea: 400 * 400}
+			dir := t.TempDir()
+			images, err := env.videoFramesPicked(context.Background(), region{100, 0, 100, 50}, unnamedVideoDecoder, path, enc,
+				func(videoInfo) ([]int64, error) { return []int64{1000, 3000}, nil }, dir)
+			if err == nil {
+				t.Errorf("a region past the 160-pixel frame gave %d images", len(images))
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				var names []string
+				for _, e := range entries {
+					names = append(names, e.Name())
+				}
+				t.Errorf("the refused call left %q", names)
+			}
+		})
+	}
+}

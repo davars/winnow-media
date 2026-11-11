@@ -595,3 +595,73 @@ func TestRegionIgnoresAPageOffset(t *testing.T) {
 		t.Errorf("the %dx%d output differs from the region of the picture by %g", img.Width, img.Height, d)
 	}
 }
+
+// A TIFF carries both an orientation and a page position; the region is in
+// the turned picture's own pixels.
+func TestRegionOfATurnedTIFFWithAPageOffset(t *testing.T) {
+	env, calls := sourceEnv(t)
+	path := filepath.Join(t.TempDir(), "turned.tif")
+	magick(t, env, "-size", "400x300", "gradient:red-blue", "-fill", "lime", "-draw", "rectangle 0,0 40,40",
+		"-units", "PixelsPerInch", "-density", "72", "-page", "1000x1000+30+20", "-orient", "RightTop", path)
+	if g := strings.TrimSpace(string(magick(t, env, path, "-format", "%g", "info:"))); g != "400x300+30+20" {
+		t.Fatalf("the TIFF's page is %s, want an offset of +30+20", g)
+	}
+	src := openSource(t, env, path, Hints{Still: true})
+	if src.unsettled || src.upright != [2]int{300, 400} {
+		t.Fatalf("unsettled %v, upright %v; want a settled 300x400 frame", src.unsettled, src.upright)
+	}
+	before := len(calls())
+	if _, err := src.encode(context.Background(), region{101, 0, 200, 200}, 0, []encoding{pngEncoding()}); err == nil || len(calls()) != before {
+		t.Fatalf("err = %v after %d tool runs, want a refusal before any", err, len(calls())-before)
+	}
+	r := region{50, 100, 200, 200}
+	dir := t.TempDir()
+	img, err := env.stillRegion(context.Background(), r, decoder{"magick", "tiff"}, path, pngEncoding(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := filepath.Join(t.TempDir(), "ref.png")
+	magick(t, env, path, "-auto-orient", "+repage", "-crop", sizeAt(r), "+repage", "-filter", "Lanczos", "-resize", "100x100!", "-strip", "-depth", "8", ref)
+	if d := meanAbsoluteDifference(t, env, filepath.Join(dir, img.Name), ref); d > 0.001 {
+		t.Errorf("the %dx%d output differs from the region of the turned picture by %g", img.Width, img.Height, d)
+	}
+}
+
+// A JPEG with no orientation tag is unsettled, so its region is checked
+// against the size its run reports.
+func TestRegionOfAnUntaggedJPEG(t *testing.T) {
+	env, _ := sourceEnv(t)
+	path := filepath.Join(t.TempDir(), "plain.jpg")
+	magick(t, env, "-size", "100x100", "xc:red", "-size", "100x100", "xc:blue", "+append", "-quality", "100", path)
+	jpeg := decoder{"magick", "jpeg"}
+	for _, c := range []struct {
+		name string
+		r    region
+		want [3]int
+	}{
+		{"left half", region{0, 0, 50, 50}, [3]int{255, 0, 0}},
+		{"right half", region{150, 50, 50, 50}, [3]int{0, 0, 255}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			img, err := env.stillRegion(context.Background(), c.r, jpeg, path, pngEncoding(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if img.Width != 50 || img.Height != 50 {
+				t.Errorf("output is %dx%d, want 50x50", img.Width, img.Height)
+			}
+			if got := pixelRGB(t, env, filepath.Join(dir, img.Name)); !nearColour(got, c.want) {
+				t.Errorf("the crop is %v, want about %v", got, c.want)
+			}
+		})
+	}
+	dir := t.TempDir()
+	_, err := env.stillRegion(context.Background(), region{180, 0, 50, 50}, jpeg, path, pngEncoding(), dir)
+	if err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("err = %v, want a refusal that the region is outside the 200x100 frame", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("the refused call left %d files", len(entries))
+	}
+}
