@@ -23,9 +23,21 @@ const (
 )
 
 // Encoding is how an operation sizes and encodes each output image. The
-// output satisfies both size bounds with one resample, each side rounded down,
-// and is never upscaled; it is written at 8 bits per channel whatever the
-// depth of the source. Zero fields take defaults.
+// output satisfies both size bounds with one resample, each side rounded down
+// (a 4000x3001 image at MaxEdge 2048 is 2048x1536), and is never upscaled; it
+// is upright, converted to sRGB when the source carries an ICC profile (an
+// image without one is left as it is), has transparency flattened onto white
+// for JPEG, carries no metadata (the converted profile is not embedded) and is
+// written at 8 bits per channel whatever the depth of the source. The sRGB
+// profile is embedded in the library and exists as a temporary dot-file in
+// the output directory only while a tool runs. Zero fields take defaults.
+//
+// The size is the largest within both bounds with the source's aspect ratio,
+// and is the size of the picture actually produced whatever orientation the
+// file's header does or does not report. The resize filter follows what the
+// source frame declares: Mitchell when it is palette-based (GIF, PNG8) or
+// declares alpha, Lanczos for opaque truecolour and video, whichever way the
+// pixels reached the encode.
 type Encoding struct {
 	// Format defaults to JPEG.
 	Format Format
