@@ -23,8 +23,9 @@ import (
 
 // The sandbox's limits. Each sits above the largest value measured for any
 // tool run within the Processor's caps (internal/cmd/measure on a 12-CPU
-// x86_64 host, with per-process peaks sampled from /proc; see the README), so
-// a tool within the caps never meets one; they bound a tool that escapes them.
+// x86_64 host, with per-process peaks sampled from /proc; see
+// docs/measurements.md), so a tool within the caps never meets one; they
+// bound a tool that escapes them.
 const (
 	limitCPU       = "cpu"
 	limitAddress   = "as"

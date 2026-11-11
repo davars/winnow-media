@@ -347,7 +347,8 @@ func ffmpegArgs(threads int) []string {
 // 10-bit HEVC was not measured. Both paths are decode-bound, so their costs
 // scale together with the decoder's speed and the crossover in pixels should
 // carry to a slower machine; a slower disk or a startup cost that is larger
-// relative to decoding would move it towards seeking.
+// relative to decoding would move it towards seeking. The other video
+// measurements are in docs/measurements.md.
 const selectMaxPixels int64 = 1_000_000_000
 
 // selectLimit is selectMaxPixels; tests set it to force a path.
@@ -464,7 +465,8 @@ func (v videoPlan) selectArgs(dec decoder, inputPath, expr string, frames int, s
 // slower of the stream's declared and average rates, since the declared rate
 // of a variable-rate stream overstates it and so shortens the margin. The
 // margin costs, on average, that many extra decoded frames for each sample,
-// and, at worst, one more GOP when a keyframe falls just inside it.
+// and, at worst, one more GOP when a keyframe falls just inside it (measured
+// in docs/measurements.md).
 func (v videoPlan) seekMarginUS() int64 {
 	margin := int64(500_000)
 	rate := v.info.rate

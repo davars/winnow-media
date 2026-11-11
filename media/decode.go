@@ -671,8 +671,8 @@ func (s *Source) fits(enc encoding) bool {
 //
 // A WebP is reduced too, inside libwebp by webp-frames, but is not reducible
 // here: libwebp's scaling bounds memory only for lossy images without alpha
-// (a 268 MP lossless WebP of 82 KB peaks at 1 GB decoding at 1024), so a WebP
-// is capped at its stored size at the header, like a format that cannot be
+// (a 268 MP lossless WebP of 82 KB peaks at 1 GB decoding at 1024; see
+// docs/measurements.md), so a WebP is capped at its stored size at the header, like a format that cannot be
 // reduced.
 func reducible(format string) bool { return format == "JPEG" }
 
