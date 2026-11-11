@@ -517,6 +517,7 @@ func withHeaderOrientation(p *Processor, name string) {
 // an animated WebP composited outside ImageMagick, and a one-frame
 // animation.
 func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
+	t.Parallel()
 	real := requireMagick(t)
 	src := quadrants(48, 32)
 	srcPNG := writePNG(t, src, "quad.png")
@@ -531,6 +532,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		want := upright(quadrants(24, 16), n)
 
 		t.Run(name+"/still read from the file", func(t *testing.T) {
+			t.Parallel()
 			tiff := filepath.Join(t.TempDir(), "q.tif")
 			magick(t, real, srcPNG, "-orient", name, tiff)
 			ec, _ := enc.resolve()
@@ -546,6 +548,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/rung still given the orientation", func(t *testing.T) {
+			t.Parallel()
 			env := stagedEnv(real, t.TempDir())
 			content := writeFile(t, "content", mustRead(t, srcPNG))
 			frames, err := env.ProbeFrames(context.Background(), content, "image/png")
@@ -565,6 +568,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/rung GIF given the orientation", func(t *testing.T) {
+			t.Parallel()
 			env := stagedEnv(real, t.TempDir())
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			other := writePNG(t, quadrantsShifted(48, 32), "other.png")
@@ -589,6 +593,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/rung one-frame GIF given the orientation", func(t *testing.T) {
+			t.Parallel()
 			env := stagedEnv(real, t.TempDir())
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			magick(t, real, srcPNG, gif)
@@ -610,6 +615,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/GIF composited by the operation", func(t *testing.T) {
+			t.Parallel()
 			p := requireProcessor(t)
 			withHeaderOrientation(p, name)
 			gif := filepath.Join(t.TempDir(), "q.gif")
@@ -627,6 +633,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/animated WebP composited by the operation", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
 			withHeaderOrientation(p, name)
@@ -652,6 +659,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/WebP still with the orientation in an EXIF chunk, rung", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			env := stagedEnv(real, t.TempDir())
 			plain := filepath.Join(t.TempDir(), "q.webp")
@@ -674,6 +682,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		})
 
 		t.Run(name+"/WebP still with the orientation in an EXIF chunk, operation", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
 			plain := filepath.Join(t.TempDir(), "q.webp")
@@ -686,6 +695,7 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 		// ImageMagick may or may not apply the EXIF orientation of an
 		// animation; either way the size must be that of the picture.
 		t.Run(name+"/one-frame animated WebP with an EXIF chunk", func(t *testing.T) {
+			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
 			path := withWebPChunk(t, buildWebP(t, webpCase{codec: "lossless", frames: 1}), "exif", exifOrientation(uint16(n)))
