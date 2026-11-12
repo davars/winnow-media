@@ -155,45 +155,32 @@ var demuxerOptions = map[string][]string{
 	"mov": {"-enable_drefs", "0"},
 }
 
-// detectedFormats are the demuxers an input may be detected as when the
-// caller names none: the containers of video, and no playlist or list format
-// such as concat or hls, which would open other files the input names.
-const detectedFormats = "mov,matroska,avi,mpegts,mpeg,mpegvideo,flv,asf"
-
 // inputArgs returns the arguments that open path in ffprobe or ffmpeg: the
 // file protocol only, so no nested input is opened over the network, and the
 // decoder's demuxer with its options, as the only format the demuxer may open
-// within the file, so that no sub-demuxer is chosen by the content. A decoder with no name leaves the
-// demuxer to ffmpeg's detection, limited to detectedFormats.
+// within the file, so that no sub-demuxer is chosen by the content.
 func inputArgs(dec decoder, path string) []string {
-	if dec.name == "" {
-		return []string{"-protocol_whitelist", "file", "-format_whitelist", detectedFormats, "-i", path}
-	}
 	args := []string{"-protocol_whitelist", "file", "-format_whitelist", dec.name}
 	args = append(args, demuxerOptions[dec.name]...)
 	return append(args, "-f", dec.name, "-i", path)
 }
-
-// unnamedVideoDecoder leaves the demuxer to ffmpeg's detection, limited to
-// detectedFormats.
-var unnamedVideoDecoder = decoder{"ffmpeg", ""}
 
 // probeEntries is what ffprobe is asked to show of a video.
 const probeEntries = "stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,start_time" +
 	":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
 
 // probeVideo runs the probe that the sampling operations share.
-func probeVideo(ctx context.Context, env Env, dec decoder, path string) (videoInfo, error) {
+func probeVideo(ctx context.Context, env toolEnv, dec decoder, path string) (videoInfo, error) {
 	return runVideoProbe(ctx, env, dec, path, probeEntries)
 }
 
-func runVideoProbe(ctx context.Context, env Env, dec decoder, path, entries string) (videoInfo, error) {
+func runVideoProbe(ctx context.Context, env toolEnv, dec decoder, path, entries string) (videoInfo, error) {
 	return runProbe(ctx, env, entries, inputArgs(dec, path))
 }
 
 // probeDetected runs the probe on a file left to ffmpeg's detection among the
 // demuxers formats lists, and reports which demuxer read it in format.
-func probeDetected(ctx context.Context, env Env, formats, path string) (videoInfo, error) {
+func probeDetected(ctx context.Context, env toolEnv, formats, path string) (videoInfo, error) {
 	in := []string{"-protocol_whitelist", "file", "-format_whitelist", formats, "-i", path}
 	info, err := runProbe(ctx, env, probeEntries+",format_name", in)
 	if err != nil {
@@ -202,13 +189,13 @@ func probeDetected(ctx context.Context, env Env, formats, path string) (videoInf
 	return info, checkVideoInfo(info)
 }
 
-func runProbe(ctx context.Context, env Env, entries string, input []string) (videoInfo, error) {
+func runProbe(ctx context.Context, env toolEnv, entries string, input []string) (videoInfo, error) {
 	args := []string{
 		"-v", "error", "-of", "json", "-show_entries", entries,
 		"-max_alloc", strconv.Itoa(ffmpegMaxAlloc), "-threads", strconv.Itoa(env.threads()),
 	}
 	args = append(args, input...)
-	res, err := env.Run(ctx, "ffprobe", args...)
+	res, err := env.run(ctx, "ffprobe", args...)
 	if err != nil {
 		return videoInfo{}, fmt.Errorf("probing video: %w", err)
 	}
@@ -371,7 +358,7 @@ type videoPlan struct {
 
 // probeChecked probes the video and refuses it if it exceeds a cap. It is the
 // first step of every video sampling.
-func (e Env) probeChecked(ctx context.Context, dec decoder, inputPath string) (videoInfo, error) {
+func (e toolEnv) probeChecked(ctx context.Context, dec decoder, inputPath string) (videoInfo, error) {
 	info, err := probeVideo(ctx, e, dec, inputPath)
 	if err != nil {
 		return videoInfo{}, err
@@ -518,7 +505,7 @@ type sampledFrame struct {
 // of them. A stream of at most selectLimit decoded pixels is read once, and
 // a longer one by one seek per time; the frames are the same. The files are
 // the caller's to remove.
-func (e Env) sampleVideo(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, times []int64) ([]sampledFrame, error) {
+func (e toolEnv) sampleVideo(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, times []int64) ([]sampledFrame, error) {
 	if plan.selectFrames {
 		return e.selectSamples(ctx, dec, inputPath, dir, plan, times)
 	}
@@ -528,7 +515,7 @@ func (e Env) sampleVideo(ctx context.Context, dec decoder, inputPath, dir string
 // seekSamples samples each of times by its own ffmpeg run, which starts
 // decoding a margin before the time and keeps the first frame at or after it,
 // as a select run does.
-func (e Env) seekSamples(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, times []int64) ([]sampledFrame, error) {
+func (e toolEnv) seekSamples(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, times []int64) ([]sampledFrame, error) {
 	var samples []sampledFrame
 	for _, t := range times {
 		written, err := e.runSelect(ctx, dec, inputPath, dir, plan, "gte(t\\,"+selectSeconds(plan.absUS(t)-1)+")", 1, plan.seekUS(t))
@@ -555,7 +542,7 @@ type selectedFrame struct {
 // runSelect runs ffmpeg once, keeping the frames expr selects, at most frames
 // of them, and returns the files it newly wrote, in order. On error it removes what
 // was written.
-func (e Env) runSelect(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, expr string, frames int, seekUS int64) ([]selectedFrame, error) {
+func (e toolEnv) runSelect(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, expr string, frames int, seekUS int64) ([]selectedFrame, error) {
 	// The image muxer names each file by its frame's presentation time, which
 	// -enc_time_base makes microseconds.
 	pattern := strings.ReplaceAll(filepath.Join(dir, samplePrefix), "%", "%%") + "%d.pam"
@@ -569,7 +556,7 @@ func (e Env) runSelect(ctx context.Context, dec decoder, inputPath, dir string, 
 	for _, ent := range before {
 		had[ent.Name()] = true
 	}
-	_, runErr := e.Run(ctx, "ffmpeg", args...)
+	_, runErr := e.run(ctx, "ffmpeg", args...)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -612,7 +599,7 @@ func (v videoPlan) seekUS(ms int64) int64 {
 
 // selectSamples is sampleVideo for a stream read once: one decode, with a
 // select filter that keeps, for each time, the first frame at or after it.
-func (e Env) selectSamples(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, times []int64) ([]sampledFrame, error) {
+func (e toolEnv) selectSamples(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, times []int64) ([]sampledFrame, error) {
 	if len(times) == 0 {
 		return nil, nil
 	}
@@ -660,7 +647,7 @@ var runSampleRE = regexp.MustCompile(`^` + regexp.QuoteMeta(samplePrefix) + `(\d
 // runFrames reads count frames from the first at or after startMS, by one
 // run that starts at the beginning of the stream or, if seek, a margin before
 // startMS. Each is timed by its own presentation time.
-func (e Env) runFrames(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, startMS int64, count int, seek bool) ([]sampledFrame, error) {
+func (e toolEnv) runFrames(ctx context.Context, dec decoder, inputPath, dir string, plan videoPlan, startMS int64, count int, seek bool) ([]sampledFrame, error) {
 	from := plan.absUS(startMS)
 	seekUS := int64(-1)
 	if seek {
@@ -691,7 +678,7 @@ var encodeBatchPixels = 16_000_000
 // before it, also across batches. Kept frames are numbered consecutively from
 // 0.
 type sampleEncoder struct {
-	env Env
+	env toolEnv
 	src encodeSource
 	enc encoding
 	dir string

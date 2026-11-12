@@ -67,7 +67,7 @@ func TestSniffNamesNoTypeForDetectedFixtures(t *testing.T) {
 	for _, f := range detectedFixtures {
 		t.Run(f.name, func(t *testing.T) {
 			t.Parallel()
-			if typ, err := sniffFile(input{path: f.build(t)}); err == nil {
+			if typ, err := sniffPath(f.build(t)); err == nil {
 				t.Errorf("sniff names %s; the fixture would not reach the probe", typ)
 			}
 		})
@@ -339,12 +339,12 @@ var aviHead = append([]byte("RIFF\x00\x00\x00\x00AVI "), make([]byte, 64)...)
 
 // stubbedProcessor is a Processor whose tool runs go to fn, and the names of
 // the tools it was asked to run.
-func stubbedProcessor(t *testing.T, types []string, fn func(name string) (Result, error)) (*Processor, func() []string) {
+func stubbedProcessor(t *testing.T, types []string, fn func(name string) (runResult, error)) (*Processor, func() []string) {
 	t.Helper()
 	p := requireProcessorWith(t, Config{Types: types})
 	var mu sync.Mutex
 	var names []string
-	p.run = func(_ context.Context, name string, _ ...string) (Result, error) {
+	p.run = func(_ context.Context, in *os.File, name string, _ ...string) (runResult, error) {
 		mu.Lock()
 		names = append(names, name)
 		mu.Unlock()
@@ -375,11 +375,11 @@ func TestProbeCapsRefuseWithErrTooLargeBeforeAnyDecode(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, calls := stubbedProcessor(t, nil, func(tool string) (Result, error) {
+			p, calls := stubbedProcessor(t, nil, func(tool string) (runResult, error) {
 				if tool == "ffprobe" {
-					return Result{Stdout: out}, nil
+					return runResult{Stdout: out}, nil
 				}
-				return Result{}, errors.New("unexpected tool " + tool)
+				return runResult{}, errors.New("unexpected tool " + tool)
 			})
 			if _, _, err := p.Open(context.Background(), writeFile(t, "input", aviHead), OpenOptions{}); !errors.Is(err, ErrTooLarge) {
 				t.Errorf("err = %v, want ErrTooLarge", err)
@@ -402,11 +402,11 @@ func TestProbeFailuresThatSayNothingOfTheFileAreNotRefusals(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, _ := stubbedProcessor(t, nil, func(tool string) (Result, error) {
+			p, _ := stubbedProcessor(t, nil, func(tool string) (runResult, error) {
 				if tool == "ffprobe" {
-					return Result{}, probeErr
+					return runResult{}, probeErr
 				}
-				return Result{}, errors.New("magick: exit status 1: no decode delegate for this image format")
+				return runResult{}, errors.New("magick: exit status 1: no decode delegate for this image format")
 			})
 			_, _, err := p.Open(context.Background(), writeFile(t, "input", aviHead), OpenOptions{})
 			if err == nil || isUnsupported(err) {
@@ -444,7 +444,7 @@ func TestSignalKilledProbeOfAnAVIIsNotUnsupported(t *testing.T) {
 
 func TestUnknownISOBrandIsProbedOnceAndNeverReadAsAnImage(t *testing.T) {
 	t.Parallel()
-	p, calls := stubbedProcessor(t, nil, func(tool string) (Result, error) { return Result{}, errProbeRefusal })
+	p, calls := stubbedProcessor(t, nil, func(tool string) (runResult, error) { return runResult{}, errProbeRefusal })
 	audio := writeFile(t, "input", ftypBox("M4A ", "M4A ", "mp42"))
 	if _, _, err := p.Open(context.Background(), audio, OpenOptions{}); !isUnsupported(err) {
 		t.Errorf("err = %v, want ErrUnsupportedType", err)
@@ -456,11 +456,11 @@ func TestUnknownISOBrandIsProbedOnceAndNeverReadAsAnImage(t *testing.T) {
 
 func TestRefusedProbeIsFollowedByTheHeaderRead(t *testing.T) {
 	t.Parallel()
-	p, calls := stubbedProcessor(t, nil, func(tool string) (Result, error) {
+	p, calls := stubbedProcessor(t, nil, func(tool string) (runResult, error) {
 		if tool == "ffprobe" {
-			return Result{}, errProbeRefusal
+			return runResult{}, errProbeRefusal
 		}
-		return Result{}, errors.New("magick: exit status 1: no decode delegate for this image format")
+		return runResult{}, errors.New("magick: exit status 1: no decode delegate for this image format")
 	})
 	if _, _, err := p.Open(context.Background(), writeFile(t, "input", aviHead), OpenOptions{}); !isUnsupported(err) {
 		t.Errorf("err = %v, want ErrUnsupportedType", err)
@@ -482,10 +482,8 @@ func TestVideoLookingHeadOverDangerousContentIsRefused(t *testing.T) {
 				t.Parallel()
 				p, runs := recordingProcessor(t, nil)
 				path := writeFile(t, "input", []byte(head+body))
-				for op, err := range runAll(t, p, path) {
-					if !isUnsupported(err) {
-						t.Errorf("%s: err = %v, want ErrUnsupportedType", op, err)
-					}
+				if _, _, err := p.Open(context.Background(), path, OpenOptions{}); !isUnsupported(err) {
+					t.Errorf("err = %v, want ErrUnsupportedType", err)
 				}
 				if n := len(runs.of("ffmpeg")); n != 0 {
 					t.Errorf("%d ffmpeg runs", n)

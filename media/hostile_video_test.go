@@ -76,7 +76,7 @@ func externalDrefMP4(t *testing.T, mp4 []byte, sibling string) []byte {
 // with the given input arguments and returns ffmpeg's frame hash line.
 func frameHashes(p *Processor, input []string) (string, error) {
 	args := append([]string{"-nostdin", "-v", "error"}, input...)
-	res, err := p.run(context.Background(), "ffmpeg", append(args, "-frames:v", "1", "-f", "framemd5", "-")...)
+	res, err := p.run(context.Background(), nil, "ffmpeg", append(args, "-frames:v", "1", "-f", "framemd5", "-")...)
 	return string(res.Stdout), err
 }
 
@@ -183,7 +183,7 @@ func TestHLSPlaylistClaimedAsMP4(t *testing.T) {
 	})
 
 	probeWith := func(input []string) (string, error) {
-		res, err := p.run(context.Background(), "ffprobe",
+		res, err := p.run(context.Background(), nil, "ffprobe",
 			append([]string{"-v", "error", "-show_entries", "format=duration"}, input...)...)
 		return string(res.Stdout), err
 	}
@@ -226,7 +226,7 @@ func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
 	t.Cleanup(srv.Close)
 	playlist := writeFile(t, "x.m3u8", hlsPlaylist(srv.URL+"/segment.ts"))
 	run := func(args ...string) {
-		_, _ = env.Run(context.Background(), "ffprobe", append(append([]string{"-v", "quiet"}, args...), "-f", "hls", "-i", playlist)...)
+		_, _ = env.run(context.Background(), "ffprobe", append(append([]string{"-v", "quiet"}, args...), "-f", "hls", "-i", playlist)...)
 	}
 
 	// Control: with the network protocols allowed the demuxer fetches the
@@ -238,7 +238,7 @@ func TestInputWhitelistBlocksNetworkSegments(t *testing.T) {
 	hits.Store(0)
 
 	args := inputArgs(decoder{"ffprobe", "hls"}, playlist)
-	_, _ = env.Run(context.Background(), "ffprobe", append([]string{"-v", "quiet"}, args...)...)
+	_, _ = env.run(context.Background(), "ffprobe", append([]string{"-v", "quiet"}, args...)...)
 	if n := hits.Load(); n != 0 {
 		t.Errorf("the segment was requested %d times despite the whitelist", n)
 	}
@@ -257,7 +257,7 @@ func TestSandboxBlocksNetworkSegmentsWhenTheWhitelistAllowsThem(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	playlist := writeFile(t, "x.m3u8", hlsPlaylist(srv.URL+"/segment.ts"))
-	res, err := p.run(context.Background(), "ffprobe", "-v", "error", "-protocol_whitelist", "file,http,tcp,crypto", "-f", "hls", "-i", playlist)
+	res, err := p.run(context.Background(), nil, "ffprobe", "-v", "error", "-protocol_whitelist", "file,http,tcp,crypto", "-f", "hls", "-i", playlist)
 	if n := hits.Load(); n != 0 {
 		t.Errorf("the segment was requested %d times through the sandbox", n)
 	}

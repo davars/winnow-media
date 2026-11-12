@@ -340,7 +340,7 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	} else {
 		res.Code = cmd.ProcessState.ExitCode()
 	}
-	usage := UsageOf(cmd.ProcessState)
+	usage := usageOf(cmd.ProcessState)
 	orphans, err := clearDescendants()
 	if err != nil && res.Err == "" {
 		res.Err = err.Error()

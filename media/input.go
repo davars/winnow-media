@@ -1,7 +1,6 @@
 package media
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,26 +17,18 @@ import (
 const inputFDPath = "/dev/fd/3"
 
 // input is where the Go side of the package reads an input from: the
-// descriptor a Source holds, or, for the deprecated Env, a path.
+// descriptor a Source holds.
 type input struct {
-	f    *os.File
-	path string
+	f *os.File
 }
 
 // open returns a reader of the input from its first byte, and what releases
-// it. A descriptor is read with ReadAt, so its offset is never used.
+// it. The descriptor is read with ReadAt, so its offset is never used.
 func (in input) open() (io.ReadSeeker, func(), error) {
-	if in.f != nil {
-		return io.NewSectionReader(in.f, 0, math.MaxInt64), func() {}, nil
-	}
-	if in.path == inputFDPath {
+	if in.f == nil {
 		return nil, nil, errors.New("the input descriptor is not attached")
 	}
-	f, err := os.Open(in.path)
-	if err != nil {
-		return nil, nil, err
-	}
-	return f, func() { _ = f.Close() }, nil
+	return io.NewSectionReader(in.f, 0, math.MaxInt64), func() {}, nil
 }
 
 // openInputFile opens the file at path for reading without blocking, and
@@ -59,22 +50,4 @@ func requireInput(f *os.File, args []string) error {
 		}
 	}
 	return nil
-}
-
-type inputKey struct{}
-
-// withInput returns ctx marking the tool runs under it as reading f; runTool
-// and composeFrames pass it to the process. It rides on the context because
-// the Runner signature, which the deprecated Env also uses, has no room for a
-// file.
-func withInput(ctx context.Context, f *os.File) context.Context {
-	if f == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, inputKey{}, f)
-}
-
-func inputOf(ctx context.Context) *os.File {
-	f, _ := ctx.Value(inputKey{}).(*os.File)
-	return f
 }

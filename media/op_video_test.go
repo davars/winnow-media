@@ -13,15 +13,15 @@ import (
 	"testing"
 )
 
-func requireFFmpeg(t *testing.T) Env { return requireTools(t, "magick", "ffmpeg", "ffprobe") }
+func requireFFmpeg(t *testing.T) toolEnv { return requireTools(t, "magick", "ffmpeg", "ffprobe") }
 
 // writeClip runs ffmpeg to write a clip with the given extension and returns
 // it staged without one.
-func writeClip(t *testing.T, env Env, ext string, args ...string) string {
+func writeClip(t *testing.T, env toolEnv, ext string, args ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "clip"+ext)
 	full := append([]string{"-nostdin", "-v", "error", "-y"}, args...)
-	if _, err := env.Run(context.Background(), "ffmpeg", append(full, path)...); err != nil {
+	if _, err := env.run(context.Background(), "ffmpeg", append(full, path)...); err != nil {
 		t.Fatalf("ffmpeg %q: %v", args, err)
 	}
 	return stage(t, path)
@@ -31,7 +31,7 @@ func testsrc(size string, rate, seconds int) []string {
 	return []string{"-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%s:rate=%d:duration=%d", size, rate, seconds)}
 }
 
-func sdrClip(t *testing.T, env Env, size string, rate, seconds int, extra ...string) string {
+func sdrClip(t *testing.T, env toolEnv, size string, rate, seconds int, extra ...string) string {
 	args := append(testsrc(size, rate, seconds), "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "10")
 	return writeClip(t, env, ".mp4", append(args, extra...)...)
 }
@@ -43,22 +43,22 @@ func hlgArgs(input []string) []string {
 		"-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc")
 }
 
-func hlgClip(t *testing.T, env Env, input []string) string {
+func hlgClip(t *testing.T, env toolEnv, input []string) string {
 	return writeClip(t, env, ".mp4", hlgArgs(input)...)
 }
 
-func rotatedClip(t *testing.T, env Env) string {
+func rotatedClip(t *testing.T, env toolEnv) string {
 	t.Helper()
 	src := sdrClip(t, env, "160x120", 10, 4)
 	out := filepath.Join(t.TempDir(), "rot.mp4")
-	if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+	if _, err := env.run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
 		"-display_rotation", "90", "-f", "mov", "-i", src, "-c", "copy", out); err != nil {
 		t.Fatal(err)
 	}
 	return stage(t, out)
 }
 
-func pixelRGB(t *testing.T, env Env, path string) [3]int {
+func pixelRGB(t *testing.T, env toolEnv, path string) [3]int {
 	t.Helper()
 	out := strings.TrimSpace(string(magick(t, env, path, "-resize", "1x1!", "-format", "%[fx:round(255*r)] %[fx:round(255*g)] %[fx:round(255*b)]", "info:")))
 	var rgb [3]int
@@ -75,74 +75,73 @@ func pixelRGB(t *testing.T, env Env, path string) [3]int {
 func videoInto(t *testing.T, p *Processor, path string, enc Encoding, maxFrames int) ([]Image, string) {
 	t.Helper()
 	out := t.TempDir()
-	images, _, err := p.VideoFrames(context.Background(), path, enc, maxFrames, out)
+	images, _, err := p.encodeEven(context.Background(), path, enc, maxFrames, out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return images, out
 }
 
-func TestVideoFramesRefusals(t *testing.T) {
+// Open refuses a container of another kind after one probe and runs nothing
+// else; Encode refuses a bad Encoding, Select or directory of a video before
+// any ffmpeg run.
+func TestVideoRefusals(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
-	var calls int
-	p.run = func(_ context.Context, name string, _ ...string) (Result, error) {
-		calls++
-		if name == "ffprobe" {
-			return Result{}, errors.New("ffprobe: exit status 183: Invalid data found when processing input")
+	t.Run("audio container", func(t *testing.T) {
+		p := requireProcessor(t)
+		var probes, others int
+		p.run = func(_ context.Context, in *os.File, name string, _ ...string) (runResult, error) {
+			if name == "ffprobe" {
+				probes++
+				return runResult{}, errors.New("ffprobe: exit status 183: Invalid data found when processing input")
+			}
+			others++
+			return runResult{}, errors.New("tool run")
 		}
-		return Result{}, errors.New("tool run")
+		audio := writeFile(t, "input", ftypBox("M4A ", "M4A ", "mp42"))
+		if _, _, err := p.Open(context.Background(), audio, OpenOptions{}); !errors.Is(err, ErrUnsupportedType) {
+			t.Errorf("err = %v, want ErrUnsupportedType", err)
+		}
+		if probes != 1 || others != 0 {
+			t.Errorf("%d probes and %d other runs, want one probe", probes, others)
+		}
+	})
+
+	stub := newVideoStub()
+	src, err := stub.open(t)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
-	gif := writeFile(t, "input", []byte("GIF89a"))
-	audio := writeFile(t, "input", ftypBox("M4A ", "M4A ", "mp42"))
-	garbage := writeFile(t, "input", []byte("x"))
 	nonEmpty := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonEmpty, "leftover"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name            string
-		path            string
-		enc             Encoding
-		maxFrames       int
-		dir             string
-		unsupportedType bool
-		// probes is set for input the gate shows to ffprobe, which names its
-		// container, before refusing it.
-		probes bool
+		name string
+		sel  Select
+		enc  Encoding
+		dir  string
 	}{
-		{"image type", gif, Encoding{}, 0, t.TempDir(), true, false},
-		{"audio type", audio, Encoding{}, 0, t.TempDir(), true, true},
-		{"unrecognized content", garbage, Encoding{}, 0, t.TempDir(), true, false},
-		{"max frames negative", mp4, Encoding{}, -1, t.TempDir(), false, false},
-		{"max frames too large", mp4, Encoding{}, 65, t.TempDir(), false, false},
-		{"unknown format", mp4, Encoding{Format: "gif"}, 0, t.TempDir(), false, false},
-		{"quality too large", mp4, Encoding{Quality: 101}, 0, t.TempDir(), false, false},
-		{"max edge too small", mp4, Encoding{MaxEdge: 15}, 0, t.TempDir(), false, false},
-		{"max area too large", mp4, Encoding{MaxArea: 100_000_001}, 0, t.TempDir(), false, false},
-		{"dir not empty", mp4, Encoding{}, 0, nonEmpty, false, false},
-		{"dir missing", mp4, Encoding{}, 0, filepath.Join(t.TempDir(), "absent"), false, false},
+		{"even count too large", Select{Frames: Even(65)}, Encoding{}, t.TempDir()},
+		{"even count negative", Select{Frames: Even(-1)}, Encoding{}, t.TempDir()},
+		{"a negative time", Select{Frames: Times(-1)}, Encoding{}, t.TempDir()},
+		{"a run of no frames", Select{Frames: Run(0, 0)}, Encoding{}, t.TempDir()},
+		{"unknown format", Select{Frames: Even(3)}, Encoding{Format: "gif"}, t.TempDir()},
+		{"quality too large", Select{Frames: Even(3)}, Encoding{Quality: 101}, t.TempDir()},
+		{"max edge too small", Select{Frames: Even(3)}, Encoding{MaxEdge: 15}, t.TempDir()},
+		{"max area too large", Select{Frames: Even(3)}, Encoding{MaxArea: 100_000_001}, t.TempDir()},
+		{"dir not empty", Select{Frames: Even(3)}, Encoding{}, nonEmpty},
+		{"dir missing", Select{Frames: Even(3)}, Encoding{}, filepath.Join(t.TempDir(), "absent")},
 	}
-	for _, entry := range videoEntries() {
-		for _, c := range cases {
-			if entry.gateOnly && !c.unsupportedType {
-				continue
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, _, err := src.Encode(context.Background(), c.dir, c.sel, c.enc); err == nil {
+				t.Fatal("Encode succeeded")
 			}
-			t.Run(entry.name+"/"+c.name, func(t *testing.T) {
-				before := calls
-				err := entry.call(p, c.path, c.enc, c.maxFrames, c.dir)
-				if !c.probes && calls != before {
-					t.Errorf("%d tool runs before refusal", calls-before)
-				}
-				if err == nil {
-					t.Fatal("succeeded")
-				}
-				if got := errors.Is(err, ErrUnsupportedType); got != c.unsupportedType {
-					t.Errorf("errors.Is(err, ErrUnsupportedType) = %v, want %v (err %v)", got, c.unsupportedType, err)
-				}
-			})
-		}
+			if n := len(stub.runs); n != 0 {
+				t.Errorf("%d ffmpeg runs before refusal", n)
+			}
+		})
 	}
 	if got := dirNames(t, nonEmpty); !slices.Equal(got, []string{"leftover"}) {
 		t.Errorf("refused directory now holds %v", got)
@@ -153,7 +152,7 @@ func TestVideoTypePins(t *testing.T) {
 	t.Parallel()
 	pins := map[string]string{}
 	for typ, e := range typeTable {
-		if e.kind&kindVideo != 0 {
+		if e.video {
 			dec := e.decoderFor("")
 			pins[typ] = dec.tool + ":" + dec.name
 		}
@@ -196,13 +195,13 @@ func TestSampleTimes(t *testing.T) {
 	}
 }
 
-func TestVideoFramesSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
+func TestVideoEncodeSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := sdrClip(t, env, "160x120", 10, 16)
 
-	images, out := videoInto(t, p, src, Encoding{}, 0)
+	images, out := videoInto(t, p, src, Encoding{}, defaultFrames)
 	if len(images) != 16 {
 		t.Fatalf("%d images, want 16", len(images))
 	}
@@ -229,28 +228,28 @@ func TestVideoFramesSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 	}
 }
 
-func TestVideoFramesShortClips(t *testing.T) {
+func TestVideoEncodeShortClips(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 
 	t.Run("one frame mp4", func(t *testing.T) {
 		src := sdrClip(t, env, "160x120", 10, 1, "-frames:v", "1")
-		images, out := videoInto(t, p, src, Encoding{}, 0)
+		images, out := videoInto(t, p, src, Encoding{}, defaultFrames)
 		if len(images) != 1 || images[0].Frames[0].TimeMS != 0 || len(dirNames(t, out)) != 1 {
 			t.Errorf("images = %+v", images)
 		}
 	})
 	t.Run("one frame webm", func(t *testing.T) {
 		src := writeClip(t, env, ".webm", append(testsrc("160x120", 10, 1), "-frames:v", "1", "-c:v", "libvpx")...)
-		images, _ := videoInto(t, p, src, Encoding{}, 0)
+		images, _ := videoInto(t, p, src, Encoding{}, defaultFrames)
 		if len(images) != 1 {
 			t.Errorf("images = %+v", images)
 		}
 	})
 	t.Run("fewer frames than max_frames", func(t *testing.T) {
 		src := sdrClip(t, env, "160x120", 10, 1, "-frames:v", "4")
-		images, _ := videoInto(t, p, src, Encoding{}, 0)
+		images, _ := videoInto(t, p, src, Encoding{}, defaultFrames)
 		if len(images) < 1 || len(images) > 4 {
 			t.Errorf("images = %+v", images)
 		}
@@ -264,13 +263,13 @@ func TestVideoFramesShortClips(t *testing.T) {
 	})
 }
 
-func TestVideoFramesStaticClipDedupes(t *testing.T) {
+func TestVideoEncodeStaticClipDedupes(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	src := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "color=c=0x3070c0:size=160x120:rate=10:duration=6",
 		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
-	images, out := videoInto(t, p, src, Encoding{}, 0)
+	images, out := videoInto(t, p, src, Encoding{}, defaultFrames)
 	if len(images) != 1 || images[0].Name != "frame-000.jpg" {
 		t.Fatalf("images = %+v", images)
 	}
@@ -279,7 +278,7 @@ func TestVideoFramesStaticClipDedupes(t *testing.T) {
 	}
 }
 
-func TestVideoFramesRotatedClipGivesPortrait(t *testing.T) {
+func TestVideoEncodeRotatedClipGivesPortrait(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -299,7 +298,7 @@ func TestVideoFramesRotatedClipGivesPortrait(t *testing.T) {
 	}
 }
 
-func TestVideoFramesSizing(t *testing.T) {
+func TestVideoEncodeSizing(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -325,13 +324,13 @@ func TestVideoFramesSizing(t *testing.T) {
 	}
 }
 
-func TestVideoFramesHDRIsConvertedToSDR(t *testing.T) {
+func TestVideoEncodeHDRIsConvertedToSDR(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	green := hlgClip(t, env, []string{"-f", "lavfi", "-i", "color=c=0x00c000:size=320x240:rate=10:duration=2"})
 	p := requireProcessor(t)
 	rec := record(p)
-	images, out := videoInto(t, p, green, Encoding{}, 0)
+	images, out := videoInto(t, p, green, Encoding{}, defaultFrames)
 	if len(images) == 0 {
 		t.Fatal("no images")
 	}
@@ -375,7 +374,7 @@ func TestPQVideoIsHDR(t *testing.T) {
 		"-x265-params", "keyint=10:log-level=error:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
 		"-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc")...)
 	p := requireProcessor(t)
-	info, _, err := p.ProbeVideo(context.Background(), clip)
+	info, _, err := p.infoOf(context.Background(), clip)
 	if err != nil || !info.HDR {
 		t.Fatalf("PQ clip: %+v, %v", info, err)
 	}
@@ -394,7 +393,7 @@ func TestPQVideoIsHDR(t *testing.T) {
 	}
 }
 
-func TestVideoFramesHDRScalesBeforeToneMapping(t *testing.T) {
+func TestVideoEncodeHDRScalesBeforeToneMapping(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -423,7 +422,7 @@ func TestVideoFramesHDRScalesBeforeToneMapping(t *testing.T) {
 	}
 }
 
-func TestVideoFramesHDROddTargetSize(t *testing.T) {
+func TestVideoEncodeHDROddTargetSize(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -439,12 +438,12 @@ func TestVideoFramesHDROddTargetSize(t *testing.T) {
 	}
 }
 
-func TestVideoFramesSDRHasNoColourFilter(t *testing.T) {
+func TestVideoEncodeSDRHasNoColourFilter(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	rec := record(p)
-	videoInto(t, p, sdrClip(t, env, "160x120", 10, 4), Encoding{MaxEdge: 80}, 0)
+	videoInto(t, p, sdrClip(t, env, "160x120", 10, 4), Encoding{MaxEdge: 80}, defaultFrames)
 	for _, call := range rec.calls {
 		if strings.Contains(strings.Join(call, " "), "zscale") {
 			t.Errorf("SDR input got a colour filter: %q", call)
@@ -452,7 +451,7 @@ func TestVideoFramesSDRHasNoColourFilter(t *testing.T) {
 	}
 }
 
-func TestVideoFramesStripsMetadata(t *testing.T) {
+func TestVideoEncodeStripsMetadata(t *testing.T) {
 	t.Parallel()
 	requireExiftool(t)
 	env := requireFFmpeg(t)
@@ -481,7 +480,7 @@ func TestVideoFramesStripsMetadata(t *testing.T) {
 	}
 }
 
-func TestVideoFramesCleansUpOnFailure(t *testing.T) {
+func TestVideoEncodeCleansUpOnFailure(t *testing.T) {
 	forceSeek(t)
 	env := requireFFmpeg(t)
 	src := sdrClip(t, env, "160x120", 10, 4)
@@ -491,9 +490,9 @@ func TestVideoFramesCleansUpOnFailure(t *testing.T) {
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()
-		_, _, err := p.VideoFrames(context.Background(), src, Encoding{}, 4, out)
+		_, _, err := p.encodeEven(context.Background(), src, Encoding{}, 4, out)
 		if err == nil {
-			t.Fatalf("failAfter=%d: VideoFrames succeeded", failAfter)
+			t.Fatalf("failAfter=%d: the encode succeeded", failAfter)
 		}
 		if got := dirNames(t, out); len(got) != 0 {
 			t.Errorf("failAfter=%d: output dir holds %v", failAfter, got)
@@ -501,13 +500,13 @@ func TestVideoFramesCleansUpOnFailure(t *testing.T) {
 	}
 }
 
-func TestVideoFramesCostIsIndependentOfDuration(t *testing.T) {
+func TestVideoEncodeCostIsIndependentOfDuration(t *testing.T) {
 	forceSeek(t)
 	env := requireFFmpeg(t)
 	cpu := func(seconds int) float64 {
 		src := sdrClip(t, env, "160x120", 10, seconds)
 		p := requireProcessor(t)
-		_, usage, err := p.VideoFrames(context.Background(), src, Encoding{}, 0, t.TempDir())
+		_, usage, err := p.encodeEven(context.Background(), src, Encoding{}, 16, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -520,7 +519,7 @@ func TestVideoFramesCostIsIndependentOfDuration(t *testing.T) {
 	}
 }
 
-func TestVideoFramesGoldenArgv(t *testing.T) {
+func TestVideoEncodeGoldenArgv(t *testing.T) {
 	env := requireFFmpeg(t)
 	cases := []struct {
 		name  string
@@ -544,7 +543,7 @@ func TestVideoFramesGoldenArgv(t *testing.T) {
 				rec := record(p)
 				input := c.input()
 				out := t.TempDir()
-				if _, _, err := p.VideoFrames(context.Background(), input, c.enc, 3, out); err != nil {
+				if _, _, err := p.encodeEven(context.Background(), input, c.enc, 3, out); err != nil {
 					t.Fatal(err)
 				}
 				checkGolden(t, c.name+"-"+path.name, goldenArgv(rec.calls, out))
@@ -619,7 +618,7 @@ func TestParseVideoProbeNormalisesRotation(t *testing.T) {
 	}
 }
 
-func TestVideoFramesSamplesTheDefaultStream(t *testing.T) {
+func TestVideoEncodeSamplesTheDefaultStream(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -683,7 +682,7 @@ func TestCheckVideoInfo(t *testing.T) {
 	}
 }
 
-func TestVideoFramesRefusesOversizedProbeBeforeSampling(t *testing.T) {
+func TestVideoEncodeRefusesOversizedProbeBeforeSampling(t *testing.T) {
 	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	manyStreams := `{"index":0,"codec_type":"video","width":16,"height":16,"duration":"1.0"}`
@@ -701,9 +700,9 @@ func TestVideoFramesRefusesOversizedProbeBeforeSampling(t *testing.T) {
 			t.Run(name+"/"+entry.name, func(t *testing.T) {
 				p := requireProcessor(t)
 				var tools []string
-				p.run = func(_ context.Context, tool string, _ ...string) (Result, error) {
+				p.run = func(_ context.Context, in *os.File, tool string, _ ...string) (runResult, error) {
 					tools = append(tools, tool)
-					return Result{Stdout: []byte(probe)}, nil
+					return runResult{Stdout: []byte(probe)}, nil
 				}
 				err := entry.call(p, mp4, Encoding{}, 0, t.TempDir())
 				if !errors.Is(err, ErrTooLarge) {
@@ -753,7 +752,7 @@ func TestVideoToolRunsShareTheInputArguments(t *testing.T) {
 	}
 }
 
-func TestVideoFramesEncodeAtMostOneBatchPerMagickRun(t *testing.T) {
+func TestVideoEncodeAtMostOneBatchPerMagickRun(t *testing.T) {
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	// Two 160x120 samples per run.
@@ -789,7 +788,7 @@ func TestVideoFramesEncodeAtMostOneBatchPerMagickRun(t *testing.T) {
 	}
 }
 
-func TestVideoFramesDedupesAcrossBatches(t *testing.T) {
+func TestVideoEncodeDedupesAcrossBatches(t *testing.T) {
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
 	old := encodeBatchPixels
@@ -806,7 +805,7 @@ func TestVideoFramesDedupesAcrossBatches(t *testing.T) {
 	}
 }
 
-func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
+func TestVideoEncodeWritesIntoDirectoryWithPercent(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -814,7 +813,7 @@ func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
 	if err := os.Mkdir(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	images, _, err := p.VideoFrames(context.Background(), sdrClip(t, env, "160x120", 10, 4), Encoding{}, 3, out)
+	images, _, err := p.encodeEven(context.Background(), sdrClip(t, env, "160x120", 10, 4), Encoding{}, 3, out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -827,7 +826,7 @@ func TestVideoFramesWritesIntoDirectoryWithPercent(t *testing.T) {
 	}
 }
 
-func TestVideoFramesUseFewerThreadsAboveFourK(t *testing.T) {
+func TestVideoEncodeUseFewerThreadsAboveFourK(t *testing.T) {
 	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	cases := []struct {
@@ -851,15 +850,15 @@ func TestVideoFramesUseFewerThreadsAboveFourK(t *testing.T) {
 				`"duration":"10","color_transfer":%q,"side_data_list":[{"rotation":%d}]}],"format":{}}`,
 				c.w, c.h, c.transfer, c.rotation)
 			rec := record(p)
-			rec.inner = func(_ context.Context, tool string, _ ...string) (Result, error) {
+			rec.inner = func(_ context.Context, _ *os.File, tool string, _ ...string) (runResult, error) {
 				if tool == "ffprobe" {
-					return Result{Stdout: []byte(probe)}, nil
+					return runResult{Stdout: []byte(probe)}, nil
 				}
-				return Result{}, nil
+				return runResult{}, nil
 			}
 			// The fake writes no samples, so the call ends in an error after
 			// the ffmpeg runs have been recorded.
-			_, _, _ = p.VideoFrames(context.Background(), mp4, Encoding{}, 3, t.TempDir())
+			_, _, _ = p.encodeEven(context.Background(), mp4, Encoding{}, 3, t.TempDir())
 			ran := 0
 			for _, call := range rec.calls {
 				if call[0] != "ffmpeg" {
@@ -885,7 +884,7 @@ func TestVideoFramesUseFewerThreadsAboveFourK(t *testing.T) {
 
 // Resources.Threads reaches the probe and every ffmpeg decode of a Processor,
 // with the large-source rule as a ceiling.
-func TestVideoFramesUseTheConfiguredThreads(t *testing.T) {
+func TestVideoEncodeUseTheConfiguredThreads(t *testing.T) {
 	t.Parallel()
 	mp4 := writeFile(t, "input", ftypBox("isom", "isom", "mp42"))
 	for _, c := range []struct {
@@ -902,13 +901,13 @@ func TestVideoFramesUseTheConfiguredThreads(t *testing.T) {
 			p := requireProcessorWith(t, Config{Resources: Resources{Threads: c.threads}, Unsandboxed: true})
 			probe := fmt.Sprintf(`{"streams":[{"index":0,"codec_type":"video","width":%d,"height":%d,"duration":"10"}],"format":{}}`, c.w, c.h)
 			rec := record(p)
-			rec.inner = func(_ context.Context, tool string, _ ...string) (Result, error) {
+			rec.inner = func(_ context.Context, _ *os.File, tool string, _ ...string) (runResult, error) {
 				if tool == "ffprobe" {
-					return Result{Stdout: []byte(probe)}, nil
+					return runResult{Stdout: []byte(probe)}, nil
 				}
-				return Result{}, nil
+				return runResult{}, nil
 			}
-			_, _, _ = p.VideoFrames(context.Background(), mp4, Encoding{}, 3, t.TempDir())
+			_, _, _ = p.encodeEven(context.Background(), mp4, Encoding{}, 3, t.TempDir())
 			probed, decoded := 0, 0
 			for _, call := range rec.calls {
 				joined := " " + strings.Join(call[1:], " ") + " "

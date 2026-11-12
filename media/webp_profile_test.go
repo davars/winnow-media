@@ -33,7 +33,7 @@ func riffWebP(chunks ...[]byte) []byte {
 }
 
 // imageChunk returns the VP8/VP8L chunk of an 8x8 simple WebP that magick made.
-func imageChunk(t *testing.T, env Env) []byte {
+func imageChunk(t *testing.T, env toolEnv) []byte {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "simple.webp")
 	magick(t, env, "-size", "8x8", "xc:red", path)
@@ -128,8 +128,8 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 		{"one chunk more", pastLimit, false, false},
 	} {
 		path := writeBytes(t, c.file)
-		read, err := real.Run(context.Background(), "magick", "identify", "-format", "%[profiles]", path)
-		if has, known := webpICC(input{path: path}); err != nil {
+		read, err := real.run(context.Background(), "magick", "identify", "-format", "%[profiles]", path)
+		if has, known := webpICC(inputAt(t, path)); err != nil {
 			// ImageMagick refuses the file, so there is no profile to agree
 			// with; the scan must still leave it to the decode.
 			t.Logf("%s: refused by ImageMagick", c.name)
@@ -141,21 +141,14 @@ func TestWebPProfileAgreesWithImageMagick(t *testing.T) {
 			t.Errorf("%s: webpICC = %t, known %t; want %t, known %t", c.name, has, known, want, c.known)
 		}
 		want := profileListHasICC(string(read.Stdout)) || c.animated
-		t.Run("ProbeFrames/"+c.name, func(t *testing.T) {
-			env, calls := countingEnv(real)
-			frames, err := env.ProbeFrames(context.Background(), path, "image/webp")
-			if err != nil || len(frames) != 1 || frames[0].hasICC != want {
-				t.Fatalf("frames %+v, err %v; want one frame, hasICC %t", frames, err, want)
+		t.Run("completeProfile/"+c.name, func(t *testing.T) {
+			env, calls := countingEnv(testEnv(t))
+			scenes, err := identifyHeaders(context.Background(), env, path, true)
+			if err == nil {
+				err = completeProfile(context.Background(), env, path, inputAt(t, path), scenes)
 			}
-			if onlyPinged(calls()) != c.known {
-				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)
-			}
-		})
-		t.Run("readSource/"+c.name, func(t *testing.T) {
-			env, calls := countingEnv(real)
-			hdr, err := env.readSource(context.Background(), openRequest{path: path, dec: decoder{"magick", "webp"}, pinned: true, caps: true})
-			if err != nil || len(hdr.scenes) != 1 || hdr.scenes[0].hasICC != want {
-				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", hdr.scenes, err, want)
+			if err != nil || len(scenes) != 1 || scenes[0].hasICC != want {
+				t.Fatalf("scenes %+v, err %v; want one scene, hasICC %t", scenes, err, want)
 			}
 			if onlyPinged(calls()) != c.known {
 				t.Errorf("runs %q: headers only = %t, want %t", calls(), !c.known, c.known)
@@ -182,11 +175,11 @@ func TestWebPICCDeclinesAnUnreadableLayout(t *testing.T) {
 		"unknown first chunk":       riffWebP(riffChunk("JUNK", []byte("xx")), vp8xChunk(webpICCFlag), image),
 		"empty VP8X":                zeroVP8X,
 	} {
-		if has, known := webpICC(input{path: writeBytes(t, file)}); known {
+		if has, known := webpICC(inputAt(t, writeBytes(t, file))); known {
 			t.Errorf("%s: webpICC = %t, known; want no answer", name, has)
 		}
 	}
-	if has, known := webpICC(input{path: filepath.Join(t.TempDir(), "missing")}); known {
+	if has, known := webpICC(input{}); known {
 		t.Errorf("missing file: webpICC = %t, known; want no answer", has)
 	}
 }

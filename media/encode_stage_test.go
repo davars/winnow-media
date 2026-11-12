@@ -50,7 +50,7 @@ func TestEncodeArgsAskForTheSizeOfTheOrientedFrame(t *testing.T) {
 
 // fxSizes evaluates fitExpr(maxEdge, maxArea) in ImageMagick for each of
 // sizes, with the size substituted for w and h, and returns what it gives.
-func fxSizes(t *testing.T, env Env, maxEdge, maxArea int, sizes [][2]int) [][2]int {
+func fxSizes(t *testing.T, env toolEnv, maxEdge, maxArea int, sizes [][2]int) [][2]int {
 	t.Helper()
 	w, h := fitExpr(maxEdge, maxArea)
 	w, h = strings.TrimSuffix(strings.TrimPrefix(w, "%[fx:"), "]"), strings.TrimSuffix(strings.TrimPrefix(h, "%[fx:"), "]")
@@ -233,28 +233,19 @@ func TestFitExprRoundsDown(t *testing.T) {
 	}
 }
 
-// A rung's size, read back from the run that wrote it, is the fitSize one.
-func TestEncodeRungSizesWithFitSize(t *testing.T) {
+// An encode's size, read back from the run that wrote it, is the fitSize one.
+func TestEncodeSizesWithFitSize(t *testing.T) {
 	t.Parallel()
-	env := stagedEnv(requireMagick(t), t.TempDir())
+	env := requireMagick(t)
+	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "wide.png")
 	magick(t, env, "-size", "800x601", "gradient:red-blue", path)
-	content := stage(t, path)
-	frames, err := env.ProbeFrames(context.Background(), content, "image/png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, cleanup, w, h, _, err := env.EncodeRung(context.Background(), content, "image/png",
-		false, Rung{CeilingPx: 512, MaxFrames: 1}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-	if w != 512 || h != 384 {
-		t.Errorf("EncodeRung reports %dx%d, want 512x384", w, h)
+	out, images := encodeFile(t, p, stage(t, path), OpenOptions{}, Select{}, webpAtEdge(512))
+	if w, h := images[0].Width, images[0].Height; w != 512 || h != 384 {
+		t.Errorf("Encode reports %dx%d, want 512x384", w, h)
 	}
 	if got := strings.TrimSpace(string(magick(t, env, "identify", "-format", "%w %h", out))); got != "512 384" {
-		t.Errorf("the artifact is %s, want 512 384", got)
+		t.Errorf("the image is %s, want 512 384", got)
 	}
 }
 
@@ -288,7 +279,7 @@ func TestEncodeArgsStages(t *testing.T) {
 				t.Errorf("args %q lack the stages %q", args, want)
 			}
 			if slices.Contains(args, "-limit") {
-				t.Errorf("args %q carry limits, which Env.runMagick adds", args)
+				t.Errorf("args %q carry limits, which toolEnv.runMagick adds", args)
 			}
 			if (c.enc.format == JPEG) != slices.Contains(args, "-alpha") {
 				t.Errorf("args %q flatten by something other than the output format", args)
@@ -459,7 +450,7 @@ func upright(src *image.NRGBA, n int) *image.NRGBA {
 	return out
 }
 
-func decodePNG(t *testing.T, env Env, path string) *image.NRGBA {
+func decodePNG(t *testing.T, env toolEnv, path string) *image.NRGBA {
 	t.Helper()
 	img, err := png.Decode(bytes.NewReader(magick(t, env, path+"[0]", "png:-")))
 	if err != nil {
@@ -512,8 +503,8 @@ func requireUpright(t *testing.T, got, want *image.NRGBA, tol int) {
 // ImageMagick reads from a GIF or an animated WebP would.
 func withHeaderOrientation(p *Processor, name string) {
 	inner := p.run
-	p.run = func(ctx context.Context, tool string, args ...string) (Result, error) {
-		res, err := inner(ctx, tool, args...)
+	p.run = func(ctx context.Context, in *os.File, tool string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, tool, args...)
 		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
 			res.Stdout = headerWithOrientation(res.Stdout, name)
 		}
@@ -542,11 +533,11 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 
 		t.Run(name+"/still read from the file", func(t *testing.T) {
 			t.Parallel()
+			p := requireProcessor(t)
 			tiff := filepath.Join(t.TempDir(), "q.tif")
 			magick(t, real, srcPNG, "-orient", name, tiff)
-			ec, _ := enc.resolve()
 			dir := t.TempDir()
-			img, err := real.still(context.Background(), decoder{"magick", "tiff"}, tiff, ec, dir)
+			img, _, err := stillAs(context.Background(), p, tiff, "", enc, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -556,43 +547,25 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 			requireUpright(t, decodePNG(t, real, filepath.Join(dir, img.Name)), want, 3)
 		})
 
-		t.Run(name+"/rung still given the orientation", func(t *testing.T) {
+		t.Run(name+"/still given the orientation", func(t *testing.T) {
 			t.Parallel()
-			env := stagedEnv(real, t.TempDir())
+			p := requireProcessor(t)
 			content := writeFile(t, "content", mustRead(t, srcPNG))
-			frames, err := env.ProbeFrames(context.Background(), content, "image/png")
-			if err != nil {
-				t.Fatal(err)
-			}
-			out, cleanup, w, h, _, err := env.EncodeRung(context.Background(), content, "image/png",
-				false, Rung{CeilingPx: edge, MaxFrames: 1}, frames, "", name, testQuality)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cleanup()
-			if w != want.Bounds().Dx() || h != want.Bounds().Dy() {
+			out, images := encodeFile(t, p, content, OpenOptions{Orientation: n}, Select{}, webpAtEdge(edge))
+			if w, h := images[0].Width, images[0].Height; w != want.Bounds().Dx() || h != want.Bounds().Dy() {
 				t.Errorf("reported %dx%d, want %v", w, h, want.Bounds().Size())
 			}
 			requireUpright(t, decodePNG(t, real, out), want, 40)
 		})
 
-		t.Run(name+"/rung GIF given the orientation", func(t *testing.T) {
+		t.Run(name+"/GIF given the orientation", func(t *testing.T) {
 			t.Parallel()
-			env := stagedEnv(real, t.TempDir())
+			p := requireProcessor(t)
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			other := writePNG(t, quadrantsShifted(48, 32), "other.png")
 			magick(t, real, "-delay", "5", srcPNG, "-delay", "5", other, "-loop", "0", gif)
-			content := stage(t, gif)
-			frames, err := env.ProbeFrames(context.Background(), content, "image/gif")
-			if err != nil {
-				t.Fatal(err)
-			}
-			out, cleanup, w, h, mapping, err := env.EncodeRung(context.Background(), content, "image/gif",
-				true, Rung{CeilingPx: edge, MaxFrames: 2}, frames, "", name, testQuality)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cleanup()
+			out, images := encodeFile(t, p, stage(t, gif), OpenOptions{Orientation: n}, Select{Frames: Even(2)}, animatedWebPAt(edge))
+			w, h, mapping := images[0].Width, images[0].Height, images[0].Frames
 			if len(mapping) != 2 || w != want.Bounds().Dx() || h != want.Bounds().Dy() {
 				t.Fatalf("reported %dx%d with %d frames, want %v and 2", w, h, len(mapping), want.Bounds().Size())
 			}
@@ -601,23 +574,13 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 			requireUpright(t, decodePNG(t, real, first), want, 40)
 		})
 
-		t.Run(name+"/rung one-frame GIF given the orientation", func(t *testing.T) {
+		t.Run(name+"/one-frame GIF given the orientation", func(t *testing.T) {
 			t.Parallel()
-			env := stagedEnv(real, t.TempDir())
+			p := requireProcessor(t)
 			gif := filepath.Join(t.TempDir(), "q.gif")
 			magick(t, real, srcPNG, gif)
-			content := stage(t, gif)
-			frames, err := env.ProbeFrames(context.Background(), content, "image/gif")
-			if err != nil {
-				t.Fatal(err)
-			}
-			out, cleanup, w, h, _, err := env.EncodeRung(context.Background(), content, "image/gif",
-				true, Rung{CeilingPx: edge, MaxFrames: 1}, frames, "", name, testQuality)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cleanup()
-			if w != want.Bounds().Dx() || h != want.Bounds().Dy() {
+			out, images := encodeFile(t, p, stage(t, gif), OpenOptions{Orientation: n}, Select{Frames: Even(1)}, animatedWebPAt(edge))
+			if w, h := images[0].Width, images[0].Height; w != want.Bounds().Dx() || h != want.Bounds().Dy() {
 				t.Fatalf("reported %dx%d, want %v", w, h, want.Bounds().Size())
 			}
 			requireUpright(t, decodePNG(t, real, out), want, 40)
@@ -667,30 +630,21 @@ func TestOrientationIsAppliedTheSameWayOnEveryPath(t *testing.T) {
 			}
 		})
 
-		t.Run(name+"/WebP still with the orientation in an EXIF chunk, rung", func(t *testing.T) {
+		t.Run(name+"/WebP still with the orientation in an EXIF chunk, as one WebP", func(t *testing.T) {
 			t.Parallel()
 			requireWebPBuilders(t)
-			env := stagedEnv(real, t.TempDir())
+			p := requireProcessor(t)
 			plain := filepath.Join(t.TempDir(), "q.webp")
 			magick(t, real, srcPNG, "-define", "webp:lossless=true", plain)
 			content := writeFile(t, "content", mustRead(t, withWebPChunk(t, plain, "exif", exifOrientation(uint16(n)))))
-			frames, err := env.ProbeFrames(context.Background(), content, "image/webp")
-			if err != nil {
-				t.Fatal(err)
-			}
-			out, cleanup, w, h, _, err := env.EncodeRung(context.Background(), content, "image/webp",
-				false, Rung{CeilingPx: edge, MaxFrames: 1}, frames, "", "", testQuality)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cleanup()
-			if w != want.Bounds().Dx() || h != want.Bounds().Dy() {
+			out, images := encodeFile(t, p, content, OpenOptions{}, Select{}, webpAtEdge(edge))
+			if w, h := images[0].Width, images[0].Height; w != want.Bounds().Dx() || h != want.Bounds().Dy() {
 				t.Fatalf("reported %dx%d, want %v", w, h, want.Bounds().Size())
 			}
 			requireUpright(t, decodePNG(t, real, out), want, 40)
 		})
 
-		t.Run(name+"/WebP still with the orientation in an EXIF chunk, operation", func(t *testing.T) {
+		t.Run(name+"/WebP still with the orientation in an EXIF chunk, as PNG", func(t *testing.T) {
 			t.Parallel()
 			requireWebPBuilders(t)
 			p := requireProcessor(t)
@@ -764,30 +718,23 @@ func TestEveryOutputIsStripped(t *testing.T) {
 		t.Fatalf("the fixture carries no profile: %q", profiles(wide))
 	}
 
-	env := stagedEnv(real, t.TempDir())
-	rung := func(name, path, mime string, animated bool, frames int) {
-		t.Run("rung "+name, func(t *testing.T) {
+	pr := requireProcessor(t)
+	rung := func(name, path string, animated bool, frames int) {
+		t.Run("encode "+name, func(t *testing.T) {
 			content := writeFile(t, "content", mustRead(t, path))
-			infos, err := env.ProbeFrames(context.Background(), content, mime)
-			if err != nil {
-				t.Fatal(err)
+			enc := webpAtEdge(32)
+			sel := Select{}
+			if animated {
+				enc.Animate, sel = true, Select{Frames: Even(frames)}
 			}
-			if !AnyProfiled(infos) {
-				t.Fatal("the fixture's profile was not found")
-			}
-			out, cleanup, _, _, _, err := env.EncodeRung(context.Background(), content, mime, animated,
-				Rung{CeilingPx: 32, MaxFrames: frames}, infos, "", "", testQuality)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cleanup()
+			out, _ := encodeFile(t, pr, content, OpenOptions{}, sel, enc)
 			if got := profiles(out); got != "" {
 				t.Errorf("output carries %q", got)
 			}
 		})
 	}
-	rung("still", wide, "image/png", false, 1)
-	rung("composited animation", wideGIF, "image/gif", true, 2)
+	rung("still", wide, false, 1)
+	rung("composited animation", wideGIF, true, 2)
 
 	t.Run("operations", func(t *testing.T) {
 		p := requireProcessor(t)
@@ -847,18 +794,9 @@ func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
 			size := fmt.Sprintf("%dx%d!", tw, th)
 			magick(t, env, path+"[0]", "-auto-orient", "-filter", "Lanczos", "-resize", size, "-strip", "-depth", "8", reference)
 
-			t.Run("rung", func(t *testing.T) {
-				stagedRung := stagedEnv(env, t.TempDir())
-				frames, err := stagedRung.ProbeFrames(ctx, path, c.mime)
-				if err != nil {
-					t.Fatal(err)
-				}
-				out, cleanup, w, h, _, err := stagedRung.EncodeRung(ctx, path, c.mime, false, Rung{CeilingPx: edge, MaxFrames: 1}, frames, "", "", testQuality)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer cleanup()
-				if w != tw || h != th {
+			t.Run("webp", func(t *testing.T) {
+				out, images := encodeFile(t, requireProcessor(t), path, OpenOptions{}, Select{}, webpAtEdge(edge))
+				if w, h := images[0].Width, images[0].Height; w != tw || h != th {
 					t.Fatalf("reported %dx%d, want %dx%d", w, h, tw, th)
 				}
 				lossy := filepath.Join(t.TempDir(), "reference.webp")
@@ -871,10 +809,9 @@ func TestOrientationTheHeaderDoesNotReport(t *testing.T) {
 				var img Image
 				var dir string
 				if strings.HasSuffix(c.file, ".png") {
-					ec, _ := enc.resolve()
 					dir = t.TempDir()
 					var err error
-					if img, err = env.still(ctx, decoder{"magick", "png"}, path, ec, dir); err != nil {
+					if img, _, err = stillAs(ctx, requireProcessor(t), path, "", enc, dir); err != nil {
 						t.Fatal(err)
 					}
 				} else {
@@ -898,7 +835,6 @@ func TestOutputsAreEightBit(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
 	p := requireProcessor(t)
-	ec, _ := Encoding{Format: PNG}.resolve()
 	dir := t.TempDir()
 	for _, depth := range []string{"16", "10"} {
 		src := filepath.Join(dir, "src"+depth+".png")
@@ -907,7 +843,7 @@ func TestOutputsAreEightBit(t *testing.T) {
 			t.Fatal("the source is not 16-bit")
 		}
 		out := t.TempDir()
-		img, err := env.still(context.Background(), decoder{"magick", "png"}, src, ec, out)
+		img, _, err := stillAs(context.Background(), p, src, "", Encoding{Format: PNG}, out)
 		if err != nil {
 			t.Fatal(err)
 		}

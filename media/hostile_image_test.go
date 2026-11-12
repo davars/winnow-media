@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -161,7 +160,7 @@ func requireAnimationRefusals(t *testing.T, p *Processor, bounds refusalBounds, 
 
 func stillOp(p *Processor) func(path, dir string) (Usage, error) {
 	return func(path, dir string) (Usage, error) {
-		_, u, err := p.Still(context.Background(), path, Encoding{}, dir)
+		_, u, err := p.encodeFirst(context.Background(), path, Encoding{}, dir)
 		return u, err
 	}
 }
@@ -179,7 +178,7 @@ func TestGIFFrameAtTheCapDecodesWithinTheBounds(t *testing.T) {
 	// Both entry points decode through animationFrames; the gate in front of
 	// each is covered by the refusal tests, so one decode of the bomb suffices.
 	start := time.Now()
-	images, usage, err := p.AnimationFrames(context.Background(), writeFile(t, "bomb.gif", data), Encoding{}, 0, t.TempDir())
+	images, usage, err := p.encodeEven(context.Background(), writeFile(t, "bomb.gif", data), Encoding{}, 16, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +202,7 @@ func TestAnimationAtTheFrameCapDecodesWithinTheBounds(t *testing.T) {
 	// The frames reached are the first and the last, which is where the cap
 	// bites; the other entry point shares the decode.
 	start := time.Now()
-	images, usage, err := p.AnimationFramesAt(context.Background(), writeFile(t, "full.gif", oneColourGIF(t, side, side, frames)), Encoding{}, []int{0, frames - 1}, t.TempDir())
+	images, usage, err := p.encodeIndices(context.Background(), writeFile(t, "full.gif", oneColourGIF(t, side, side, frames)), Encoding{}, []int{0, frames - 1}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +218,7 @@ func TestAnimationAtTheFrameCapDecodesWithinTheBounds(t *testing.T) {
 }
 
 func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	bounds := refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}
 	for name, side := range map[string][2]int{
 		"one pixel row over the cap": {8000, 6501},
@@ -232,7 +231,7 @@ func TestGIFFrameOverTheCapIsRefusedAfterTheHeaderRead(t *testing.T) {
 }
 
 func TestWebPOfMaximumDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	requireAnimationRefusals(t, p, refusalBounds{wall: 2 * time.Second, maxRSS: 256 << 20}, losslessWebP(16383, 16383))
 }
 
@@ -247,7 +246,7 @@ func TestLosslessWebPFixtureIsOneColour(t *testing.T) {
 }
 
 func TestHEICDeclaringHugeDimensionsIsRefusedAfterTheHeaderRead(t *testing.T) {
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	original, err := os.ReadFile(filepath.Join("testdata", "heic", "gradient-righttop.heic"))
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +279,7 @@ func reachCompositor(t *testing.T, p *Processor) func() int {
 	old := p.compose
 	t.Cleanup(func() { p.compose = old })
 	var started int
-	p.compose = func(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
+	p.compose = func(context.Context, *os.File, composeRequest, func(composedFrame) error) (*Usage, error) {
 		started++
 		return nil, errors.New("compositor reached")
 	}
@@ -292,7 +291,7 @@ func reachCompositor(t *testing.T, p *Processor) func() int {
 // bounds the decode of one frame at the frame cap, and TestAnimationAtTheFrameCapDecodesWithinTheBounds
 // that of the most frames, not 16 frames of 4 megapixels.
 func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	cases := []struct {
 		name          string
 		w, h, n, want int
@@ -309,13 +308,13 @@ func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 			if c.refused {
 				requireRefusal(t, p, refusalBounds{wall: 10 * time.Second, maxRSS: 512 << 20},
 					func(path, dir string) (Usage, error) {
-						_, u, err := p.AnimationFrames(context.Background(), path, Encoding{}, c.want, dir)
+						_, u, err := p.encodeEven(context.Background(), path, Encoding{}, c.want, dir)
 						return u, err
 					}, data)
 				return
 			}
 			started := reachCompositor(t, p)
-			_, _, err := p.AnimationFrames(context.Background(), writeFile(t, "a.gif", data), Encoding{}, c.want, t.TempDir())
+			_, _, err := p.encodeEven(context.Background(), writeFile(t, "a.gif", data), Encoding{}, c.want, t.TempDir())
 			if err == nil || !strings.Contains(err.Error(), "compositor reached") || started() != 1 {
 				t.Errorf("err = %v after %d compositor starts, want the gate to let it through to one", err, started())
 			}
@@ -323,8 +322,8 @@ func TestAnimationReturnedPixelsAreBoundedPerCall(t *testing.T) {
 	}
 }
 
-func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+func TestEncodeIndicesReturnedPixelsAreBoundedPerCall(t *testing.T) {
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	data := oneColourGIF(t, 2000, 2001, 16)
 	indices := func(n int) []int {
 		out := make([]int, n)
@@ -336,59 +335,27 @@ func TestAnimationFramesAtReturnedPixelsAreBoundedPerCall(t *testing.T) {
 	t.Run("16 frames one row over", func(t *testing.T) {
 		requireRefusal(t, p, refusalBounds{wall: 10 * time.Second, maxRSS: 512 << 20},
 			func(path, dir string) (Usage, error) {
-				_, u, err := p.AnimationFramesAt(context.Background(), path, Encoding{}, indices(16), dir)
+				_, u, err := p.encodeIndices(context.Background(), path, Encoding{}, indices(16), dir)
 				return u, err
 			}, data)
 	})
 	t.Run("15 frames of the same canvas", func(t *testing.T) {
 		started := reachCompositor(t, p)
-		_, _, err := p.AnimationFramesAt(context.Background(), writeFile(t, "a.gif", data), Encoding{}, indices(15), t.TempDir())
+		_, _, err := p.encodeIndices(context.Background(), writeFile(t, "a.gif", data), Encoding{}, indices(15), t.TempDir())
 		if err == nil || !strings.Contains(err.Error(), "compositor reached") || started() != 1 {
 			t.Errorf("err = %v after %d compositor starts, want the gate to let it through to one", err, started())
 		}
 	})
 }
 
-// meteredEnv returns env with the largest peak RSS of its runs recorded, for
-// the Env path, which has no Processor to meter.
-func meteredEnv(env Env) (Env, func() int64) {
-	var mu sync.Mutex
-	var peak int64
-	wrapped := env
-	wrapped.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := env.Run(ctx, name, args...)
-		if res.Usage != nil {
-			mu.Lock()
-			peak = max(peak, res.Usage.MaxRSS)
-			mu.Unlock()
-		}
-		return res, err
-	}
-	return wrapped, func() int64 {
-		mu.Lock()
-		defer mu.Unlock()
-		return peak
-	}
-}
-
 // ImageMagick holds about 40 KiB per scene even in ping mode, so a header
 // read's memory grows with the number of frames before the frame cap can be
 // checked: 20000 one-pixel frames are 300 KiB of file and over 800 MiB of
 // identify. The list-length ceiling must stop the read first.
-func TestProbeFramesHeaderReadIsBoundedForManyFrameAnimations(t *testing.T) {
-	env, peak := meteredEnv(requireMagick(t))
+func TestHeaderReadIsBoundedForManyFrameAnimations(t *testing.T) {
 	data := manyFrameGIF(1, 1, 20_000)
-	start := time.Now()
-	_, err := env.ProbeFrames(context.Background(), writeFile(t, "content", data), "image/gif")
-	if !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("err = %v, want ErrTooLarge", err)
-	}
-	if wall := time.Since(start); wall > 5*time.Second {
-		t.Errorf("header read took %v, the bound is 5s", wall)
-	}
-	if rss := peak(); rss > 256<<20 {
-		t.Errorf("header read peaked at %d bytes of RSS for a %d-byte file, the bound is 256 MiB", rss, len(data))
-	}
+	p := requireProcessor(t)
+	requireAnimationRefusals(t, p, refusalBounds{wall: 5 * time.Second, maxRSS: 256 << 20}, data)
 }
 
 // gifWithFrames returns a GIF whose logical screen is lsdW x lsdH (0 x 0 is
@@ -438,9 +405,9 @@ func gifWithFrames(t *testing.T, lsdW, lsdH int, rects [][4]int) []byte {
 func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
 	t.Parallel()
 	data := gifWithFrames(t, 0, 0, [][4]int{{0, 0, maxDimension, 1}, {0, 0, 1, maxDimension}})
-	t.Run("ProbeAnimation", func(t *testing.T) {
-		p := requireProcessorWith(t, Config{Caps: envTestCaps})
-		info, _, err := p.ProbeAnimation(context.Background(), writeFile(t, "wide.gif", data))
+	t.Run("Info", func(t *testing.T) {
+		p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
+		info, _, err := p.infoOf(context.Background(), writeFile(t, "wide.gif", data))
 		if errors.Is(err, ErrTooLarge) {
 			return
 		}
@@ -451,18 +418,12 @@ func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
 			t.Errorf("probe admits a %dx%d canvas, %d pixels, over the %d cap", info.Width, info.Height, px, int64(maxFramePixels))
 		}
 	})
-	t.Run("EncodeRung", func(t *testing.T) {
-		env := requireMagick(t)
-		path := writeFile(t, "content", data)
-		frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/gif", true,
-			Rung{CeilingPx: 2048, MaxFrames: 2}, frames, "", "", 80)
+	t.Run("Open", func(t *testing.T) {
+		p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
+		src, _, err := p.Open(context.Background(), writeFile(t, "content", data), OpenOptions{})
 		if err == nil {
-			cleanup()
-			t.Fatal("encoded a 268 MP composite canvas")
+			_ = src.Close()
+			t.Fatal("opened a 268 MP composite canvas")
 		}
 		if !errors.Is(err, ErrTooLarge) {
 			t.Errorf("err = %v, want ErrTooLarge before the compositor runs", err)
@@ -476,35 +437,11 @@ func TestCompositeCanvasIsBoundedByTheFramePixelCap(t *testing.T) {
 func TestHeaderReadMapsTheListLengthCeilingToErrTooLarge(t *testing.T) {
 	t.Parallel()
 	data := manyFrameGIF(1, 1, 2100)
-	t.Run("ProbeFrames", func(t *testing.T) {
-		env := requireMagick(t)
-		_, err := env.ProbeFrames(context.Background(), writeFile(t, "content", data), "image/gif")
-		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), policyListLength) {
-			t.Errorf("err = %v, want ErrTooLarge naming %s", err, policyListLength)
-		}
-	})
-	t.Run("ProbeAnimation", func(t *testing.T) {
+	t.Run("Info", func(t *testing.T) {
 		p := requireProcessor(t)
-		_, _, err := p.ProbeAnimation(context.Background(), writeFile(t, "many.gif", data))
+		_, _, err := p.infoOf(context.Background(), writeFile(t, "many.gif", data))
 		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), policyListLength) {
 			t.Errorf("err = %v, want ErrTooLarge naming %s", err, policyListLength)
-		}
-	})
-	// A file magick cannot sniff, such as a multi-image ICO, is read again
-	// with its coder, and the ceiling may be what stops that second read.
-	t.Run("ProbeFrames coder retry", func(t *testing.T) {
-		var env Env
-		calls := 0
-		env.Run = func(context.Context, string, ...string) (Result, error) {
-			calls++
-			if calls == 1 {
-				return Result{}, errors.New("no decode delegate for this image format")
-			}
-			return Result{}, errors.New("identify: " + listLengthRefusal)
-		}
-		_, err := env.ProbeFrames(context.Background(), "content", "image/vnd.microsoft.icon")
-		if calls != 2 || !errors.Is(err, ErrTooLarge) {
-			t.Errorf("%d runs, err = %v, want a retry ending in ErrTooLarge", calls, err)
 		}
 	})
 }

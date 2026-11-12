@@ -14,7 +14,7 @@ import (
 
 const testQuality = 80
 
-func TestProfileDetectionAndAnimationPolicy(t *testing.T) {
+func TestProfileListDetection(t *testing.T) {
 	t.Parallel()
 	for _, profiles := range []string{"icc", "ICC", "8bim,exif,icc,iptc", "xmp icm"} {
 		if !profileListHasICC(profiles) {
@@ -25,43 +25,6 @@ func TestProfileDetectionAndAnimationPolicy(t *testing.T) {
 		if profileListHasICC(profiles) {
 			t.Errorf("profile list %q was falsely recognized as ICC", profiles)
 		}
-	}
-
-	frames := []FrameInfo{{hasICC: true}, {hasICC: false}, {hasICC: true}}
-	if !AnyProfiled(frames) || AnyProfiled(frames[1:2]) {
-		t.Fatal("AnyProfiled disagrees with the frames' profile flags")
-	}
-}
-
-// The rung sequence itself, which the encoding tests only observe indirectly.
-func TestLadderOrder(t *testing.T) {
-	t.Parallel()
-	limits := Limits{Ceilings: []int{2048, 1536, 1024}, MaxFrames: 16}
-
-	animated := Ladder(limits, true, 1000)
-	want := []Rung{
-		{2048, 16}, {2048, 8}, {2048, 4}, {2048, 2}, {2048, 1}, {1536, 1}, {1024, 1},
-	}
-	if !slices.Equal(animated, want) {
-		t.Errorf("animated ladder = %v, want %v", animated, want)
-	}
-
-	still := Ladder(limits, false, 1)
-	wantStill := []Rung{{2048, 1}, {1536, 1}, {1024, 1}}
-	if !slices.Equal(still, wantStill) {
-		t.Errorf("still ladder = %v, want %v", still, wantStill)
-	}
-
-	// A source shorter than the budget collapses the rungs that would encode
-	// identically: at 5 source frames the 16- and 8-frame caps both sample 5.
-	short := Ladder(limits, true, 5)
-	wantShort := []Rung{{2048, 16}, {2048, 4}, {2048, 2}, {2048, 1}, {1536, 1}, {1024, 1}}
-	if !slices.Equal(short, wantShort) {
-		t.Errorf("5-frame ladder = %v, want %v", short, wantShort)
-	}
-
-	if got := Ladder(Limits{MaxFrames: 16}, true, 10); got != nil {
-		t.Errorf("ladder without ceilings = %v, want nil", got)
 	}
 }
 
@@ -90,23 +53,6 @@ func TestSelectFramesIsEvenlySpaced(t *testing.T) {
 	}
 }
 
-func TestDeleteExpr(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct {
-		keep   []int
-		frames int
-		want   string
-	}{
-		{[]int{0, 2}, 5, "1,3,4"},
-		{[]int{0, 1, 2}, 3, ""},
-		{[]int{4}, 5, "0,1,2,3"},
-	} {
-		if got := DeleteExpr(c.keep, c.frames); got != c.want {
-			t.Errorf("DeleteExpr(%v, %d) = %q, want %q", c.keep, c.frames, got, c.want)
-		}
-	}
-}
-
 func TestTimestampsClampShortDelays(t *testing.T) {
 	t.Parallel()
 	got := timestamps([]int{0, 5, 1, 20})
@@ -116,67 +62,29 @@ func TestTimestampsClampShortDelays(t *testing.T) {
 	}
 }
 
-func TestCoderForMIME(t *testing.T) {
-	t.Parallel()
-	if coder, ok := CoderForMIME("image/x-tga"); !ok || coder != "tga" {
-		t.Errorf("CoderForMIME(image/x-tga) = %q, %v", coder, ok)
-	}
-	for _, mime := range []string{"image/png", ""} {
-		if coder, ok := CoderForMIME(mime); ok {
-			t.Errorf("CoderForMIME(%q) = %q, want no coder", mime, coder)
-		}
-	}
+// webpAtEdge is a WebP Encoding that fits edge by edge.
+func webpAtEdge(edge int) Encoding {
+	return Encoding{Format: WebP, Quality: testQuality, MaxEdge: edge, MaxArea: edge * edge}
 }
 
-func TestRunMagickWithCoderFallbackRecoversTGA(t *testing.T) {
-	t.Parallel()
-	env := requireMagick(t)
+// encodeFile opens path as the Processor does, makes one Encode of sel into a
+// fresh directory and returns the path of the first image, and the images.
+func encodeFile(t *testing.T, p *Processor, path string, opts OpenOptions, sel Select, enc Encoding) (string, []Image) {
+	t.Helper()
+	src, _, err := p.Open(context.Background(), path, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
 	dir := t.TempDir()
-	extPath := filepath.Join(dir, "src.tga")
-	magick(t, env, "-size", "4x4", "xc:red", extPath)
-	content := stage(t, extPath)
-
-	build := func(coder string) []string {
-		in := content
-		if coder != "" {
-			in = coder + ":" + in
-		}
-		return []string{"identify", in}
-	}
-	if _, err := env.RunMagickWithCoderFallback(context.Background(), "image/x-tga", build); err != nil {
-		t.Fatalf("mapped mime type did not recover: %v", err)
-	}
-	if _, err := env.RunMagickWithCoderFallback(context.Background(), "image/png", build); err == nil {
-		t.Fatal("unmapped mime type unexpectedly succeeded on a bare-undecodable input")
-	}
-}
-
-func TestEncodeRungStillRecoversTGAViaCoderFallback(t *testing.T) {
-	t.Parallel()
-	env := requireMagick(t)
-	extPath := filepath.Join(t.TempDir(), "src.tga")
-	magick(t, env, "-size", "4x4", "xc:red", extPath)
-	content := stage(t, extPath)
-
-	frames, err := env.ProbeFrames(context.Background(), content, "image/x-tga")
+	images, _, err := src.Encode(context.Background(), dir, sel, enc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, cleanup, w, h, mapping, err := env.EncodeRung(context.Background(), content, "image/x-tga",
-		false, Rung{CeilingPx: 64, MaxFrames: 1}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-	if w != 4 || h != 4 || !slices.Equal(mapping, []Frame{{Index: 0, TimeMS: 0}}) {
-		t.Errorf("EncodeRung = %dx%d %v, want 4x4 and frame 0", w, h, mapping)
-	}
-	if info, err := os.Stat(out); err != nil || info.Size() == 0 {
-		t.Errorf("staged artifact %s: %v", out, err)
-	}
+	return filepath.Join(dir, images[0].Name), images
 }
 
-func writeGrayAnimGIF(t *testing.T, env Env, levels, delaysCS []int) string {
+func writeGrayAnimGIF(t *testing.T, env toolEnv, levels, delaysCS []int) string {
 	t.Helper()
 	dir := t.TempDir()
 	var args []string
@@ -193,51 +101,35 @@ func writeGrayAnimGIF(t *testing.T, env Env, levels, delaysCS []int) string {
 // Frames are sampled by source index, the mapping carries each frame's
 // original timestamp, and a zero stored delay is clamped to the GIF display
 // default.
-func TestEncodeRungAnimationMapsSampledFrames(t *testing.T) {
+func TestAnimationMapsSampledFrames(t *testing.T) {
 	t.Parallel()
-	env := requireMagick(t)
-	content := writeGrayAnimGIF(t, env, []int{10, 70, 130, 190}, []int{0, 20, 20, 20})
+	p := requireProcessor(t)
+	content := writeGrayAnimGIF(t, requireMagick(t), []int{10, 70, 130, 190}, []int{0, 20, 20, 20})
 
-	frames, err := env.ProbeFrames(context.Background(), content, "image/gif")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(frames) != 4 {
-		t.Fatalf("ProbeFrames found %d frames, want 4", len(frames))
-	}
-	out, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), content, "image/gif",
-		true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	enc := webpAtEdge(64)
+	enc.Animate = true
+	out, images := encodeFile(t, p, content, OpenOptions{}, Select{Frames: Even(2)}, enc)
 	want := []Frame{{Index: 0, TimeMS: 0}, {Index: 2, TimeMS: 300}}
-	if !slices.Equal(mapping, want) {
-		t.Errorf("mapping = %v, want %v", mapping, want)
+	if !slices.Equal(images[0].Frames, want) {
+		t.Errorf("mapping = %v, want %v", images[0].Frames, want)
 	}
-	scenes, _, _, err := env.IdentifyArtifact(context.Background(), out)
-	if err != nil || scenes != 2 {
-		t.Errorf("IdentifyArtifact = %d scenes, %v; want 2", scenes, err)
+	src, _, err := p.Open(context.Background(), out, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	if got := src.Info().Frames; got != 2 {
+		t.Errorf("the animation holds %d frames, want 2", got)
 	}
 }
 
-func TestEncodeRungNeverUpscalesAStill(t *testing.T) {
+func TestStillIsNeverUpscaled(t *testing.T) {
 	t.Parallel()
-	env := requireMagick(t)
+	p := requireProcessor(t)
 	extPath := filepath.Join(t.TempDir(), "src.png")
-	magick(t, env, "-size", "40x20", "xc:blue", extPath)
-	content := stage(t, extPath)
-	frames, err := env.ProbeFrames(context.Background(), content, "image/png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, cleanup, w, h, _, err := env.EncodeRung(context.Background(), content, "image/png",
-		false, Rung{CeilingPx: 640, MaxFrames: 1}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-	if w != 40 || h != 20 {
+	magick(t, requireMagick(t), "-size", "40x20", "xc:blue", extPath)
+	_, images := encodeFile(t, p, stage(t, extPath), OpenOptions{}, Select{}, webpAtEdge(640))
+	if w, h := images[0].Width, images[0].Height; w != 40 || h != 20 {
 		t.Errorf("encoded %dx%d, want the original 40x20", w, h)
 	}
 }
@@ -256,7 +148,7 @@ func writeAdobeProfile(t *testing.T, dir string) string {
 	return adobe
 }
 
-func writeWideGamutStill(t *testing.T, env Env, srgb string) string {
+func writeWideGamutStill(t *testing.T, env toolEnv, srgb string) string {
 	t.Helper()
 	dir := t.TempDir()
 	adobe := writeAdobeProfile(t, dir)
@@ -267,32 +159,21 @@ func writeWideGamutStill(t *testing.T, env Env, srgb string) string {
 
 // The fixture is stored in Adobe RGB, not merely tagged as sRGB: omitting the
 // destination -profile gives a visibly different WebP.
-func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
+func TestWideGamutStillConvertsBeforeWebP(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	destination := writeSRGBProfile(t)
 	input := writeWideGamutStill(t, env, destination)
 
-	frames, err := env.ProbeFrames(context.Background(), input, "image/png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !AnyProfiled(frames) {
-		t.Fatalf("fixture has no embedded ICC profile: %+v", frames)
-	}
-	actual, cleanup, _, _, _, err := env.EncodeRung(context.Background(), input, "image/png",
-		false, Rung{CeilingPx: 128, MaxFrames: 1}, frames, destination, "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	actual, _ := encodeFile(t, p, input, OpenOptions{}, Select{}, webpAtEdge(128))
 
 	dir := t.TempDir()
 	reference := filepath.Join(dir, "reference.webp")
 	unconverted := filepath.Join(dir, "unconverted.webp")
-	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
+	magick(t, env, append(defaultResources().limitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
 		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), reference)...)
-	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient",
+	magick(t, env, append(defaultResources().limitArgs(), input+"[0]", "-auto-orient",
 		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), unconverted)...)
 
 	if diff := meanAbsoluteDifference(t, env, actual, reference); diff > 0.004 {
@@ -303,12 +184,13 @@ func TestEncodeRungWideGamutStillConvertsBeforeWebP(t *testing.T) {
 	}
 }
 
-// A JXL still stored in Adobe RGB must be reported as profiled and converted
-// like the PNG above, though ImageMagick's JXL coder reports no profile under
-// -ping, which the probe's header read uses.
-func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
+// A JXL still stored in Adobe RGB must be converted like the PNG above,
+// though ImageMagick's JXL coder reports no profile under -ping, which the
+// header read uses.
+func TestJXLStillIsConvertedFromItsProfile(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	destination := writeSRGBProfile(t)
 	dir := t.TempDir()
 	adobe := writeAdobeProfile(t, dir)
@@ -319,21 +201,9 @@ func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
 	}
 	input := stage(t, withExtension)
 
-	frames, err := env.ProbeFrames(context.Background(), input, "image/jxl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !AnyProfiled(frames) {
-		t.Fatalf("ProbeFrames reports no ICC profile on a profiled JXL still: %+v", frames)
-	}
-	actual, cleanup, _, _, _, err := env.EncodeRung(context.Background(), input, "image/jxl",
-		false, Rung{CeilingPx: 128, MaxFrames: 1}, frames, destination, "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	actual, _ := encodeFile(t, p, input, OpenOptions{}, Select{}, webpAtEdge(128))
 	reference := filepath.Join(dir, "reference.webp")
-	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
+	magick(t, env, append(defaultResources().limitArgs(), input+"[0]", "-auto-orient", "-profile", destination,
 		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), reference)...)
 	if diff := meanAbsoluteDifference(t, env, actual, reference); diff > 0.004 {
 		t.Fatalf("corrected WebP differs from explicit sRGB reference by %.6f, want <= 0.004", diff)
@@ -343,10 +213,11 @@ func TestProbeFramesReportsTheProfileOfAJXLStill(t *testing.T) {
 // The frames of the animated WebP carry an Adobe RGB profile ImageMagick does
 // not read from an animation, so the conversion comes from the compositor's
 // report of the profile with each frame.
-func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
+func TestWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	destination := writeSRGBProfile(t)
 	adobe := writeAdobeProfile(t, t.TempDir())
 	adobeBytes, err := os.ReadFile(adobe)
@@ -354,11 +225,6 @@ func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := withWebPChunk(t, buildWebP(t, webpCase{codec: "lossless", frames: 2}), "icc", adobeBytes)
-
-	frames, err := env.ProbeFrames(context.Background(), input, "image/webp")
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// The stored pixels, converted from Adobe RGB and not.
 	dir := t.TempDir()
@@ -380,108 +246,38 @@ func TestEncodeRungWideGamutAnimationConvertsBeforeWebP(t *testing.T) {
 	magick(t, env, append(convertedArgs, "-quality", strconv.Itoa(testQuality), reference)...)
 	magick(t, env, append(plainArgs, "-quality", strconv.Itoa(testQuality), unconverted)...)
 
-	// An empty profilePath, as for a caller that saw no profile in the
-	// headers, falls back to the package's own sRGB profile.
-	for _, profilePath := range []string{destination, ""} {
-		actual, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), input, "image/webp",
-			true, Rung{CeilingPx: 128, MaxFrames: 2}, frames, profilePath, "", testQuality)
-		if err != nil {
-			t.Fatal(err)
+	enc := webpAtEdge(128)
+	enc.Animate = true
+	actual, images := encodeFile(t, p, input, OpenOptions{}, Select{Frames: Even(2)}, enc)
+	if len(images[0].Frames) != 2 {
+		t.Fatalf("animation mapping has %d frames, want 2", len(images[0].Frames))
+	}
+	for i := range images[0].Frames {
+		diff := animationFrameDifference(t, env, actual, reference, i, 2)
+		plain := animationFrameDifference(t, env, actual, unconverted, i, 2)
+		t.Logf("frame %d: %.6f from the converted reference, %.6f from the unconverted one", i, diff, plain)
+		if diff > 0.004 {
+			t.Errorf("corrected animation frame %d differs from explicit sRGB reference by %.6f, want <= 0.004", i, diff)
 		}
-		defer cleanup()
-		if len(mapping) != 2 {
-			t.Fatalf("animation mapping has %d frames, want 2", len(mapping))
-		}
-		for i := range mapping {
-			diff := animationFrameDifference(t, env, actual, reference, i, 2)
-			plain := animationFrameDifference(t, env, actual, unconverted, i, 2)
-			t.Logf("profilePath %q frame %d: %.6f from the converted reference, %.6f from the unconverted one", profilePath, i, diff, plain)
-			if diff > 0.004 {
-				t.Errorf("profilePath %q: corrected animation frame %d differs from explicit sRGB reference by %.6f, want <= 0.004", profilePath, i, diff)
-			}
-			if plain < 0.01 {
-				t.Errorf("profilePath %q: corrected animation frame %d differs from unconverted reinterpretation by %.6f, want >= 0.01", profilePath, i, plain)
-			}
+		if plain < 0.01 {
+			t.Errorf("corrected animation frame %d differs from unconverted reinterpretation by %.6f, want >= 0.01", i, plain)
 		}
 	}
 }
 
-// The orientation the header read reports is applied to the composited
-// frames, which carry none, before the resize.
-func TestEncodeRungAppliesTheHeaderOrientationToAnimatedWebP(t *testing.T) {
-	t.Parallel()
-	requireWebPBuilders(t)
-	real := requireMagick(t)
-	env := real
-	env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := real.Run(ctx, name, args...)
-		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
-			res.Stdout = headerWithOrientation(res.Stdout, "RightTop")
-		}
-		return res, err
-	}
-	env = stagedEnv(env, t.TempDir())
-	path := buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 4})
-	frames, err := env.ProbeFrames(context.Background(), path, "image/webp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, cleanup, w, h, _, err := env.EncodeRung(context.Background(), path, "image/webp",
-		true, Rung{CeilingPx: 128, MaxFrames: 4}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-	if w != webpCanvasH || h != webpCanvasW {
-		t.Errorf("artifact is %dx%d, want %dx%d", w, h, webpCanvasH, webpCanvasW)
-	}
-}
-
-func TestEncodeRungUnprofiledStillIsNotColourConverted(t *testing.T) {
+func TestUnprofiledStillIsNotColourConverted(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	withExtension := filepath.Join(t.TempDir(), "untagged.png")
 	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-strip", withExtension)
 	input := stage(t, withExtension)
 
-	frames, err := env.ProbeFrames(context.Background(), input, "image/png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if AnyProfiled(frames) {
-		t.Fatalf("unprofiled fixture reports an ICC profile: %+v", frames)
-	}
-	actual, cleanup, _, _, _, err := env.EncodeRung(context.Background(), input, "image/png",
-		false, Rung{CeilingPx: 128, MaxFrames: 1}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
+	actual, _ := encodeFile(t, p, input, OpenOptions{}, Select{}, webpAtEdge(128))
 	unconverted := filepath.Join(t.TempDir(), "unconverted.webp")
-	magick(t, env, append(LimitArgs(), input+"[0]", "-auto-orient",
+	magick(t, env, append(defaultResources().limitArgs(), input+"[0]", "-auto-orient",
 		"-filter", "Lanczos", "-resize", "128x48!", "-strip", "-quality", strconv.Itoa(testQuality), unconverted)...)
 	if diff := meanAbsoluteDifference(t, env, actual, unconverted); diff > 0.004 {
 		t.Fatalf("unprofiled WebP differs from plain pipeline by %.6f, want <= 0.004", diff)
-	}
-}
-
-// IdentifyArtifact needs the scene count and the first scene's size, which the
-// artifact's container headers state. Without -ping identify decodes every
-// scene: 94 ms for a 2048x1365 WebP still against 25 ms, on every rung of every
-// item, and the whole animation on an animated artifact.
-func TestIdentifyArtifactReadsHeadersOnly(t *testing.T) {
-	t.Parallel()
-	real := requireMagick(t)
-	env, calls := countingEnv(real)
-	artifact := filepath.Join(t.TempDir(), "artifact.webp")
-	magick(t, real, "-size", "12x8", "xc:red", "xc:blue", artifact)
-	scenes, w, h, err := env.IdentifyArtifact(context.Background(), artifact)
-	if err != nil || scenes != 2 || w != 12 || h != 8 {
-		t.Fatalf("scenes %d size %dx%d err %v, want 2 scenes of 12x8", scenes, w, h, err)
-	}
-	for _, call := range calls() {
-		if !slices.Contains(call, "-ping") {
-			t.Errorf("the artifact was decoded to count its scenes: %q", call)
-		}
 	}
 }

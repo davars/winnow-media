@@ -248,7 +248,7 @@ func (c encodeCheck) removeOutputs() {
 // channel whatever the depth of the source. The run prints one encodedFrame
 // line per frame, which parseEncoded reads.
 //
-// The result carries no resource limits; Env.runMagick adds them.
+// The result carries no resource limits; toolEnv.runMagick adds them.
 // outputFiles requires out.path to be a magick filename pattern containing
 // %d.
 func encodeArgs(frames []encodeFrame, src encodeSource, enc encoding, out encodeOutput) []string {
@@ -362,7 +362,7 @@ func (t fusedTarget) source(src encodeSource) encodeSource {
 // and reports one encodedFrame line per target in order. readOps are applied
 // to the read, before any target (a decode size hint). Each target's frame
 // input is the decode reference. The result carries no resource limits;
-// Env.runMagick adds them.
+// toolEnv.runMagick adds them.
 //
 // The first target's prelude, if any, is applied to the decoded image before
 // any target.

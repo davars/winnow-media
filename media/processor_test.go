@@ -19,8 +19,8 @@ import (
 const policyRefusal = "security policy"
 
 // runMagick runs magick through the processor's own runner.
-func runMagick(p *Processor, args ...string) (Result, error) {
-	return p.run(context.Background(), "magick", args...)
+func runMagick(p *Processor, args ...string) (runResult, error) {
+	return p.run(context.Background(), nil, "magick", args...)
 }
 
 // mvgFile writes a vector drawing that composites the text file textPath.
@@ -121,34 +121,13 @@ func onlyTypeDetection(t *testing.T, rec *recorder) {
 	}
 }
 
-func TestMVGGivenToOperationsIsUnsupportedWithoutDecoding(t *testing.T) {
+func TestMVGIsUnsupportedWithoutDecoding(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
 	mvg := mvgFile(t, writeFile(t, "secret.txt", []byte("secret")))
-	if _, _, err := p.Still(context.Background(), mvg, Encoding{}, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
-		t.Errorf("Still: err = %v, want ErrUnsupportedType", err)
-	}
-	for name, op := range animationOps(p) {
-		if _, err := op(mvg, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
-			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
-		}
-	}
-	onlyTypeDetection(t, rec)
-}
-
-func TestPNGNamedGIFIsUnsupportedWithoutDecoding(t *testing.T) {
-	t.Parallel()
-	env := requireMagick(t)
-	p := requireProcessor(t)
-	rec := record(p)
-	forbidCompositor(t, p)
-	png := filepath.Join(t.TempDir(), "x.gif")
-	magick(t, env, "-size", "8x8", "xc:red", "png:"+png)
-	for name, op := range animationOps(p) {
-		if _, err := op(png, t.TempDir()); !errors.Is(err, ErrUnsupportedType) {
-			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
-		}
+	if _, _, err := p.Open(context.Background(), mvg, OpenOptions{}); !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("err = %v, want ErrUnsupportedType", err)
 	}
 	onlyTypeDetection(t, rec)
 }
@@ -176,7 +155,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantImages, cleanOut := framesInto(t, p, clean, Encoding{}, 0)
+	wantImages, cleanOut := framesInto(t, p, clean, Encoding{}, defaultFrames)
 
 	for name, tail := range map[string][]byte{
 		"zip":          zipBytes(t),
@@ -186,7 +165,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 			path := writeFile(t, "x.gif", append(slices.Clone(cleanData), tail...))
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
-			images, out := framesInto(t, p, path, Encoding{}, 0)
+			images, out := framesInto(t, p, path, Encoding{}, defaultFrames)
 			if !sameImages(images, wantImages) {
 				t.Errorf("images = %+v, want %+v", images, wantImages)
 			}
@@ -216,7 +195,7 @@ func TestPolyglotIsReadAsItsSniffedType(t *testing.T) {
 
 func TestInputSizeCap(t *testing.T) {
 	t.Parallel()
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	rec := record(p)
 	header := gifBytes(1, 1)
 	over := writeFile(t, "big.gif", header)
@@ -245,7 +224,7 @@ func TestInputSizeCap(t *testing.T) {
 
 func TestHeaderCapRefusesBeforeDecoding(t *testing.T) {
 	t.Parallel()
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	for name, g := range map[string][]byte{
 		"too wide":        gifBytes(maxDimension+1, 10),
 		"too tall":        gifBytes(10, maxDimension+1),
@@ -311,7 +290,7 @@ func TestCheckSceneHeaders(t *testing.T) {
 		{"decoded pixels use largest canvas", append(frames(1000, 10, 10), sceneHeader{width: 1000, height: 1000, canvasW: 1000, canvasH: 1000}), true, true},
 	}
 	for _, c := range cases {
-		err := checkSceneHeaders(c.scenes, c.animated, envCaps)
+		err := checkSceneHeaders(c.scenes, c.animated, measuredCaps)
 		if got := errors.Is(err, ErrTooLarge); got != c.tooLarge || (err != nil && !got) {
 			t.Errorf("%s: err = %v, want ErrTooLarge = %v", c.name, err, c.tooLarge)
 		}
@@ -343,7 +322,7 @@ func TestCheckReturnedPixels(t *testing.T) {
 		{"64 frames one row over", 64, 1000, 1001, true, "at most 63 frames fit"},
 	}
 	for _, c := range cases {
-		err := checkReturnedPixels(c.count, c.w, c.h, envCaps)
+		err := checkReturnedPixels(c.count, c.w, c.h, measuredCaps)
 		if got := errors.Is(err, ErrTooLarge); got != c.refused || (err != nil && !got) {
 			t.Errorf("%s: err = %v, want refused = %v", c.name, err, c.refused)
 		}
@@ -358,8 +337,8 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 	p := requireProcessor(t)
 	var runs []Usage
 	inner := p.run
-	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := inner(ctx, name, args...)
+	p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, name, args...)
 		if res.Usage != nil {
 			runs = append(runs, *res.Usage)
 		}
@@ -403,7 +382,7 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 	} {
 		t.Run(c.name+" success", func(t *testing.T) {
 			runs = nil
-			_, usage, err := p.AnimationFrames(context.Background(), c.input(t), Encoding{}, 0, t.TempDir())
+			_, usage, err := p.encodeEven(context.Background(), c.input(t), Encoding{}, 16, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -414,7 +393,7 @@ func TestUsageSumsRunsAndKeepsLargestPeak(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
 			rec.failAfter = 2
-			_, usage, err := p.AnimationFrames(context.Background(), c.input(t), Encoding{}, 0, t.TempDir())
+			_, usage, err := p.encodeEven(context.Background(), c.input(t), Encoding{}, 16, t.TempDir())
 			if err == nil {
 				t.Fatal("operation succeeded")
 			}
@@ -428,7 +407,7 @@ func manyFrameGIF(w, h, n int) []byte { return gifFrames(w, h, 1, 1, n) }
 
 func TestAnimationCapsRefuseAfterOneHeaderRead(t *testing.T) {
 	t.Parallel()
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	cases := map[string][]byte{
 		"too many frames":       manyFrameGIF(1, 1, maxAnimationFrames+1),
 		"too many total pixels": manyFrameGIF(1000, 1000, 901),
@@ -477,7 +456,7 @@ func TestKilledRunLeavesNothingInTheProcessorsTempDir(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	// Memory and map limits of one byte send the pixel cache to disk.
-	_, err := p.run(ctx, "magick", "-limit", "memory", "1", "-limit", "map", "1",
+	_, err := p.run(ctx, nil, "magick", "-limit", "memory", "1", "-limit", "map", "1",
 		"pam:"+input, "-blur", "0x40", "-format", "%#", "info:")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want the deadline", err)

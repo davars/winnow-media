@@ -54,15 +54,6 @@ func readHead(in input) ([]byte, error) {
 	return buf, nil
 }
 
-// sniffFile returns the media type of the input from its leading bytes alone.
-func sniffFile(in input) (string, error) {
-	buf, err := readHead(in)
-	if err != nil {
-		return "", err
-	}
-	return sniff(buf)
-}
-
 // sniff returns the media type that the leading bytes of a file name. It
 // never reads past b and returns an error wrapping ErrUnsupportedType for
 // anything else.
@@ -242,65 +233,23 @@ const mpegTSPacket = 188
 // it has no ftyp.
 var quickTimeAtoms = [...]string{"moov", "mdat", "wide", "free", "skip", "pnot"}
 
-// videoContainerOf returns the decoder of the video container the leading
-// bytes of a file open, when sniff names no type for them: a QuickTime file
-// without an ftyp, which is pinned to mov, and AVI, ASF, FLV, an MPEG program
-// or elementary video stream or an MPEG transport stream, which are left to
-// ffmpeg's detection among detectedFormats. It is a routing hint for Env.Open,
-// not a verdict; the probe decides whether the file is a video.
-func videoContainerOf(b []byte) (decoder, bool) {
+// videoContainerOf reports whether the leading bytes of a file open a video
+// container, when sniff names no type for them: a QuickTime file without an
+// ftyp, AVI, ASF, FLV, an MPEG program or elementary video stream or an MPEG
+// transport stream. It is a routing hint, not a verdict; the probe decides
+// whether the file is a video.
+func videoContainerOf(b []byte) bool {
 	switch {
 	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "AVI ":
-		return unnamedVideoDecoder, true
+		return true
 	case bytes.HasPrefix(b, []byte{0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11}):
-		return unnamedVideoDecoder, true
+		return true
 	case bytes.HasPrefix(b, []byte("FLV\x01")):
-		return unnamedVideoDecoder, true
+		return true
 	case bytes.HasPrefix(b, []byte{0, 0, 1, 0xBA}), bytes.HasPrefix(b, []byte{0, 0, 1, 0xB3}):
-		return unnamedVideoDecoder, true
+		return true
 	case len(b) >= 8 && slices.Contains(quickTimeAtoms[:], string(b[4:8])):
-		return decoder{"ffmpeg", "mov"}, true
+		return true
 	}
-	if len(b) > 2*mpegTSPacket && b[0] == 0x47 && b[mpegTSPacket] == 0x47 && b[2*mpegTSPacket] == 0x47 {
-		return unnamedVideoDecoder, true
-	}
-	return decoder{}, false
-}
-
-// videoRoute says how Env.Open treats a file's leading bytes.
-type videoRoute int
-
-const (
-	// routeNotVideo: the bytes name an image type, or nothing that looks like
-	// a video.
-	routeNotVideo videoRoute = iota
-	// routeSniffed: sniff names a video type.
-	routeSniffed
-	// routeLooksLike: sniff names no type and the bytes open a video container.
-	routeLooksLike
-)
-
-// videoRouteOf returns the route of the input and, for a video route, its
-// decoder. A file sniff names an image type is never looked at further.
-func videoRouteOf(in input) (videoRoute, decoder) {
-	r, done, err := in.open()
-	if err != nil {
-		return routeNotVideo, decoder{}
-	}
-	defer done()
-	buf, err := io.ReadAll(io.LimitReader(r, sniffBytes))
-	if err != nil {
-		return routeNotVideo, decoder{}
-	}
-	mediaType, err := sniff(buf)
-	if err == nil {
-		if e := typeTable[mediaType]; e.kind == kindVideo {
-			return routeSniffed, e.decoderFor("")
-		}
-		return routeNotVideo, decoder{}
-	}
-	if dec, ok := videoContainerOf(buf); ok {
-		return routeLooksLike, dec
-	}
-	return routeNotVideo, decoder{}
+	return len(b) > 2*mpegTSPacket && b[0] == 0x47 && b[mpegTSPacket] == 0x47 && b[2*mpegTSPacket] == 0x47
 }

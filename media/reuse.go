@@ -264,7 +264,7 @@ func splitKeep(out []byte) (rest []byte, line string) {
 // the Source does not keep decodes of it: Reuse is not set, the type's kept
 // decode is not exact, an earlier call found the image cannot be kept, the
 // kept decodes and a read-back's copy of them would exceed Resources.Disk.
-func (s *Source) planKeep(k int, es *EnvSource) *keepPlan {
+func (s *Source) planKeep(k int, es *frameSource) *keepPlan {
 	if !s.reuse || !typeTable[s.typ].keptExact || s.noKeep[k] {
 		return nil
 	}
@@ -290,7 +290,7 @@ func removeKeepFiles(kp *keepPlan) {
 // Source can read back; otherwise it deletes the files and keeps nothing,
 // and remembers the image as one that cannot be kept when another call would
 // not do better. The encode that wrote them is not affected.
-func (s *Source) adoptKept(k int, es *EnvSource) {
+func (s *Source) adoptKept(k int, es *frameSource) {
 	kp := es.keep
 	es.keep = nil
 	kd, err := s.recordKept(kp, es)
@@ -309,7 +309,7 @@ func (s *Source) adoptKept(k int, es *EnvSource) {
 // is a failed check (see failedCheck) when no later call would do better, and
 // otherwise an I/O failure or a shortage of room that another call may not
 // meet.
-func (s *Source) recordKept(kp *keepPlan, es *EnvSource) (*keptDecode, error) {
+func (s *Source) recordKept(kp *keepPlan, es *frameSource) (*keptDecode, error) {
 	if kp.err != nil {
 		return nil, kp.err
 	}
@@ -514,7 +514,7 @@ func (s *Source) copyKeptProfile(kd *keptDecode) (path string, err error) {
 // checks they are dropped and used is false, and the caller encodes the image
 // afresh. An error is an I/O or encode failure, which leaves the kept decode
 // as it is.
-func (s *Source) readKept(ctx context.Context, es *EnvSource, k int, r region, encs []encoding, paths []string) (res []encodedFrame, used bool, err error) {
+func (s *Source) readKept(ctx context.Context, es *frameSource, k int, r region, encs []encoding, paths []string) (res []encodedFrame, used bool, err error) {
 	kd := s.kept[k]
 	pam, err := s.copyKept(ctx, kd, r)
 	if failedCheck(err) {

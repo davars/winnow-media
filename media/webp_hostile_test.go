@@ -73,8 +73,8 @@ func hostileWebPs(t *testing.T) map[string]hostileWebP {
 	binary.LittleEndian.PutUint32(overlong[frames[1]+4:], 1<<30)
 	headers := webpOutcome{err: "reading headers"}
 	notDecodable := map[string]webpOutcome{
-		"AnimationFrames":   {err: "is not a decodable animated WebP"},
-		"AnimationFramesAt": {err: "is outside the animation's 1 frames"},
+		"Even":    {err: "is not a decodable animated WebP"},
+		"Indices": {err: "is outside the animation's 1 frames"},
 	}
 	return map[string]hostileWebP{
 		"header only":               {data: good[:30], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
@@ -87,11 +87,11 @@ func hostileWebPs(t *testing.T) map[string]hostileWebP {
 		// own leniency, so the contract is a refusal or at most the frames asked
 		// for.
 		"garbage frame header": {data: garbageFrame, w: 40, h: 30, frames: 6, refusal: "header read found", through: map[string]webpOutcome{
-			"AnimationFrames": {atMost: 6}, "AnimationFramesAt": {atMost: 3},
+			"Even": {atMost: 6}, "Indices": {atMost: 3},
 		}},
 		"garbage frame data": {data: garbageData, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
 		"corrupt frame pixels": {data: corruptPixels, w: 40, h: 30, frames: 6, refusal: "decoding frame", through: map[string]webpOutcome{
-			"AnimationFrames": {atMost: 6}, "AnimationFramesAt": {atMost: 3},
+			"Even": {atMost: 6}, "Indices": {atMost: 3},
 		}},
 		"chunk size past the end": {data: overlong, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
 	}
@@ -118,7 +118,7 @@ type webpOutcome struct {
 }
 
 func both(o webpOutcome) map[string]webpOutcome {
-	return map[string]webpOutcome{"AnimationFrames": o, "AnimationFramesAt": o}
+	return map[string]webpOutcome{"Even": o, "Indices": o}
 }
 
 // TestHostileAnimatedWebPsAreRefusedOrBounded runs damaged animated WebPs
@@ -237,7 +237,7 @@ func TestWebPFramesRefusesDamagedAnimations(t *testing.T) {
 // refuse, in a few hundred bytes, never reaches webp-frames.
 func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
 	requireWebPBuilders(t)
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	good, err := os.ReadFile(buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 6}))
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestPatchedCanvasIsRefusedBeforeTheToolStarts(t *testing.T) {
 			started := false
 			old := p.compose
 			t.Cleanup(func() { p.compose = old })
-			p.compose = func(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
+			p.compose = func(context.Context, *os.File, composeRequest, func(composedFrame) error) (*Usage, error) {
 				started = true
 				return nil, nil
 			}
@@ -450,7 +450,7 @@ func TestWebPFramesCleansUpWhenAMagickRunFails(t *testing.T) {
 	rec.failAfter = 3 // the header read, then the first batch, then the second
 	out := t.TempDir()
 	path := buildWebP(t, webpCase{codec: "lossy", blend: true, frames: 24})
-	if _, _, err := p.AnimationFrames(context.Background(), stage(t, path), Encoding{Format: PNG}, 12, out); err == nil {
+	if _, _, err := p.encodeEven(context.Background(), stage(t, path), Encoding{Format: PNG}, 12, out); err == nil {
 		t.Fatal("no error")
 	}
 	if got := dirNames(t, out); len(got) != 0 {

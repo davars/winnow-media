@@ -8,56 +8,33 @@ import (
 )
 
 // ErrTooLarge is returned, wrapped with the cap and the values that
-// exceeded it, when an input is larger than the operations accept, and when a
+// exceeded it, when an input is larger than a Processor accepts, and when a
 // header read reaches ImageMagick's list length ceiling (2048 scenes). Test
 // for it with errors.Is.
 var ErrTooLarge = errors.New("input too large")
 
 // ErrTimeLimit is returned, wrapped with what the tool reported, when a
-// magick run (an encode, a header read, RunMagickWithCoderFallback) reached
-// ImageMagick's time limit. ImageMagick often exits 0 when it
-// does, with the work unfinished, so such a run's output is never used. The
-// error is recognised from ImageMagick's message on stderr: through an Env it
-// needs the Runner to fill Result.Stderr, and without it only the size check
-// of the encodes catches an unfinished one. A Processor always fills it. Test
-// for it with errors.Is.
+// magick run (an encode or a header read) reached ImageMagick's time limit.
+// ImageMagick often exits 0 when it does, with the work unfinished, so such a
+// run's output is never used. The error is recognised from ImageMagick's
+// message on stderr. Test for it with errors.Is.
 var ErrTimeLimit = errors.New("time limit exceeded")
 
-// The bomb ceilings below hold whatever Caps a Processor is given. The caps
-// of the Env methods, which take no Config, are the values of maxInputBytes,
-// maxFramePixels, maxReturnedPixels, maxDecodedPixels and maxAnimationFrames;
-// each was set from measurements of the largest inputs it admits, made with
+// The bomb ceilings below hold whatever Caps a Processor is given; each was
+// set from measurements of the largest inputs it admits, made with
 // internal/cmd/measure on a 12-CPU x86_64 host (see docs/measurements.md).
 const (
-	// maxInputBytes is the Env methods' largest input file, inclusive. It is a
-	// requirement of the callers, not a measurement.
-	maxInputBytes = 25 << 20
 	// maxDimension is the largest width or height of any frame or stream. For
 	// a still it applies to the frame actually decoded, after any
 	// decode-stage reduction.
 	// WebP cannot exceed 16383, and a 16000x16000 video decodes within the
 	// policy.
 	maxDimension = 16384
-	// maxFramePixels is the largest pixel count of one frame, of a still
-	// after any decode-stage reduction. The largest phone formats sit just
-	// below it: 48 MP iPhone (8064x6048, 48.8 MP) and 50 MP sensors (at most
-	// 8192x6144, 50.3 MP). Every format admitted at this size completes
-	// within the 1536Mi deployment limit.
-	maxFramePixels = 52_000_000
 	// maxAnimationFrames is the most frames an animation may hold. It is a
 	// structural bound, not a time bound: the header read holds memory per
 	// frame (docs/measurements.md), and the frame count stays below the
 	// policy's list length.
 	maxAnimationFrames = 2000
-	// maxReturnedPixels bounds the frames a call returns times the canvas
-	// area, and maxDecodedPixels bounds all frames times the canvas area.
-	// With maxAnimationFrames they keep an animation within a 30 s budget per
-	// call on a Raspberry Pi 5 (docs/measurements.md). Every frame up to the
-	// last selected is decoded because frames composite onto earlier ones, and
-	// a one-colour GIF under maxInputBytes can declare tens of gigapixels, so
-	// decoding needs its own bound.
-	maxReturnedPixels = 64_000_000
-	maxDecodedPixels  = 900_000_000
 	// maxStreams is the most streams, of any kind, a video container may
 	// hold. It is a structural bound, not a measured one.
 	maxStreams = 32
@@ -114,46 +91,6 @@ const (
 
 // policyArea is the area ceiling as ImageMagick spells it.
 var policyArea = strconv.Itoa(policyAreaMP) + "MP"
-
-// MemoryProfile names the ImageMagick memory limits the Env methods hold a
-// run to: the memory and map limits, between which the pixel cache spills
-// (memory, then map, then disk). Callers that build their own magick runs
-// start them with profile.LimitArgs(). The zero value is HighMemory. The Env
-// methods return an error for an undefined value, and LimitArgs panics. A
-// Processor takes Resources instead.
-//
-// Deprecated: use Config.Resources.
-type MemoryProfile int
-
-const (
-	// HighMemory suits a host with plenty of RAM: 1 GiB of memory and 2 GiB
-	// of map.
-	HighMemory MemoryProfile = iota
-	// LowMemory suits a memory-limited container: 512 MiB of memory and
-	// 1 GiB of map. Its measurement is in docs/measurements.md.
-	LowMemory
-)
-
-func (p MemoryProfile) String() string {
-	switch p {
-	case HighMemory:
-		return "HighMemory"
-	case LowMemory:
-		return "LowMemory"
-	}
-	return fmt.Sprintf("MemoryProfile(%d)", int(p))
-}
-
-// resources is the Resources a profile stands for, with defaults filled in.
-func (p MemoryProfile) resources() (Resources, error) {
-	switch p {
-	case HighMemory:
-		return defaultResources(), nil
-	case LowMemory:
-		return Resources{Memory: 512 << 20, Map: 1 << 30}.withDefaults(), nil
-	}
-	return Resources{}, fmt.Errorf("unknown memory profile %d", int(p))
-}
 
 func tooLarge(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrTooLarge, fmt.Sprintf(format, args...))

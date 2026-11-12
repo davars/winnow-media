@@ -30,19 +30,19 @@ var update = flag.Bool("update", false, "rewrite the golden argv files")
 // recorder wraps a Processor's runner, recording every invocation and
 // optionally failing one after it has run for real.
 type recorder struct {
-	inner Runner
+	inner toolRun
 	mu    sync.Mutex
 	calls [][]string
 	// failAfter fails the n-th call (1-based) after running it; 0 disables.
 	failAfter int
 }
 
-func (r *recorder) run(ctx context.Context, name string, args ...string) (Result, error) {
+func (r *recorder) run(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 	r.mu.Lock()
 	r.calls = append(r.calls, append([]string{name}, args...))
 	n := len(r.calls)
 	r.mu.Unlock()
-	res, err := r.inner(ctx, name, args...)
+	res, err := r.inner(ctx, in, name, args...)
 	if err == nil && n == r.failAfter {
 		err = errors.New("injected failure")
 	}
@@ -88,9 +88,9 @@ func writeHEIC(t *testing.T) string {
 	return heicFixture(t, "gradient-righttop")
 }
 
-func exiftool(t *testing.T, env Env, args ...string) string {
+func exiftool(t *testing.T, env toolEnv, args ...string) string {
 	t.Helper()
-	res, err := env.Run(context.Background(), "exiftool", args...)
+	res, err := env.run(context.Background(), "exiftool", args...)
 	if err != nil {
 		t.Fatalf("exiftool %q: %v", args, err)
 	}
@@ -98,13 +98,13 @@ func exiftool(t *testing.T, env Env, args ...string) string {
 }
 
 // addMetadata writes EXIF, GPS and XMP fields into path.
-func addMetadata(t *testing.T, env Env, path string) {
+func addMetadata(t *testing.T, env toolEnv, path string) {
 	t.Helper()
 	exiftool(t, env, "-overwrite_original", "-Artist=someone", "-GPSLatitude=1", "-GPSLatitudeRef=N",
 		"-XMP-dc:Creator=bar", "-f", "-m", "-ext", "*", path)
 }
 
-func metadataGroups(t *testing.T, env Env, path string) string {
+func metadataGroups(t *testing.T, env toolEnv, path string) string {
 	t.Helper()
 	return exiftool(t, env, "-G1", "-a", "-s", "-EXIF:all", "-GPS:all", "-XMP:all", "-IPTC:all", "-ICC_Profile:all", path)
 }
@@ -151,7 +151,7 @@ func writeGIF(t *testing.T, colour func(i int) string, frames int) string {
 func stillInto(t *testing.T, p *Processor, path string, enc Encoding) (Image, string) {
 	t.Helper()
 	out := t.TempDir()
-	img, _, err := p.Still(context.Background(), path, enc, out)
+	img, _, err := p.encodeFirst(context.Background(), path, enc, out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func stillInto(t *testing.T, p *Processor, path string, enc Encoding) (Image, st
 func framesInto(t *testing.T, p *Processor, path string, enc Encoding, maxFrames int) ([]Image, string) {
 	t.Helper()
 	out := t.TempDir()
-	images, _, err := p.AnimationFrames(context.Background(), path, enc, maxFrames, out)
+	images, _, err := p.encodeEven(context.Background(), path, enc, maxFrames, out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,15 +253,16 @@ func TestParseSceneHeadersRefusesAnUnreadableReport(t *testing.T) {
 	}
 }
 
-// IdentifyArtifact reads what identify reports of an encoded file, and fails
-// on a report it cannot read.
-func TestIdentifyArtifactRefusesAnUnreadableReport(t *testing.T) {
+// identifyScenes reads what identify reports of an encoded file, and fails on
+// a report it cannot read.
+func TestIdentifyScenesRefusesAnUnreadableReport(t *testing.T) {
 	t.Parallel()
 	read := func(report string) (int, int, int, error) {
-		env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-			return Result{Stdout: []byte(report)}, nil
+		env := toolEnv{run: func(context.Context, string, ...string) (runResult, error) {
+			return runResult{Stdout: []byte(report)}, nil
 		}}
-		return env.IdentifyArtifact(context.Background(), "/a.webp")
+		delays, w, h, err := env.identifyScenes(context.Background(), "/a.webp")
+		return len(delays), w, h, err
 	}
 	if scenes, w, h, err := read("1 8 6 0\n2 8 6 5\n"); err != nil || scenes != 2 || w != 8 || h != 6 {
 		t.Fatalf("a good report gave %d scenes %dx%d, %v", scenes, w, h, err)
@@ -301,15 +302,15 @@ func TestAnimationFramesRefuseAnUnreadableEncodeReport(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p := requireProcessor(t)
 			inner := p.run
-			p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
-				res, err := inner(ctx, name, args...)
+			p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+				res, err := inner(ctx, in, name, args...)
 				if err == nil && name == "magick" && slices.Contains(args, "info:") && !slices.Contains(args, "identify") {
 					res.Stdout = []byte(c.report)
 				}
 				return res, err
 			}
 			out := t.TempDir()
-			_, _, err := p.AnimationFrames(context.Background(), src, Encoding{}, 6, out)
+			_, _, err := p.encodeEven(context.Background(), src, Encoding{}, 6, out)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want it to say %q", err, c.want)
 			}
@@ -396,7 +397,7 @@ func TestOperationsRefuseASourceThatIsNotARegularFile(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
-				_, _, err := p.Still(context.Background(), path, Encoding{}, t.TempDir())
+				_, _, err := p.encodeFirst(context.Background(), path, Encoding{}, t.TempDir())
 				done <- err
 			}()
 			select {
@@ -414,74 +415,55 @@ func TestOperationsRefuseASourceThatIsNotARegularFile(t *testing.T) {
 	}
 }
 
-func TestOperationsRefuseBeforeRunningTools(t *testing.T) {
+// Encode refuses a bad Encoding, Select or directory before any tool runs, and
+// Open refuses a missing file.
+func TestEncodeRefusesBeforeRunningTools(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
-	heic := writeHEIC(t)
-	gif := writeGIF(t, solid, 2)
+	still := openSourceOn(t, p, writeHEIC(t), OpenOptions{})
+	anim := openSourceOn(t, p, writeGIF(t, solid, 2), OpenOptions{})
 	rec := record(p)
-	webm := writeFile(t, "clip.webm", ebmlHeader("webm"))
-	garbage := writeFile(t, "garbage", []byte("not any media"))
-
 	nonEmpty := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonEmpty, "leftover"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	absent := filepath.Join(t.TempDir(), "absent")
-	type call func(path string, enc Encoding, dir string) error
-	still := func(path string, enc Encoding, dir string) error {
-		_, _, err := p.Still(context.Background(), path, enc, dir)
-		return err
-	}
-	framesN := func(n int) call {
-		return func(path string, enc Encoding, dir string) error {
-			_, _, err := p.AnimationFrames(context.Background(), path, enc, n, dir)
-			return err
-		}
-	}
 	cases := []struct {
-		name            string
-		op              call
-		path            string
-		enc             Encoding
-		dir             string
-		unsupportedType bool
+		name string
+		src  *Source
+		sel  Select
+		enc  Encoding
+		dir  string
 	}{
-		{"quality too large", still, heic, Encoding{Quality: 101}, t.TempDir(), false},
-		{"quality negative", still, heic, Encoding{Quality: -1}, t.TempDir(), false},
-		{"max edge too small", still, heic, Encoding{MaxEdge: 15}, t.TempDir(), false},
-		{"max edge too large", still, heic, Encoding{MaxEdge: 16385}, t.TempDir(), false},
-		{"max area too small", still, heic, Encoding{MaxArea: 255}, t.TempDir(), false},
-		{"max area too large", still, heic, Encoding{MaxArea: 100_000_001}, t.TempDir(), false},
-		{"unknown format", still, heic, Encoding{Format: "gif"}, t.TempDir(), false},
-		{"type not accepted", still, gif, Encoding{}, t.TempDir(), true},
-		{"video to still", still, webm, Encoding{}, t.TempDir(), true},
-		{"missing source", still, filepath.Join(t.TempDir(), "absent"), Encoding{}, t.TempDir(), false},
-		{"dir not empty", still, heic, Encoding{}, nonEmpty, false},
-		{"dir missing", still, heic, Encoding{}, absent, false},
-		{"frames: quality too large", framesN(0), gif, Encoding{Quality: 101}, t.TempDir(), false},
-		{"frames: too few", framesN(-1), gif, Encoding{}, t.TempDir(), false},
-		{"frames: too many", framesN(65), gif, Encoding{}, t.TempDir(), false},
-		{"frames: type not accepted", framesN(0), heic, Encoding{}, t.TempDir(), true},
-		{"frames: unrecognized content", framesN(0), garbage, Encoding{}, t.TempDir(), true},
-		{"frames: dir not empty", framesN(0), gif, Encoding{}, nonEmpty, false},
+		{"quality too large", still, Select{}, Encoding{Quality: 101}, t.TempDir()},
+		{"quality negative", still, Select{}, Encoding{Quality: -1}, t.TempDir()},
+		{"max edge too small", still, Select{}, Encoding{MaxEdge: 15}, t.TempDir()},
+		{"max edge too large", still, Select{}, Encoding{MaxEdge: 16385}, t.TempDir()},
+		{"max area too small", still, Select{}, Encoding{MaxArea: 255}, t.TempDir()},
+		{"max area too large", still, Select{}, Encoding{MaxArea: 100_000_001}, t.TempDir()},
+		{"unknown format", still, Select{}, Encoding{Format: "gif"}, t.TempDir()},
+		{"dir not empty", still, Select{}, Encoding{}, nonEmpty},
+		{"dir missing", still, Select{}, Encoding{}, absent},
+		{"frames: quality too large", anim, Select{Frames: Even(2)}, Encoding{Quality: 101}, t.TempDir()},
+		{"frames: too few", anim, Select{Frames: Even(-1)}, Encoding{}, t.TempDir()},
+		{"frames: dir not empty", anim, Select{Frames: Even(2)}, Encoding{}, nonEmpty},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := c.op(c.path, c.enc, c.dir)
-			if err == nil {
-				t.Fatal("operation succeeded")
+			before := rec.count()
+			if _, _, err := c.src.Encode(context.Background(), c.dir, c.sel, c.enc); err == nil {
+				t.Fatal("Encode succeeded")
 			}
-			if got := errors.Is(err, ErrUnsupportedType); got != c.unsupportedType {
-				t.Errorf("errors.Is(err, ErrUnsupportedType) = %v, want %v (err %v)", got, c.unsupportedType, err)
-			}
-			if n := rec.count(); n != 0 {
+			if n := rec.count() - before; n != 0 {
 				t.Errorf("%d tool runs before refusal", n)
 			}
 		})
 	}
 	if got := dirNames(t, nonEmpty); !slices.Equal(got, []string{"leftover"}) {
 		t.Errorf("refused directory now holds %v", got)
+	}
+	if _, _, err := p.Open(context.Background(), filepath.Join(t.TempDir(), "absent"), OpenOptions{}); err == nil || errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("missing source: err = %v, want a refusal that is not of the type", err)
 	}
 }
 
@@ -646,7 +628,7 @@ func TestFramesSelection(t *testing.T) {
 	env := requireMagick(t)
 	p := requireProcessor(t)
 	src := writeGIF(t, solid, 20)
-	images, out := framesInto(t, p, src, Encoding{}, 0)
+	images, out := framesInto(t, p, src, Encoding{}, defaultFrames)
 	if len(images) != 16 {
 		t.Fatalf("%d images, want 16", len(images))
 	}
@@ -701,7 +683,7 @@ func TestFramesDropsConsecutiveDuplicates(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	src := writeGIF(t, func(int) string { return "xc:rgb(10,120,200)" }, 4)
-	images, out := framesInto(t, p, src, Encoding{}, 0)
+	images, out := framesInto(t, p, src, Encoding{}, defaultFrames)
 	if len(images) != 1 || images[0].Name != "frame-000.jpg" || images[0].Frames[0].Index != 0 {
 		t.Fatalf("images = %+v", images)
 	}
@@ -715,7 +697,7 @@ func TestFramesRenumbersAfterDedup(t *testing.T) {
 	p := requireProcessor(t)
 	// Frames 0-1 identical, 2-3 identical: two kept frames, numbered 0 and 1.
 	src := writeGIF(t, func(i int) string { return solid(i / 2) }, 4)
-	images, out := framesInto(t, p, src, Encoding{}, 0)
+	images, out := framesInto(t, p, src, Encoding{}, defaultFrames)
 	var got []int
 	for _, f := range images {
 		got = append(got, f.Frames[0].Index)
@@ -737,7 +719,7 @@ func TestFramesFlattensTransparencyOnWhite(t *testing.T) {
 		"xc:none", "-fill", "red", "-draw", "circle 20,20 20,6",
 		"(", "-size", "40x40", "xc:none", "-fill", "blue", "-draw", "circle 20,20 20,12", ")",
 		"-loop", "0", path)
-	images, out := framesInto(t, p, stage(t, path), Encoding{}, 0)
+	images, out := framesInto(t, p, stage(t, path), Encoding{}, defaultFrames)
 	if len(images) != 2 {
 		t.Fatalf("%d images, want 2", len(images))
 	}
@@ -760,7 +742,7 @@ func TestFramesStripsMetadataAndAcceptsWebP(t *testing.T) {
 	if got := metadataGroups(t, env, path); !strings.Contains(got, "Artist") {
 		t.Fatalf("fixture lacks metadata:\n%s", got)
 	}
-	images, out := framesInto(t, p, stage(t, path), Encoding{Format: PNG, MaxEdge: 100}, 0)
+	images, out := framesInto(t, p, stage(t, path), Encoding{Format: PNG, MaxEdge: 100}, defaultFrames)
 	if len(images) != 1 || images[0].Width != 100 || images[0].Height != 66 {
 		t.Fatalf("images = %+v", images)
 	}
@@ -785,7 +767,7 @@ func TestFramesSizing(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			images, _ := framesInto(t, p, src, c.enc, 0)
+			images, _ := framesInto(t, p, src, c.enc, defaultFrames)
 			for _, f := range images {
 				if f.Width != c.wantW || f.Height != c.wantH {
 					t.Errorf("%s is %dx%d, want %dx%d", f.Name, f.Width, f.Height, c.wantW, c.wantH)
@@ -858,7 +840,7 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()
-		_, _, err := p.AnimationFrames(context.Background(), writeGIF(t, solid, 12), Encoding{}, 6, out)
+		_, _, err := p.encodeEven(context.Background(), writeGIF(t, solid, 12), Encoding{}, 6, out)
 		if err == nil {
 			t.Fatalf("failAfter=%d: operation succeeded", failAfter)
 		}
@@ -872,12 +854,12 @@ func TestGIFFramesCleanUpOnFailureBetweenBatches(t *testing.T) {
 		rec := record(p)
 		rec.failAfter = failAfter
 		out := t.TempDir()
-		_, _, err := p.AnimationFramesAt(context.Background(), writeGIF(t, solid, 12), Encoding{}, []int{0, 3, 6, 9}, out)
+		_, _, err := p.encodeIndices(context.Background(), writeGIF(t, solid, 12), Encoding{}, []int{0, 3, 6, 9}, out)
 		if err == nil {
-			t.Fatalf("AnimationFramesAt failAfter=%d: operation succeeded", failAfter)
+			t.Fatalf("Indices failAfter=%d: operation succeeded", failAfter)
 		}
 		if got := dirNames(t, out); len(got) != 0 {
-			t.Errorf("AnimationFramesAt failAfter=%d: output dir holds %v", failAfter, got)
+			t.Errorf("Indices failAfter=%d: output dir holds %v", failAfter, got)
 		}
 	}
 }
@@ -888,13 +870,13 @@ func TestGoldenArgv(t *testing.T) {
 	type run func(p *Processor, input, out string) error
 	still := func(enc Encoding) run {
 		return func(p *Processor, input, out string) error {
-			_, _, err := p.Still(context.Background(), input, enc, out)
+			_, _, err := p.encodeFirst(context.Background(), input, enc, out)
 			return err
 		}
 	}
 	frames := func(enc Encoding, maxFrames int) run {
 		return func(p *Processor, input, out string) error {
-			_, _, err := p.AnimationFrames(context.Background(), input, enc, maxFrames, out)
+			_, _, err := p.encodeEven(context.Background(), input, enc, maxFrames, out)
 			return err
 		}
 	}
@@ -909,7 +891,7 @@ func TestGoldenArgv(t *testing.T) {
 			still(Encoding{Format: PNG, MaxEdge: 400, MaxArea: 100000, Quality: 75}),
 		},
 		{"still-profiled", wide, still(Encoding{})},
-		{"frames-gif-default", func() string { return writeGIF(t, solid, 20) }, frames(Encoding{}, 0)},
+		{"frames-gif-default", func() string { return writeGIF(t, solid, 20) }, frames(Encoding{}, defaultFrames)},
 		{
 			"frames-gif-webp-bounded", func() string { return writeGIF(t, solid, 10) },
 			frames(Encoding{Format: WebP, MaxEdge: 32}, 3),

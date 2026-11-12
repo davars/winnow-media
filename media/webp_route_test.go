@@ -80,7 +80,7 @@ func TestWebPFramesMatchCoalesce(t *testing.T) {
 // ImageMagick reads neither the ICC profile nor the EXIF of an animated WebP.
 // assign, when not nil, is a profile to assign to the frames and convert to
 // sRGB, which is what webp-frames does with the file's own.
-func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames int, dir string, assign []byte) []int {
+func referenceFrames(t *testing.T, env toolEnv, path string, enc Encoding, maxFrames int, dir string, assign []byte) []int {
 	t.Helper()
 	ec, err := enc.resolve()
 	if err != nil {
@@ -103,10 +103,10 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 	}
 	cw, ch = uprightSize(cw, ch, scenes[0].orientation)
 	tw, th, resize := fitSize(cw, ch, ec.maxEdge, ec.maxArea)
-	selected := selectFrames(frameCount(resolvedFrames(t, maxFrames), len(scenes), true), len(scenes))
-	infos := make([]FrameInfo, len(scenes))
+	selected := selectFrames(max(1, min(resolvedFrames(t, maxFrames), len(scenes))), len(scenes))
+	infos := make([]frameInfo, len(scenes))
 	for i, s := range scenes {
-		infos[i] = FrameInfo{hasICC: s.hasICC}
+		infos[i] = frameInfo{hasICC: s.hasICC}
 	}
 	profiled := false
 	for _, i := range selected {
@@ -120,8 +120,8 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 		defer func() { _ = os.Remove(assignPath) }()
 	}
 	err = withProfile(dir, profiled || assign != nil, func(profilePath string) error {
-		args := append(LimitArgs(), "webp:"+path, "-coalesce")
-		if del := DeleteExpr(selected, len(scenes)); del != "" {
+		args := append(defaultResources().limitArgs(), "webp:"+path, "-coalesce")
+		if del := deleteExpr(selected, len(scenes)); del != "" {
 			args = append(args, "-delete", del)
 		}
 		args = append(args, "-auto-orient")
@@ -138,7 +138,7 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 		}
 		pattern := filepath.Join(dir, "frame-") + "%03d" + ec.ext
 		args = append(args, "-strip", "-scene", "0", "+adjoin", "-quality", strconv.Itoa(ec.quality), pattern)
-		_, err := env.Run(ctx, "magick", args...)
+		_, err := env.run(ctx, "magick", args...)
 		return err
 	})
 	if err != nil {
@@ -149,16 +149,15 @@ func referenceFrames(t *testing.T, env Env, path string, enc Encoding, maxFrames
 
 func resolvedFrames(t *testing.T, maxFrames int) int {
 	t.Helper()
-	n, err := resolveFrames(maxFrames)
-	if err != nil {
-		t.Fatal(err)
+	if maxFrames == 0 {
+		return 16
 	}
-	return n
+	return maxFrames
 }
 
-// TestAnimatedWebPFramesMatchTheImageMagickPath compares AnimationFrames with
-// the decode it replaces, on animations with and without an ICC profile and
-// EXIF orientation, resized and not. JPEG output is byte-identical. PNG output
+// TestAnimatedWebPFramesMatchTheImageMagickPath compares an encode of evenly
+// spaced frames with the decode it replaces, on animations with and without an
+// ICC profile and EXIF orientation, resized and not. JPEG output is byte-identical. PNG output
 // is pixel-identical: ImageMagick writes an opaque animation's frames with or
 // without an alpha channel depending on the frame and the disposal method.
 //
@@ -270,15 +269,15 @@ func TestHeaderOrientationIsAppliedToAnimatedWebP(t *testing.T) {
 	requireWebPBuilders(t)
 	p := requireProcessor(t)
 	inner := p.run
-	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := inner(ctx, name, args...)
+	p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, name, args...)
 		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
 			res.Stdout = headerWithOrientation(res.Stdout, "RightTop")
 		}
 		return res, err
 	}
 	path := buildWebP(t, webpCase{codec: "lossless", blend: true, frames: 4})
-	images, out := framesInto(t, p, stage(t, path), Encoding{Format: PNG}, 0)
+	images, out := framesInto(t, p, stage(t, path), Encoding{Format: PNG}, defaultFrames)
 	if len(images) != 4 {
 		t.Fatalf("%d frames", len(images))
 	}

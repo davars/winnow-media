@@ -45,9 +45,6 @@ func TestDefaultResourcesAreTheFormerConstants(t *testing.T) {
 	if l := rlimitsFor(got); l != (rlimits{CPU: 300, Address: 8 << 30, FileSize: 5 << 30}) {
 		t.Errorf("rlimits = %+v, want 300 s, 8 GiB and 5 GiB", l)
 	}
-	if low, err := LowMemory.resources(); err != nil || low != (Resources{Memory: 512 << 20, Map: 1 << 30, Disk: 4 << 30, Threads: 4, TimeLimit: 300 * time.Second}) {
-		t.Errorf("LowMemory = %+v, %v", low, err)
-	}
 }
 
 func TestResourcesValidation(t *testing.T) {
@@ -119,13 +116,13 @@ func TestResourcesReachTheirTargets(t *testing.T) {
 	var m meter
 	env := p.env(&m, nil)
 	var ran [][]string
-	inner := env.Run
-	env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
+	inner := env.run
+	env.run = func(ctx context.Context, name string, args ...string) (runResult, error) {
 		ran = append(ran, append([]string{name}, args...))
 		return inner(ctx, name, args...)
 	}
 	missing := filepath.Join(t.TempDir(), "none.webp")
-	_, _, _, _ = env.IdentifyArtifact(context.Background(), missing)
+	_, _, _, _ = env.identifyScenes(context.Background(), missing)
 	_, _ = runVideoProbe(context.Background(), env, decoder{"ffmpeg", ""}, missing, probeEntries)
 	if len(ran) != 2 || ran[0][0] != "magick" || ran[1][0] != "ffprobe" {
 		t.Fatalf("runs = %q", ran)
@@ -140,7 +137,7 @@ func TestResourcesReachTheirTargets(t *testing.T) {
 	}
 
 	if got := env.threads(); got != 3 {
-		t.Errorf("Env threads = %d, want 3", got)
+		t.Errorf("toolEnv threads = %d, want 3", got)
 	}
 	if got := env.consumeTimeout(); got != 77*time.Second {
 		t.Errorf("compositor wait = %v, want 77s", got)
@@ -209,23 +206,29 @@ func TestFFmpegThreadsFollowResourcesAndTheLargeSourceRule(t *testing.T) {
 	}
 }
 
-// The wait of the compositor of a source opened under a Processor's Env is
-// the Processor's time limit.
+// The wait of the compositor of a Source is the Processor's time limit.
 func TestCompositorWaitIsTheTimeLimit(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
-	env, _ := sourceEnv(t)
-	r := Resources{TimeLimit: 77 * time.Second}.withDefaults()
-	env.resources = &r
+	p := requireProcessorWith(t, Config{Resources: Resources{TimeLimit: 77 * time.Second}})
+	var req composeRequest
+	inner := p.compose
+	p.compose = func(ctx context.Context, in *os.File, r composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+		req = r
+		return inner(ctx, in, r, onFrame)
+	}
 	gif := filepath.Join(t.TempDir(), "x.gif")
 	if err := os.WriteFile(gif, oneColourGIF(t, 8, 8, 3), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	src := openSource(t, env, gif, Hints{})
-	if src.req.consumeTimeout != 77*time.Second {
-		t.Errorf("consume timeout = %v, want 77s", src.req.consumeTimeout)
+	src := openSourceOn(t, p, gif, OpenOptions{})
+	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{}, Encoding{Format: PNG}); err != nil {
+		t.Fatal(err)
 	}
-	if got := src.req.timeoutMS(); got != "77000" {
+	if req.consumeTimeout != 77*time.Second {
+		t.Errorf("consume timeout = %v, want 77s", req.consumeTimeout)
+	}
+	if got := req.timeoutMS(); got != "77000" {
 		t.Errorf("timeoutMS = %q, want 77000", got)
 	}
 }
@@ -241,7 +244,7 @@ func TestUnsandboxedProcessorMatchesTheSandboxedOne(t *testing.T) {
 	enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 32, MaxArea: 1024}
 	src := heicFixture(t, "gradient-righttop")
 	outDirect := t.TempDir()
-	img, _, err := direct.Still(context.Background(), src, enc, outDirect)
+	img, _, err := direct.encodeFirst(context.Background(), src, enc, outDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +257,7 @@ func TestUnsandboxedProcessorMatchesTheSandboxedOne(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = boxed.Close() })
 	outBoxed := t.TempDir()
-	if _, _, err := boxed.Still(context.Background(), src, enc, outBoxed); err != nil {
+	if _, _, err := boxed.encodeFirst(context.Background(), src, enc, outBoxed); err != nil {
 		t.Fatal(err)
 	}
 	a, b := mustRead(t, filepath.Join(outDirect, img.Name)), mustRead(t, filepath.Join(outBoxed, img.Name))
@@ -316,7 +319,7 @@ func TestUsageIsPerCall(t *testing.T) {
 		mu.Lock()
 		first := len(usages)
 		mu.Unlock()
-		_, usage, err := p.Still(context.Background(), heicFixture(t, fixture), enc, t.TempDir())
+		_, usage, err := p.encodeFirst(context.Background(), heicFixture(t, fixture), enc, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}

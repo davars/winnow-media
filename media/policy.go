@@ -283,7 +283,7 @@ func checkEffectiveResources(limits map[string]string, want []policyRule) error 
 // refuses unless the rules are exactly the installed ones and no resource
 // limit is above its ceiling.
 func (p *Processor) verifyPolicy(ctx context.Context, want []policyRule) error {
-	res, err := p.run(ctx, "magick", "-list", "policy")
+	res, err := p.run(ctx, nil, "magick", "-list", "policy")
 	if err != nil {
 		return fmt.Errorf("listing policy: %w", err)
 	}
@@ -294,7 +294,7 @@ func (p *Processor) verifyPolicy(ctx context.Context, want []policyRule) error {
 	if err := checkEffectivePolicy(files, filepath.Join(p.dir, "policy.xml"), want); err != nil {
 		return err
 	}
-	res, err = p.run(ctx, "magick", "-list", "resource")
+	res, err = p.run(ctx, nil, "magick", "-list", "resource")
 	if err != nil {
 		return fmt.Errorf("listing resources: %w", err)
 	}

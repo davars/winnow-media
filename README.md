@@ -86,24 +86,6 @@ Its calls are serialised, and an animation or video is not decoded until
 asked: the contracts, and what a Source keeps between calls, are in the doc
 comments and the [package documentation](media/env.go).
 
-Deprecated wrappers over these: `Still`, `AnimationFrames`,
-`AnimationFramesAt`, `VideoFrames`, `VideoFramesAt`, `VideoFrameRun`,
-`ProbeAnimation` and `ProbeVideo`. They write `still.<ext>` and
-`frame-NNN.<ext>`.
-
-Below the `Processor` is a decode-once layer for callers that run the tools
-themselves: an `Env{Run, Stage, Scratch}` supplies the `Runner`, so the caller
-decides how tools are resolved, limited and cancelled. `Env.Open` reads a
-file's headers, applies the caps and selects its frames; `EnvSource.Encode`
-writes one WebP, PNG or JPEG per `Encoding` from that single decode, and
-`EnvSource.EncodeFrames` writes one file per frame. `Env.Open` applies the caps
-only: the gate, sandbox and policy below belong to the `Processor`.
-
-- Decode once: `Open`, `Encode`, `EncodeFrames`.
-- Fallback ladder: `Ladder`, `EncodeRung`, `ProbeFrames`, `IdentifyArtifact`.
-- Fragments for callers that build their own magick runs: `LimitArgs`,
-  `DeleteExpr`, `RunMagickWithCoderFallback`.
-
 ## Guarantees
 
 For a `Processor`, stated in full in the
@@ -154,9 +136,8 @@ the values a small deployment chose.
 
 `Config.Resources` bounds the memory, map, disk, threads and time of the tools
 a `Processor` runs; the defaults and what each field reaches are in the
-`Resources` doc comment. `LowMemory` is measured for one request per 1536Mi
-pod (see [the measurements](docs/measurements.md#memory-profiles)), and
-`MemoryProfile` and `LimitArgs()` remain for callers that use an `Env`.
+`Resources` doc comment. 512 MiB memory and 1 GiB map are measured for one
+request per 1536Mi pod (see [the measurements](docs/measurements.md#memory-profiles)).
 
 ## Flake outputs
 

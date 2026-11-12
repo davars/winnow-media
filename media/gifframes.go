@@ -397,14 +397,6 @@ func (r composeRequest) timeoutMS() string {
 	return strconv.FormatInt(d.Milliseconds(), 10)
 }
 
-// job is the in-process GIF compositing the request describes.
-func (r composeRequest) job() gifJob {
-	return gifJob{
-		path: r.path, dir: r.dir, frames: r.frames, width: r.width, height: r.height,
-		mask: ownMask(r.own), selected: r.selected,
-	}
-}
-
 func (r composeRequest) args() []string {
 	if r.external != "" {
 		return r.externalArgs()

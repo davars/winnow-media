@@ -167,7 +167,7 @@ func TestVideoRegionBounds(t *testing.T) {
 
 // quadrantClip writes a clip of four flat quarters: yellow top-left, lime
 // top-right, red bottom-left, black bottom-right.
-func quadrantClip(t *testing.T, env Env, extra ...string) string {
+func quadrantClip(t *testing.T, env toolEnv, extra ...string) string {
 	t.Helper()
 	args := []string{
 		"-f", "lavfi", "-i", "nullsrc=size=160x120:rate=5:duration=2,geq=r='if(lt(X,80),255,0)':g='if(lt(Y,60),255,0)':b=0",
@@ -181,7 +181,7 @@ func TestVideoRegionOfARotatedClipIsInUprightCoordinates(t *testing.T) {
 	env := requireFFmpeg(t)
 	plain := quadrantClip(t, env)
 	rotated := filepath.Join(t.TempDir(), "rot.mp4")
-	if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+	if _, err := env.run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
 		"-display_rotation", "90", "-f", "mov", "-i", plain, "-c", "copy", rotated); err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestVideoPlanCoversOnlyItsOwnRegion(t *testing.T) {
 	}
 }
 
-func TestVideoFramesWithoutARegionAreSampledAsBefore(t *testing.T) {
+func TestVideoEncodeWithoutARegionAreSampledAsBefore(t *testing.T) {
 	info := videoInfo{width: 160, height: 120, frames: 10}
 	plan := newVideoPlan(info, region{}, encoding{maxEdge: 20, maxArea: 400}, defaultThreads)
 	if plan.filter != "scale=40:30:flags=lanczos" || !plan.region.zero() {
@@ -302,7 +302,7 @@ func TestVideoRegionOutsideAFrameThatShrankIsRefused(t *testing.T) {
 	env := requireFFmpeg(t)
 	segment := func(name, src string, offset string) string {
 		path := filepath.Join(t.TempDir(), name)
-		if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+		if _, err := env.run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
 			"-f", "lavfi", "-i", src, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
 			"-output_ts_offset", offset, "-f", "mpegts", path); err != nil {
 			t.Fatal(err)
@@ -339,7 +339,7 @@ func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
 	env := requireFFmpeg(t)
 	segment := func(name, src string) string {
 		path := filepath.Join(t.TempDir(), name)
-		if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+		if _, err := env.run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
 			"-f", "lavfi", "-i", src, "-c:v", "libx264", "-preset", "ultrafast", "-g", "5", "-pix_fmt", "yuv420p", path); err != nil {
 			t.Fatal(err)
 		}
@@ -352,7 +352,7 @@ func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := filepath.Join(t.TempDir(), "joined.ts")
-	if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+	if _, err := env.run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
 		"-f", "concat", "-safe", "0", "-i", list, "-c", "copy", joined); err != nil {
 		t.Fatal(err)
 	}
@@ -380,10 +380,10 @@ func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
 // remuxToMatroska copies the MPEG-TS file at path into Matroska, which the
 // Processor reads, keeping the in-band parameter sets that let a stream change
 // size.
-func remuxToMatroska(t *testing.T, env Env, path string) string {
+func remuxToMatroska(t *testing.T, env toolEnv, path string) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "input.mkv")
-	if _, err := env.Run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
+	if _, err := env.run(context.Background(), "ffmpeg", "-nostdin", "-v", "error", "-y",
 		"-f", "mpegts", "-i", path, "-c", "copy", "-f", "matroska", out); err != nil {
 		t.Fatal(err)
 	}

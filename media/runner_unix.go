@@ -87,6 +87,6 @@ func directRunner(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (
 	} else {
 		res.Code = state.ExitCode()
 	}
-	res.Usage = UsageOf(state)
+	res.Usage = usageOf(state)
 	return res, nil
 }

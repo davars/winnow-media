@@ -70,17 +70,14 @@ func TestEncodeMapsTheScenesTheWebPWriterMerged(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			delays := c.delays
-			src, err := env.Open(context.Background(), grayGIF(t, c.pattern, delays), Hints{})
+			src := openSourceOn(t, requireProcessor(t), grayGIF(t, c.pattern, delays), OpenOptions{})
+			dir := t.TempDir()
+			enc := Encoding{Format: WebP, Quality: 75, Animate: true}
+			arts, _, err := src.Encode(context.Background(), dir, Select{Frames: All()}, enc)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer src.Close()
-			arts, err := src.Encode(context.Background(), 0, Encoding{Format: WebP, Quality: 75})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer arts[0].Cleanup()
-			written, _, _, err := env.identifyScenes(context.Background(), arts[0].Path)
+			written, _, _, err := env.identifyScenes(context.Background(), filepath.Join(dir, arts[0].Name))
 			if err != nil {
 				t.Fatal(err)
 			}

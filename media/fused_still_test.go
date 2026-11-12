@@ -14,7 +14,7 @@ import (
 type fusedFixture struct {
 	name  string
 	coder string
-	write func(t *testing.T, env Env, dir string) string
+	write func(t *testing.T, env toolEnv, dir string) string
 }
 
 // gradientArgs is a 64x48 gradient in Adobe RGB, with an alpha ramp when
@@ -31,15 +31,15 @@ func gradientArgs(t *testing.T, dir string, depth int, alpha bool) []string {
 }
 
 func fusedFixtures() []fusedFixture {
-	plain := func(ext string, depth int, alpha bool, extra ...string) func(t *testing.T, env Env, dir string) string {
-		return func(t *testing.T, env Env, dir string) string {
+	plain := func(ext string, depth int, alpha bool, extra ...string) func(t *testing.T, env toolEnv, dir string) string {
+		return func(t *testing.T, env toolEnv, dir string) string {
 			path := filepath.Join(dir, "fixture"+ext)
 			magick(t, env, append(append(gradientArgs(t, dir, depth, alpha), extra...), path)...)
 			return path
 		}
 	}
 	return []fusedFixture{
-		{"jpeg profiled oriented", "jpeg", func(t *testing.T, env Env, dir string) string {
+		{"jpeg profiled oriented", "jpeg", func(t *testing.T, env toolEnv, dir string) string {
 			requireExiftool(t)
 			path := plain(".jpg", 8, false, "-quality", "95")(t, env, dir)
 			exiftool(t, env, "-overwrite_original", "-Orientation#=6", path)
@@ -48,7 +48,7 @@ func fusedFixtures() []fusedFixture {
 		{"jpeg profiled", "jpeg", plain(".jpg", 8, false, "-quality", "95")},
 		{"png8 alpha", "png", plain(".png", 8, true)},
 		{"png16 alpha profiled", "png", plain(".png", 16, true)},
-		{"tiff16 oriented page 0 of 2", "tiff", func(t *testing.T, env Env, dir string) string {
+		{"tiff16 oriented page 0 of 2", "tiff", func(t *testing.T, env toolEnv, dir string) string {
 			path := filepath.Join(dir, "fixture.tif")
 			args := gradientArgs(t, dir, 16, false)
 			args = append(args, "(", "+clone", "-negate", ")", "-orient", "LeftBottom", path)
@@ -57,38 +57,38 @@ func fusedFixtures() []fusedFixture {
 		}},
 		{"webp lossless", "webp", plain(".webp", 8, true, "-define", "webp:lossless=true")},
 		{"jxl", "jxl", plain(".jxl", 16, true)},
-		{"gif frame 0 of 2", "gif", func(t *testing.T, env Env, dir string) string {
+		{"gif frame 0 of 2", "gif", func(t *testing.T, env toolEnv, dir string) string {
 			path := filepath.Join(dir, "fixture.gif")
 			args := gradientArgs(t, dir, 8, false)
 			magick(t, env, append(args, "(", "+clone", "-negate", ")", "-loop", "0", path)...)
 			return path
 		}},
-		{"grayscale jpeg", "jpeg", func(t *testing.T, env Env, dir string) string {
+		{"grayscale jpeg", "jpeg", func(t *testing.T, env toolEnv, dir string) string {
 			path := filepath.Join(dir, "fixture.jpg")
 			magick(t, env, "-size", "64x48", "gradient:white-black", "-colorspace", "Gray", "-quality", "95", path)
 			return path
 		}},
-		{"grayscale png16", "png", func(t *testing.T, env Env, dir string) string {
+		{"grayscale png16", "png", func(t *testing.T, env toolEnv, dir string) string {
 			path := filepath.Join(dir, "fixture.png")
 			magick(t, env, "-size", "64x48", "gradient:white-black", "-colorspace", "Gray", "-depth", "16", path)
 			return path
 		}},
-		{"cmyk jpeg", "jpeg", func(t *testing.T, env Env, dir string) string {
+		{"cmyk jpeg", "jpeg", func(t *testing.T, env toolEnv, dir string) string {
 			path := filepath.Join(dir, "fixture.jpg")
 			magick(t, env, "-size", "64x48", "gradient:#0020ff-#ffb000", "-colorspace", "CMYK", "-quality", "95", path)
 			return path
 		}},
-		{"cmyk jpeg profiled", "jpeg", func(t *testing.T, env Env, dir string) string {
+		{"cmyk jpeg profiled", "jpeg", func(t *testing.T, env toolEnv, dir string) string {
 			cmyk := findCMYKProfile(t)
 			path := filepath.Join(dir, "fixture.jpg")
 			magick(t, env, "-size", "64x48", "gradient:#0020ff-#ffb000", "-colorspace", "CMYK", "-profile", cmyk, "-quality", "95", path)
 			return path
 		}},
 		{"avif 10-bit", "avif", plain(".avif", 10, false, "-quality", "95")},
-		{"heic adobe", "heic", func(t *testing.T, env Env, dir string) string {
+		{"heic adobe", "heic", func(t *testing.T, env toolEnv, dir string) string {
 			return heicFixtureFile(t, "adobe-256x96")
 		}},
-		{"heic righttop", "heic", func(t *testing.T, env Env, dir string) string {
+		{"heic righttop", "heic", func(t *testing.T, env toolEnv, dir string) string {
 			return heicFixtureFile(t, "gradient-righttop")
 		}},
 	}
@@ -117,7 +117,7 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := completeProfile(ctx, env, ref, input{path: path}, scenes); err != nil {
+			if err := completeProfile(ctx, env, ref, inputAt(t, path), scenes); err != nil {
 				t.Fatal(err)
 			}
 			head := scenes[0]
@@ -131,7 +131,7 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 			// and the profile beside them.
 			mid := filepath.Join(dir, "intermediate.pam")
 			sidecar := filepath.Join(dir, "intermediate.icc")
-			decode := append(LimitArgs(), ref, "-depth", "16", "-write", "pam:"+mid)
+			decode := append(defaultResources().limitArgs(), ref, "-depth", "16", "-write", "pam:"+mid)
 			if head.hasICC {
 				decode = append(decode, "+delete", ref, "-write", "icc:"+sidecar)
 			}

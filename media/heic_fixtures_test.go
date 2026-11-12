@@ -12,21 +12,21 @@ var regenerateHEIC = flag.Bool("regenerate-heic", false, "rewrite the HEIC fixtu
 // HEIC fixtures are committed rather than written per test: nixpkgs' x265 on
 // aarch64-linux cannot encode them, and the decoder those platforms run is
 // exactly what the tests must exercise.
-var heicFixtures = map[string]func(t *testing.T, env Env, path string){
+var heicFixtures = map[string]func(t *testing.T, env toolEnv, path string){
 	// A 640x480 gradient tagged RightTop, which reads back as 480x640.
-	"gradient-righttop": func(t *testing.T, env Env, path string) {
+	"gradient-righttop": func(t *testing.T, env toolEnv, path string) {
 		magick(t, env, "-size", "640x480", "gradient:red-blue", "-orient", "RightTop", path)
 	},
-	"adobe-256x96": func(t *testing.T, env Env, path string) { writeAdobeHEIC(t, env, "256x96", path) },
-	"adobe-64x64":  func(t *testing.T, env Env, path string) { writeAdobeHEIC(t, env, "64x64", path) },
-	"adobe-64x32":  func(t *testing.T, env Env, path string) { writeAdobeHEIC(t, env, "64x32", path) },
+	"adobe-256x96": func(t *testing.T, env toolEnv, path string) { writeAdobeHEIC(t, env, "256x96", path) },
+	"adobe-64x64":  func(t *testing.T, env toolEnv, path string) { writeAdobeHEIC(t, env, "64x64", path) },
+	"adobe-64x32":  func(t *testing.T, env toolEnv, path string) { writeAdobeHEIC(t, env, "64x32", path) },
 	// A 10-bit gradient, whose depth 8-bit and 16-bit intermediates do not
 	// both hold exactly.
-	"tenbit-64x32": func(t *testing.T, env Env, path string) {
+	"tenbit-64x32": func(t *testing.T, env toolEnv, path string) {
 		magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000", "-depth", "10", "-quality", "100", path)
 	},
 	// A gradient whose alpha runs from opaque to transparent.
-	"alpha-64x32": func(t *testing.T, env Env, path string) {
+	"alpha-64x32": func(t *testing.T, env toolEnv, path string) {
 		magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000",
 			"(", "-size", "64x32", "gradient:white-black", "-alpha", "copy", ")",
 			"-compose", "copy_opacity", "-composite", "-quality", "100", path)
@@ -35,7 +35,7 @@ var heicFixtures = map[string]func(t *testing.T, env Env, path string){
 
 // writeAdobeHEIC writes a gradient of the given size converted to Adobe RGB
 // and carrying that profile.
-func writeAdobeHEIC(t *testing.T, env Env, size, path string) {
+func writeAdobeHEIC(t *testing.T, env toolEnv, size, path string) {
 	t.Helper()
 	dir := t.TempDir()
 	srgb, adobe := writeSRGBProfile(t), writeAdobeProfile(t, dir)

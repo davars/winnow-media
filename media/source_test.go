@@ -31,9 +31,9 @@ func openSourceOn(t *testing.T, p *Processor, path string, opts OpenOptions) *So
 func countCompositor(p *Processor) *atomic.Int64 {
 	var n atomic.Int64
 	inner := p.compose
-	p.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+	p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
 		n.Add(1)
-		return inner(ctx, req, onFrame)
+		return inner(ctx, in, req, onFrame)
 	}
 	return &n
 }
@@ -51,7 +51,7 @@ func (r *recorder) ran(tool string) [][]string {
 	return out
 }
 
-func uprightOf(t *testing.T, env Env, path string) (w, h int) {
+func uprightOf(t *testing.T, env toolEnv, path string) (w, h int) {
 	t.Helper()
 	out := strings.TrimSpace(string(magick(t, env, path+"[0]", "-auto-orient", "-format", "%w %h", "info:")))
 	if _, err := fmt.Sscanf(out, "%d %d", &w, &h); err != nil {
@@ -358,7 +358,7 @@ func TestAnimationSourceDropsUnusedFramesBeforeCompositing(t *testing.T) {
 	src := openSourceOn(t, p, writeGIF(t, solid, 6), OpenOptions{})
 	var held []int
 	inner := p.compose
-	p.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+	p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
 		entries, _ := os.ReadDir(src.dir)
 		n := 0
 		for _, e := range entries {
@@ -367,7 +367,7 @@ func TestAnimationSourceDropsUnusedFramesBeforeCompositing(t *testing.T) {
 			}
 		}
 		held = append(held, n)
-		return inner(ctx, req, onFrame)
+		return inner(ctx, in, req, onFrame)
 	}
 	for _, sel := range []Frames{Indices(0, 1, 2), Indices(3, 4, 5)} {
 		if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: sel}, Encoding{Format: PNG, MaxEdge: 32}); err != nil {
@@ -698,7 +698,7 @@ func TestEncodeKeepsItsScratchOutOfTheOutputDirectory(t *testing.T) {
 	seen := false
 	rec := record(p)
 	inner := rec.inner
-	rec.inner = func(ctx context.Context, name string, args ...string) (Result, error) {
+	rec.inner = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 			for _, e := range entries {
 				if strings.HasPrefix(e.Name(), ".") {
@@ -706,7 +706,7 @@ func TestEncodeKeepsItsScratchOutOfTheOutputDirectory(t *testing.T) {
 				}
 			}
 		}
-		return inner(ctx, name, args...)
+		return inner(ctx, in, name, args...)
 	}
 	if _, _, err := src.Encode(context.Background(), dir, Select{}, Encoding{}); err != nil {
 		t.Fatal(err)
@@ -728,6 +728,10 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 	video := openSourceOn(t, p, sdrClip(t, env, "160x120", 10, 2), OpenOptions{})
 	anim := openSourceOn(t, p, writeGIF(t, solid, 4), OpenOptions{})
 	forbidCompositor(t, p)
+	overMax := make([]int64, maxVideoSamples+1)
+	for i := range overMax {
+		overMax[i] = int64(i)
+	}
 	for _, c := range []struct {
 		name string
 		src  *Source
@@ -743,6 +747,13 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 		{"Times past a video", video, Select{Frames: Times(2500)}},
 		{"a negative time", video, Select{Frames: Times(-1)}},
 		{"Even(0)", anim, Select{Frames: Even(0)}},
+		{"more times of a video than the maximum", video, Select{Frames: Times(overMax...)}},
+		{"more even samples of a video than the maximum", video, Select{Frames: Even(maxVideoSamples + 1)}},
+		{"a run of a video longer than the maximum", video, Select{Frames: Run(0, maxVideoSamples+1)}},
+		{"a run of no frames of a video", video, Select{Frames: Run(0, 0)}},
+		{"no times", video, Select{Frames: Times()}},
+		{"a negative index", anim, Select{Frames: Indices(1, -1)}},
+		{"no indices", anim, Select{Frames: Indices()}},
 		{"a region outside a settled frame", still, Select{Region: Region{X: 60, Y: 0, Width: 10, Height: 10}}},
 		{"a region outside a video frame", video, Select{Region: Region{X: 155, Y: 0, Width: 10, Height: 10}}},
 		{"a region with a side below 1", anim, Select{Region: Region{X: 0, Y: 0, Width: 0, Height: 10}}},

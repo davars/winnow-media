@@ -228,9 +228,9 @@ func runWebPFrames(t *testing.T, path string, w, h, frames int) []pamImage {
 
 // magickCoalesced decodes every frame of path with ImageMagick's -coalesce
 // into straight RGBA.
-func magickCoalesced(t *testing.T, env Env, path string, w, h, frames int) []pamImage {
+func magickCoalesced(t *testing.T, env toolEnv, path string, w, h, frames int) []pamImage {
 	t.Helper()
-	res, err := env.Run(context.Background(), "magick", "webp:"+path, "-coalesce", "-alpha", "set", "-depth", "8", "rgba:-")
+	res, err := env.run(context.Background(), "magick", "webp:"+path, "-coalesce", "-alpha", "set", "-depth", "8", "rgba:-")
 	if err != nil {
 		t.Fatal(err)
 	}

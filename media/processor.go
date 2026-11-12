@@ -47,12 +47,14 @@ type Processor struct {
 	tools  map[string]string
 	// start runs one process: the sandbox helper, or the direct runner.
 	start runner
-	run   Runner
+	// run runs one tool, with in, when not nil, as its input descriptor; tests
+	// wrap it.
+	run toolRun
 	// openInput opens an input's file; tests replace it.
 	openInput func(path string) (*os.File, error)
-	// compose runs the frame compositor of a GIF or animated WebP; tests
-	// replace it.
-	compose func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
+	// compose runs the frame compositor of a GIF or animated WebP, with in as
+	// its input descriptor; tests wrap it.
+	compose func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
 
 	// mu guards closed and sources, the Sources Open made that are not yet
 	// closed.
@@ -263,23 +265,22 @@ func (t *headTailBuffer) bytes() []byte {
 	return append(out, t.tail...)
 }
 
-// meter accumulates the usage of the runs of one operation.
+// meter accumulates the usage of the runs of one call.
 type meter struct{ usage Usage }
 
-// env returns an Env that runs through the Processor and adds each run to m.
-// Each run it starts inherits in, when not nil, as descriptor 3.
-func (p *Processor) env(m *meter, in *os.File) Env {
-	res, limits := p.res, p.caps
-	return Env{
-		resources: &res,
-		caps:      &limits,
-		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
-			res, err := p.run(withInput(ctx, in), name, args...)
+// env returns a toolEnv that runs through the Processor and adds each run to
+// m. Each run it starts inherits in, when not nil, as descriptor 3.
+func (p *Processor) env(m *meter, in *os.File) toolEnv {
+	return toolEnv{
+		resources: p.res,
+		caps:      p.caps,
+		run: func(ctx context.Context, name string, args ...string) (runResult, error) {
+			res, err := p.run(ctx, in, name, args...)
 			m.add(res.Usage)
 			return res, err
 		},
 		compose: func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) error {
-			usage, err := p.compose(withInput(ctx, in), req, onFrame)
+			usage, err := p.compose(ctx, in, req, onFrame)
 			m.add(usage)
 			return err
 		},
@@ -313,19 +314,11 @@ type admitted struct {
 	release func()
 }
 
-// accepted says what an operation takes: the kinds of type, and, when typ is
-// not empty, the type the caller names, which replaces the type the bytes and
-// ImageMagick's detection name.
-type accepted struct {
-	kind mediaKind
-	typ  string
-}
-
 // admitInput opens the input once and checks everything about it that can be
 // checked before pixels are read, through that descriptor alone, so that
 // replacing the file at path afterwards changes nothing that was checked or
 // that is read. The input must be a regular file within Caps.MaxInputBytes;
-// its type must be one of Config.Types that the operation reads. A GIF, WebP,
+// its type must be one of Config.Types. A GIF, WebP,
 // ISO base media or EBML file is typed by its leading bytes before any tool
 // runs. Other content is named by one header read under the generated policy,
 // which allows only the coders of Config.Types, so the content can select no
@@ -334,7 +327,7 @@ type accepted struct {
 // restricted to the demuxers of the detected types of Config.Types, and the
 // header read is the fallback if the probe refuses it. A type the caller names
 // is used as it is, with no sniff, probe or header read to name one.
-func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path string) (in admitted, err error) {
+func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string) (in admitted, err error) {
 	path, err = filepath.Abs(path)
 	if err != nil {
 		return admitted{}, err
@@ -367,7 +360,7 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path s
 	if info.Size() > p.caps.inputBytes {
 		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
 	}
-	typ := a.typ
+	typ := named
 	var lead leadBytes
 	if typ == "" {
 		head, err := readHead(input{f: f})
@@ -376,19 +369,15 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path s
 		}
 		if typ, err = sniff(head); err != nil {
 			lead.err = err
-			_, lead.looksVideo = videoContainerOf(head)
-			lead.looksVideo = lead.looksVideo && !leadsStill(head)
+			lead.looksVideo = videoContainerOf(head) && !leadsStill(head)
 			if !errors.Is(err, errUnnamed) && !errors.Is(err, errOtherBrand) {
 				return admitted{}, err
 			}
 		}
 	}
 	if typ != "" {
-		if err := p.checkType(typ, a.kind); err != nil {
+		if err := p.checkType(typ); err != nil {
 			return admitted{}, err
-		}
-		if typ == typeWebP && a.kind&kindAnimation == 0 && webpAnimated(input{f: f}) {
-			return admitted{}, unrecognized("an animated WebP is read by the animation operations")
 		}
 	}
 	dir, release, err := p.inputDir()
@@ -402,7 +391,7 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, a accepted, path s
 	}
 	in = admitted{file: f, ref: ref, dir: dir, abs: path, id: idOf(info), release: release}
 	if typ == "" {
-		if err := p.admitUnnamed(ctx, m, f, ref, a, lead, &in); err != nil {
+		if err := p.admitUnnamed(ctx, m, f, ref, lead, &in); err != nil {
 			release()
 			return admitted{}, err
 		}
@@ -422,31 +411,25 @@ type leadBytes struct {
 	looksVideo bool
 }
 
-// canDetect reports whether ffprobe may name an input an operation of kind
-// reads.
-func (p *Processor) canDetect(kind mediaKind) bool {
-	return kind&kindVideo != 0 && p.detect != ""
-}
-
 // admitUnnamed types an input whose leading bytes name no type, filling in.
 // An ISO base media file of an unknown brand, and a file whose bytes open a
 // known video container, are probed as a video; any other file is never shown
 // to ffprobe, so content that is not video, such as an image ImageMagick
 // reads or refuses, costs no probe. A file the probe refuses is read as an
 // image next, except an unknown ISO base media brand, which no coder reads.
-func (p *Processor) admitUnnamed(ctx context.Context, m *meter, f *os.File, ref string, a accepted, lead leadBytes, in *admitted) error {
+func (p *Processor) admitUnnamed(ctx context.Context, m *meter, f *os.File, ref string, lead leadBytes, in *admitted) error {
 	otherBrand := errors.Is(lead.err, errOtherBrand)
 	var probeErr error
-	if p.canDetect(a.kind) && (lead.looksVideo || otherBrand) {
+	if p.detect != "" && (lead.looksVideo || otherBrand) {
 		probeErr = p.detectVideo(ctx, m, f, ref, !otherBrand, in)
 		if probeErr == nil || !errors.Is(probeErr, ErrUnsupportedType) {
 			return probeErr
 		}
 	}
-	if otherBrand || a.kind&kindStill == 0 {
+	if otherBrand {
 		return cmp.Or(probeErr, lead.err)
 	}
-	typ, coder, scenes, err := p.detectType(ctx, m, f, ref, a.kind)
+	typ, coder, scenes, err := p.detectType(ctx, m, f, ref)
 	if err != nil {
 		if probeErr != nil {
 			return fmt.Errorf("%w; and as a video: %v", err, probeErr)
@@ -496,14 +479,11 @@ func (p *Processor) detectVideo(ctx context.Context, m *meter, f *os.File, ref s
 	return nil
 }
 
-// checkType refuses a type the Processor was not configured with, or one the
-// operation does not read, with ErrUnsupportedType.
-func (p *Processor) checkType(typ string, kind mediaKind) error {
+// checkType refuses a type the Processor was not configured with, with
+// ErrUnsupportedType.
+func (p *Processor) checkType(typ string) error {
 	if !p.accepts[typ] {
 		return unrecognized(typ)
-	}
-	if typeTable[typ].kind&kind == 0 {
-		return unrecognized(typ + " is not read by this operation")
 	}
 	return nil
 }
@@ -520,11 +500,11 @@ func (p *Processor) inputDir() (dir string, release func(), err error) {
 
 // detectType reads the headers of every image of the file f holds, which ref
 // names to the tool, under the Processor's policy. It returns the type the
-// coder that read them maps to, which must be one the operation accepts, the
-// coder, and the headers, which the operation then does not read again. A TIFF
+// coder that read them maps to, which must be one of Config.Types, the coder,
+// and the headers, which Source then does not read again. A TIFF
 // whose first image is a reduced-resolution subfile, as the preview of a camera
 // raw file is, is refused: the file's own type is not TIFF.
-func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref string, kind mediaKind) (typ, coder string, scenes []sceneHeader, err error) {
+func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref string) (typ, coder string, scenes []sceneHeader, err error) {
 	scenes, err = identifyHeadersAs(ctx, p.env(m, f), ref+stillScenes, true, gateHeaderFormat)
 	if err != nil {
 		if msg := err.Error(); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
@@ -541,7 +521,7 @@ func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref st
 	if !ok {
 		return "", "", nil, unrecognized(fmt.Sprintf("ImageMagick coder %q", coder))
 	}
-	if err := p.checkType(typ, kind); err != nil {
+	if err := p.checkType(typ); err != nil {
 		return "", "", nil, err
 	}
 	if scenes[0].subfile == "REDUCEDIMAGE" {

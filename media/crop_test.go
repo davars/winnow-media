@@ -44,23 +44,23 @@ func TestRegionShape(t *testing.T) {
 }
 
 // uprightSources are 480x640 pictures held as a tag over a 640x480 frame
-// (the JPEG) or as one the decoder turns itself (the HEIC), opened with a
-// counting Env.
-var uprightSources = map[string]func(t *testing.T) (*EnvSource, func() [][]string){
-	"heic": func(t *testing.T) (*EnvSource, func() [][]string) {
-		env, calls := sourceEnv(t)
-		return openSource(t, env, heicFixtureFile(t, "gradient-righttop"), Hints{Still: true}), calls
+// (the JPEG) or as one the decoder turns itself (the HEIC), opened on a
+// Processor whose tool runs are recorded.
+var uprightSources = map[string]func(t *testing.T) (*Source, *recorder){
+	"heic": func(t *testing.T) (*Source, *recorder) {
+		p, rec := sourceProcessor(t)
+		return openSourceOn(t, p, heicFixtureFile(t, "gradient-righttop"), OpenOptions{}), rec
 	},
-	"jpeg": func(t *testing.T) (*EnvSource, func() [][]string) {
-		env, calls := sourceEnv(t)
-		return openSource(t, env, quadrantJPEG(t, env), Hints{Still: true}), calls
+	"jpeg": func(t *testing.T) (*Source, *recorder) {
+		p, rec := sourceProcessor(t)
+		return openSourceOn(t, p, quadrantJPEG(t, requireMagick(t)), OpenOptions{}), rec
 	},
 }
 
-func heicSource(t *testing.T) (*EnvSource, func() [][]string) { return uprightSources["heic"](t) }
+func heicSource(t *testing.T) (*Source, *recorder) { return uprightSources["heic"](t) }
 
-func pngEncoding() encoding {
-	return encoding{format: PNG, ext: ".png", quality: 90, maxEdge: 100, maxArea: 10000}
+func pngEncoding() Encoding {
+	return Encoding{Format: PNG, Quality: 90, MaxEdge: 100, MaxArea: 10000}
 }
 
 // The region is checked against the upright frame of a rotated image, whose
@@ -81,20 +81,19 @@ func TestRegionEdgesAreThoseOfTheUprightFrame(t *testing.T) {
 	} {
 		for kind, open := range uprightSources {
 			t.Run(kind+" "+c.name, func(t *testing.T) {
-				src, calls := open(t)
-				before := len(calls())
-				art, err := src.encode(context.Background(), c.r, 0, []encoding{pngEncoding()})
+				src, rec := open(t)
+				before := rec.count()
+				_, _, err := src.Encode(context.Background(), t.TempDir(), Select{Region: c.r.exported()}, pngEncoding())
 				if c.ok {
 					if err != nil {
 						t.Fatal(err)
 					}
-					art[0].Cleanup()
 					return
 				}
 				if err == nil || !strings.Contains(err.Error(), "outside") {
 					t.Fatalf("err = %v, want a refusal that the region is outside the frame", err)
 				}
-				if n := len(calls()); n != before {
+				if n := rec.count(); n != before {
 					t.Errorf("the refused call ran %d tools, want none", n-before)
 				}
 			})
@@ -103,26 +102,26 @@ func TestRegionEdgesAreThoseOfTheUprightFrame(t *testing.T) {
 }
 
 func TestRegionIsRefusedWithoutRunningATool(t *testing.T) {
-	src, calls := heicSource(t)
-	before := len(calls())
+	src, rec := heicSource(t)
+	before := rec.count()
 	for _, r := range []region{{-1, 0, 10, 10}, {0, -1, 10, 10}, {0, 0, 0, 10}, {2, 2, 0, 0}} {
-		if _, err := src.encode(context.Background(), r, 0, []encoding{pngEncoding()}); err == nil {
+		if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Region: r.exported()}, pngEncoding()); err == nil {
 			t.Errorf("region %+v accepted", r)
 		}
 	}
-	if n := len(calls()); n != before {
+	if n := rec.count(); n != before {
 		t.Errorf("refused calls ran %d tools, want none", n-before)
 	}
 }
 
 func TestStillImageRefusesARegionOutsideTheFrame(t *testing.T) {
-	env, calls := sourceEnv(t)
+	p, rec := sourceProcessor(t)
 	dir := t.TempDir()
-	_, err := env.stillRegion(context.Background(), region{400, 0, 100, 100}, decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), pngEncoding(), dir)
+	_, err := stillRegion(context.Background(), p, region{400, 0, 100, 100}, heicFixtureFile(t, "gradient-righttop"), OpenOptions{}, pngEncoding(), dir)
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("err = %v, want a refusal that the region is outside the 480x640 frame", err)
 	}
-	for _, call := range calls() {
+	for _, call := range rec.calls {
 		if slices.Contains(call, "-crop") {
 			t.Errorf("the refused call ran %q", call)
 		}
@@ -197,7 +196,7 @@ func TestFusedArgsCropEveryTarget(t *testing.T) {
 // quadrantJPEG writes a 640x480 JPEG, stored with red, lime, blue and yellow
 // in its top-left, top-right, bottom-left and bottom-right quarters, tagged
 // RightTop. Upright it is 480x640 with blue top-left and lime bottom-right.
-func quadrantJPEG(t *testing.T, env Env) string {
+func quadrantJPEG(t *testing.T, env toolEnv) string {
 	t.Helper()
 	requireExiftool(t)
 	path := filepath.Join(t.TempDir(), "quadrants.jpg")
@@ -220,7 +219,8 @@ func nearColour(got [3]int, want [3]int) bool {
 // A crop placed before the orientation reads the stored frame, whose corner
 // is another colour.
 func TestRegionIsCutFromTheUprightPicture(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env := requireMagick(t)
+	p := requireProcessor(t)
 	path := quadrantJPEG(t, env)
 	for _, c := range []struct {
 		name string
@@ -234,7 +234,7 @@ func TestRegionIsCutFromTheUprightPicture(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			img, err := env.stillRegion(context.Background(), c.r, decoder{"magick", "jpeg"}, path, pngEncoding(), dir)
+			img, err := stillRegion(context.Background(), p, c.r, path, OpenOptions{}, pngEncoding(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -248,7 +248,8 @@ func TestRegionIsCutFromTheUprightPicture(t *testing.T) {
 // The output is the region fitted to the bounds, and its pixels are those of
 // the upright frame cut and resized by ImageMagick directly.
 func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
-	env, calls := sourceEnv(t)
+	env := requireMagick(t)
+	p, rec := sourceProcessor(t)
 	path := heicFixtureFile(t, "gradient-righttop")
 	for _, c := range []struct {
 		name   string
@@ -261,8 +262,8 @@ func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			before := len(calls())
-			img, err := env.stillRegion(context.Background(), c.r, decoder{"magick", "heic"}, path, pngEncoding(), dir)
+			before := rec.count()
+			img, err := stillRegion(context.Background(), p, c.r, path, OpenOptions{}, pngEncoding(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -273,7 +274,7 @@ func TestRegionOutputEqualsAPlainMagickCrop(t *testing.T) {
 				t.Errorf("output is %dx%d, want fitSize of the region, %dx%d", img.Width, img.Height, c.w, c.h)
 			}
 			if c.resize == "" {
-				for _, call := range calls()[before:] {
+				for _, call := range rec.calls[before:] {
 					if slices.Contains(call, "-write") && slices.Contains(call, "-resize") {
 						t.Errorf("a region within the bounds was resized: %q", call)
 					}
@@ -312,26 +313,27 @@ func jpegSizeDefines(calls [][]string) []string {
 // A region turns the JPEG's reduced decode off: a crop of a reduced frame
 // would need fractional coordinates.
 func TestRegionTurnsJPEGReductionOff(t *testing.T) {
-	env, calls := sourceEnv(t)
+	env := requireMagick(t)
 	path := filepath.Join(t.TempDir(), "big.jpg")
 	magick(t, env, "-size", "1600x1200", "gradient:red-blue", "-quality", "90", path)
 	enc := pngEncoding()
-	enc.format, enc.ext = JPEG, ".jpg"
+	enc.Format = JPEG
 
-	img, err := env.still(context.Background(), decoder{"magick", "jpeg"}, path, enc, t.TempDir())
+	p, rec := sourceProcessor(t)
+	img, err := stillRegion(context.Background(), p, region{}, path, OpenOptions{}, enc, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := jpegSizeDefines(calls()); len(got) == 0 {
+	if got := jpegSizeDefines(rec.calls); len(got) == 0 {
 		t.Fatalf("the control run, with no region, set no jpeg:size (%dx%d)", img.Width, img.Height)
 	}
 
-	env2, calls2 := sourceEnv(t)
-	img, err = env2.stillRegion(context.Background(), region{100, 100, 800, 600}, decoder{"magick", "jpeg"}, path, enc, t.TempDir())
+	p2, rec2 := sourceProcessor(t)
+	img, err = stillRegion(context.Background(), p2, region{100, 100, 800, 600}, path, OpenOptions{}, enc, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := jpegSizeDefines(calls2()); len(got) != 0 {
+	if got := jpegSizeDefines(rec2.calls); len(got) != 0 {
 		t.Errorf("a region still reduced the decode: %q", got)
 	}
 	if img.Width != 100 || img.Height != 75 {
@@ -346,73 +348,54 @@ func TestRegionStillWebP(t *testing.T) {
 	requireExiftool(t)
 	real := requireMagick(t)
 	path := withOrientation(t, real, stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80"), 6)
-	enc := Encoding{Format: PNG, MaxEdge: 400, MaxArea: 400 * 400}.mustResolve(t)
+	enc := Encoding{Format: PNG, MaxEdge: 400, MaxArea: 400 * 400}
 
-	var r region
-	env, calls := sourceEnv(t)
-	art, err := openSource(t, env, path, Hints{}).encode(context.Background(), r, 0, []encoding{enc})
-	if err != nil {
+	p, rec := sourceProcessor(t)
+	if _, err := stillRegion(context.Background(), p, region{}, path, OpenOptions{}, enc, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	art[0].Cleanup()
-	if got := decodedAt(calls()); !slices.Equal(got, [][2]int{{800, 534}}) {
+	if got := decodedAt(rec.calls); !slices.Equal(got, [][2]int{{800, 534}}) {
 		t.Fatalf("the control decode is at %v, want 800x534", got)
 	}
 
 	// The picture is 1200x1800 upright.
-	r = region{1100, 0, 100, 100}
-	env, calls = sourceEnv(t)
-	art, err = openSource(t, env, path, Hints{}).encode(context.Background(), r, 0, []encoding{enc})
+	p, rec = sourceProcessor(t)
+	img, err := stillRegion(context.Background(), p, region{1100, 0, 100, 100}, path, OpenOptions{}, enc, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	art[0].Cleanup()
-	if got := decodedAt(calls()); !slices.Equal(got, [][2]int{{1800, 1200}}) {
+	if got := decodedAt(rec.calls); !slices.Equal(got, [][2]int{{1800, 1200}}) {
 		t.Errorf("a region decoded at %v, want the stored size 1800x1200", got)
 	}
-	if art[0].Width != 100 || art[0].Height != 100 {
-		t.Errorf("output is %dx%d, want 100x100", art[0].Width, art[0].Height)
+	if img.Width != 100 || img.Height != 100 {
+		t.Errorf("output is %dx%d, want 100x100", img.Width, img.Height)
 	}
 
-	r = region{1101, 0, 100, 100}
-	env, _ = sourceEnv(t)
-	staged := t.TempDir()
-	env.Stage = stagerIn(staged)
-	if _, err := openSource(t, env, path, Hints{}).encode(context.Background(), r, 0, []encoding{enc}); err == nil || !strings.Contains(err.Error(), "outside") {
+	p, _ = sourceProcessor(t)
+	out := t.TempDir()
+	if _, err := stillRegion(context.Background(), p, region{1101, 0, 100, 100}, path, OpenOptions{}, enc, out); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("err = %v, want a refusal that the region is outside the 1200x1800 frame", err)
 	}
-	if entries, _ := os.ReadDir(staged); len(entries) != 0 {
+	if entries, _ := os.ReadDir(out); len(entries) != 0 {
 		t.Errorf("the refused call left %d files", len(entries))
 	}
 }
 
-func (e Encoding) mustResolve(t *testing.T) encoding {
-	t.Helper()
-	enc, err := e.resolve()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return enc
-}
-
-// rewriteMagick returns env with the stdout of each magick encode run passed
-// through fn.
-func rewriteMagick(env Env, fn func(string) string) Env {
-	inner := env.Run
-	env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := inner(ctx, name, args...)
+// rewriteMagick wraps run so that the stdout of each magick encode run is
+// passed through fn.
+func rewriteMagick(inner toolRun, fn func(string) string) toolRun {
+	return func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, name, args...)
 		if name == "magick" && slices.Contains(args, "-write") {
 			res.Stdout = []byte(fn(string(res.Stdout)))
 		}
 		return res, err
 	}
-	return env
 }
 
 // ImageMagick does not refuse a crop outside the picture, so the size the run
 // reports for the picture is held to the size the region was checked against.
 func TestRegionRefusesAForgedUprightReport(t *testing.T) {
-	real := requireMagick(t)
 	path := heicFixtureFile(t, "gradient-righttop")
 	for _, c := range []struct {
 		name string
@@ -424,9 +407,10 @@ func TestRegionRefusesAForgedUprightReport(t *testing.T) {
 		{"an unreadable line", func(out string) string { return strings.Replace(out, "upright|480|640", "upright|x|640", 1) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			env := stagedEnv(rewriteMagick(real, c.fn), t.TempDir())
+			p := requireProcessor(t)
+			p.run = rewriteMagick(p.run, c.fn)
 			dir := t.TempDir()
-			if _, err := env.stillRegion(context.Background(), region{10, 10, 50, 50}, decoder{"magick", "heic"}, path, pngEncoding(), dir); err == nil {
+			if _, err := stillRegion(context.Background(), p, region{10, 10, 50, 50}, path, OpenOptions{}, pngEncoding(), dir); err == nil {
 				t.Fatal("the call succeeded")
 			}
 			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -436,11 +420,12 @@ func TestRegionRefusesAForgedUprightReport(t *testing.T) {
 	}
 	t.Run("the report is accepted as printed", func(t *testing.T) {
 		seen := false
-		env := stagedEnv(rewriteMagick(real, func(out string) string {
+		p := requireProcessor(t)
+		p.run = rewriteMagick(p.run, func(out string) string {
 			seen = seen || strings.Contains(out, "upright|480|640\n")
 			return out
-		}), t.TempDir())
-		if _, err := env.stillRegion(context.Background(), region{10, 10, 50, 50}, decoder{"magick", "heic"}, path, pngEncoding(), t.TempDir()); err != nil {
+		})
+		if _, err := stillRegion(context.Background(), p, region{10, 10, 50, 50}, path, OpenOptions{}, pngEncoding(), t.TempDir()); err != nil {
 			t.Fatal(err)
 		}
 		if !seen {
@@ -451,10 +436,10 @@ func TestRegionRefusesAForgedUprightReport(t *testing.T) {
 
 // A run that crops nothing reports no upright size.
 func TestEncodeRefusesAnUprightLineWhenNothingIsCropped(t *testing.T) {
-	real := requireMagick(t)
-	env := stagedEnv(rewriteMagick(real, func(out string) string { return "upright|480|640\n" + out }), t.TempDir())
+	p := requireProcessor(t)
+	p.run = rewriteMagick(p.run, func(out string) string { return "upright|480|640\n" + out })
 	dir := t.TempDir()
-	_, err := env.stillRegion(context.Background(), region{}, decoder{"magick", "heic"}, heicFixtureFile(t, "gradient-righttop"), pngEncoding(), dir)
+	_, err := stillRegion(context.Background(), p, region{}, heicFixtureFile(t, "gradient-righttop"), OpenOptions{}, pngEncoding(), dir)
 	if err == nil {
 		t.Fatal("the call succeeded")
 	}
@@ -479,15 +464,16 @@ func TestSplitUpright(t *testing.T) {
 // A GIF carries no orientation, so the hint rotates it; the region is in the
 // rotated canvas.
 func TestRegionOnAnAnimationIsInTheUprightCanvas(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env := requireMagick(t)
+	p := requireProcessor(t)
 	gif := filepath.Join(t.TempDir(), "two.gif")
 	magick(t, env,
 		"(", "-size", "30x40", "xc:red", "-size", "30x40", "xc:blue", "+append", "-set", "delay", "10", ")",
 		"(", "-size", "30x40", "xc:blue", "-size", "30x40", "xc:red", "+append", "-set", "delay", "10", ")",
 		"-loop", "0", gif)
 	// Stored 60x40, red on the left; hinted RightTop it is 40x60 with red above.
-	open := func(t *testing.T) *EnvSource {
-		return openSource(t, env, gif, Hints{Orientation: 6})
+	open := func(t *testing.T) *Source {
+		return openSourceOn(t, p, gif, OpenOptions{Orientation: 6})
 	}
 	for _, c := range []struct {
 		name string
@@ -504,7 +490,7 @@ func TestRegionOnAnAnimationIsInTheUprightCanvas(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			images, err := open(t).encodeFiles(context.Background(), c.r, pngEncoding(), dir, nil)
+			images, _, err := open(t).Encode(context.Background(), dir, Select{Frames: All(), Region: c.r.exported()}, pngEncoding())
 			if !c.ok {
 				if err == nil || !strings.Contains(err.Error(), "outside") {
 					t.Fatalf("err = %v, want a refusal that the region is outside the canvas", err)
@@ -553,6 +539,7 @@ func TestRegionDoesNotRelaxTheReturnedPixelCap(t *testing.T) {
 // it, as for a still WebP whose orientation only its decode reveals.
 func TestRegionOfAPNGWhoseOrientationThePingMisses(t *testing.T) {
 	env := requireMagick(t)
+	p := requireProcessor(t)
 	for _, file := range []string{"exif-after-idat.png", "ztxt-exif.png", "ztxt-after-idat.png"} {
 		t.Run(file, func(t *testing.T) {
 			path := writeFile(t, "content", mustRead(t, filepath.Join("testdata", "orient", file)))
@@ -561,14 +548,14 @@ func TestRegionOfAPNGWhoseOrientationThePingMisses(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := region{0, 0, 1, 1}
-			if _, err := env.stillRegion(context.Background(), r, decoder{"magick", "png"}, path, pngEncoding(), t.TempDir()); err != nil {
+			if _, err := stillRegion(context.Background(), p, r, path, OpenOptions{}, pngEncoding(), t.TempDir()); err != nil {
 				t.Errorf("region %+v of the %dx%d upright frame: %v", r, uw, uh, err)
 			}
-			if _, err := env.stillRegion(context.Background(), region{0, 0, uw, uh}, decoder{"magick", "png"}, path, pngEncoding(), t.TempDir()); err != nil {
+			if _, err := stillRegion(context.Background(), p, region{0, 0, uw, uh}, path, OpenOptions{}, pngEncoding(), t.TempDir()); err != nil {
 				t.Errorf("the whole %dx%d upright frame: %v", uw, uh, err)
 			}
 			dir := t.TempDir()
-			_, err := env.stillRegion(context.Background(), region{uw - 1, 0, 2, 2}, decoder{"magick", "png"}, path, pngEncoding(), dir)
+			_, err := stillRegion(context.Background(), p, region{uw - 1, 0, 2, 2}, path, OpenOptions{}, pngEncoding(), dir)
 			if err == nil || !strings.Contains(err.Error(), "outside") {
 				t.Errorf("err = %v, want a refusal that the region is outside the %dx%d frame", err, uw, uh)
 			}
@@ -583,12 +570,13 @@ func TestRegionOfAPNGWhoseOrientationThePingMisses(t *testing.T) {
 // oFFs chunk (or a TIFF's position) offsets from the pixels. The region is in
 // the picture's own pixels, as the output without a region shows them.
 func TestRegionIgnoresAPageOffset(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env := requireMagick(t)
+	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "offset.png")
 	magick(t, env, "-size", "400x300", "gradient:red-blue", "-page", "1000x1000+30+20", path)
 	r := region{100, 50, 200, 200}
 	dir := t.TempDir()
-	img, err := env.stillRegion(context.Background(), r, decoder{"magick", "png"}, path, pngEncoding(), dir)
+	img, err := stillRegion(context.Background(), p, r, path, OpenOptions{}, pngEncoding(), dir)
 	if err != nil {
 		return // a refusal is safe; wrong pixels are not
 	}
@@ -602,24 +590,25 @@ func TestRegionIgnoresAPageOffset(t *testing.T) {
 // A TIFF carries both an orientation and a page position; the region is in
 // the turned picture's own pixels.
 func TestRegionOfATurnedTIFFWithAPageOffset(t *testing.T) {
-	env, calls := sourceEnv(t)
+	env := requireMagick(t)
+	p, rec := sourceProcessor(t)
 	path := filepath.Join(t.TempDir(), "turned.tif")
 	magick(t, env, "-size", "400x300", "gradient:red-blue", "-fill", "lime", "-draw", "rectangle 0,0 40,40",
 		"-units", "PixelsPerInch", "-density", "72", "-page", "1000x1000+30+20", "-orient", "RightTop", path)
 	if g := strings.TrimSpace(string(magick(t, env, path, "-format", "%g", "info:"))); g != "400x300+30+20" {
 		t.Fatalf("the TIFF's page is %s, want an offset of +30+20", g)
 	}
-	src := openSource(t, env, path, Hints{Still: true})
-	if src.unsettled || src.upright != [2]int{300, 400} {
-		t.Fatalf("unsettled %v, upright %v; want a settled 300x400 frame", src.unsettled, src.upright)
+	src := openSourceOn(t, p, path, OpenOptions{Type: "image/tiff"})
+	if info := src.Info(); !info.Settled || info.Width != 300 || info.Height != 400 {
+		t.Fatalf("info %+v; want a settled 300x400 frame", info)
 	}
-	before := len(calls())
-	if _, err := src.encode(context.Background(), region{101, 0, 200, 200}, 0, []encoding{pngEncoding()}); err == nil || len(calls()) != before {
-		t.Fatalf("err = %v after %d tool runs, want a refusal before any", err, len(calls())-before)
+	before := rec.count()
+	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Region: region{101, 0, 200, 200}.exported()}, pngEncoding()); err == nil || rec.count() != before {
+		t.Fatalf("err = %v after %d tool runs, want a refusal before any", err, rec.count()-before)
 	}
 	r := region{50, 100, 200, 200}
 	dir := t.TempDir()
-	img, err := env.stillRegion(context.Background(), r, decoder{"magick", "tiff"}, path, pngEncoding(), dir)
+	img, err := stillRegion(context.Background(), p, r, path, OpenOptions{Type: "image/tiff"}, pngEncoding(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,10 +622,10 @@ func TestRegionOfATurnedTIFFWithAPageOffset(t *testing.T) {
 // A JPEG with no orientation tag is unsettled, so its region is checked
 // against the size its run reports.
 func TestRegionOfAnUntaggedJPEG(t *testing.T) {
-	env, _ := sourceEnv(t)
+	env := requireMagick(t)
+	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "plain.jpg")
 	magick(t, env, "-size", "100x100", "xc:red", "-size", "100x100", "xc:blue", "+append", "-quality", "100", path)
-	jpeg := decoder{"magick", "jpeg"}
 	for _, c := range []struct {
 		name string
 		r    region
@@ -647,7 +636,7 @@ func TestRegionOfAnUntaggedJPEG(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			img, err := env.stillRegion(context.Background(), c.r, jpeg, path, pngEncoding(), dir)
+			img, err := stillRegion(context.Background(), p, c.r, path, OpenOptions{}, pngEncoding(), dir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -660,7 +649,7 @@ func TestRegionOfAnUntaggedJPEG(t *testing.T) {
 		})
 	}
 	dir := t.TempDir()
-	_, err := env.stillRegion(context.Background(), region{180, 0, 50, 50}, jpeg, path, pngEncoding(), dir)
+	_, err := stillRegion(context.Background(), p, region{180, 0, 50, 50}, path, OpenOptions{}, pngEncoding(), dir)
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("err = %v, want a refusal that the region is outside the 200x100 frame", err)
 	}

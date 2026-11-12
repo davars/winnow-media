@@ -11,19 +11,19 @@ import (
 	"testing"
 )
 
-// timeLimitArgs returns args preceded by the limit flags of LimitArgs with
+// timeLimitArgs returns args preceded by the limit flags of the default Resources with
 // the time limit replaced by seconds. The flags follow the ones runMagick
 // adds, so they win.
 func timeLimitArgs(t *testing.T, args []string, seconds string) []string {
 	t.Helper()
-	limit := LimitArgs()
+	limit := defaultResources().limitArgs()
 	for i := 0; i+2 < len(limit); i++ {
 		if limit[i] == "-limit" && limit[i+1] == "time" {
 			limit[i+2] = seconds
 			return append(limit, args...)
 		}
 	}
-	t.Fatal("no time limit in LimitArgs")
+	t.Fatal("no time limit in the limit flags")
 	return nil
 }
 
@@ -43,7 +43,7 @@ func slowEncodeCheck(out string) encodeCheck {
 	}
 }
 
-func writeBigPNG(t *testing.T, env Env) string {
+func writeBigPNG(t *testing.T, env toolEnv) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "big.pam")
 	magick(t, env, "-size", "4000x4000", "gradient:red-blue", path)
@@ -66,8 +66,8 @@ func TestEncodeRefusesATimeLimitReportedOnStderr(t *testing.T) {
 	if err := os.WriteFile(out, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-		return Result{
+	env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
+		return runResult{
 			Stdout: []byte("100|75\n"),
 			Stderr: []byte("magick: time limit exceeded `x.png' @ error/cache.c/GetImagePixelCache/1743.\n"),
 		}, nil
@@ -106,8 +106,8 @@ func TestEncodeRefusesAFrameOutsideItsBound(t *testing.T) {
 			if err := os.WriteFile(out, []byte("x"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-				return Result{Stdout: []byte(c.report)}, nil
+			env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
+				return runResult{Stdout: []byte(c.report)}, nil
 			}}
 			_, err := env.runEncode(context.Background(), nil, encodeCheck{bounds: c.bounds, outputs: []string{out}})
 			if (err == nil) != c.ok {
@@ -130,7 +130,7 @@ func TestEncodeTimeLimitThroughTheLimitFlags(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out.jpg")
 	args := timeLimitArgs(t, slowEncode(src, out), "1")
 
-	raw, err := env.Run(context.Background(), "magick", args...)
+	raw, err := env.run(context.Background(), "magick", args...)
 	if err != nil || !strings.Contains(string(raw.Stderr), "time limit exceeded") || !strings.Contains(string(raw.Stdout), "4000|4000") {
 		t.Fatalf("premise: err = %v, stderr %q, report %q; want exit 0, a time limit and the unresized frame",
 			err, raw.Stderr, raw.Stdout)
@@ -167,12 +167,11 @@ func TestEncodeTimeLimitThroughTheProcessorPolicy(t *testing.T) {
 	assertGone(t, out)
 }
 
-// skipResize reports every frame of the encodes that write output at size
-// w x h, as an encode whose resize was skipped would.
-func skipResize(real Env, w, h int) Env {
-	inner := real.Run
-	real.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := inner(ctx, name, args...)
+// skipResize wraps run so that every frame of the encodes that write output is
+// reported at size w x h, as an encode whose resize was skipped would.
+func skipResize(inner toolRun, w, h int) toolRun {
+	return func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, name, args...)
 		if err != nil || !slices.Contains(args, "-resize") || !slices.Contains(args, "-write") {
 			return res, err
 		}
@@ -188,7 +187,6 @@ func skipResize(real Env, w, h int) Env {
 		res.Stdout = []byte(strings.Join(lines, "\n") + "\n")
 		return res, nil
 	}
-	return real
 }
 
 // Every route that encodes checks the size the run reports and leaves no
@@ -201,49 +199,32 @@ func TestEncodeRoutesRefuseAnUnresizedFrame(t *testing.T) {
 	magick(t, real, "-size", "600x400", "gradient:red-blue", jpg)
 	gif := writeGrayAnimGIF(t, real, []int{0, 40, 80, 120}, repeatInt(5, 4))
 	enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 100, MaxArea: 100 * 100}
+	wider := enc
+	wider.MaxEdge, wider.MaxArea = 200, 200*200
+	animated := enc
+	animated.Animate = true
 
-	t.Run("one still target", func(t *testing.T) {
-		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400)
-		src := openSource(t, env, jpg, Hints{})
-		_, err := src.Encode(context.Background(), 0, enc)
-		requireBoundsError(t, err)
-		assertEmptyDir(t, staging)
-	})
-	t.Run("two still targets", func(t *testing.T) {
-		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400)
-		src := openSource(t, env, jpg, Hints{})
-		wider := enc
-		wider.MaxEdge, wider.MaxArea = 200, 200*200
-		_, err := src.Encode(context.Background(), 0, enc, wider)
-		requireBoundsError(t, err)
-		assertEmptyDir(t, staging)
-	})
-	t.Run("still frame files", func(t *testing.T) {
-		out := t.TempDir()
-		env := skipResize(stagedEnv(real, t.TempDir()), 600, 400)
-		src := openSource(t, env, jpg, Hints{})
-		_, err := src.EncodeFrames(context.Background(), enc, out)
-		requireBoundsError(t, err)
-		assertEmptyDir(t, out)
-	})
-	t.Run("animation", func(t *testing.T) {
-		staging := t.TempDir()
-		env := skipResize(stagedEnv(real, staging), 600, 400)
-		src := openSource(t, env, gif, Hints{Frames: 4})
-		_, err := src.Encode(context.Background(), 4, enc)
-		requireBoundsError(t, err)
-		assertEmptyDir(t, staging)
-	})
-	t.Run("animation frame files", func(t *testing.T) {
-		out := t.TempDir()
-		env := skipResize(stagedEnv(real, t.TempDir()), 600, 400)
-		src := openSource(t, env, gif, Hints{Frames: 4})
-		_, err := src.EncodeFrames(context.Background(), enc, out)
-		requireBoundsError(t, err)
-		assertEmptyDir(t, out)
-	})
+	for _, c := range []struct {
+		name    string
+		path    string
+		sel     Select
+		targets []Encoding
+	}{
+		{"one still target", jpg, Select{}, []Encoding{enc}},
+		{"two still targets", jpg, Select{}, []Encoding{enc, wider}},
+		{"animation", gif, Select{Frames: Even(4)}, []Encoding{animated}},
+		{"animation frame files", gif, Select{Frames: Even(4)}, []Encoding{enc}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessor(t)
+			p.run = skipResize(p.run, 600, 400)
+			src := openSourceOn(t, p, c.path, OpenOptions{})
+			out := t.TempDir()
+			_, _, err := src.Encode(context.Background(), out, c.sel, c.targets...)
+			requireBoundsError(t, err)
+			assertEmptyDir(t, out)
+		})
+	}
 }
 
 func assertEmptyDir(t *testing.T, dir string) {
@@ -277,8 +258,8 @@ func TestEncodeTimeLimitWithAFailingExit(t *testing.T) {
 	if err := os.WriteFile(out, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-		return Result{Stderr: []byte(timeLimitStderr)},
+	env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
+		return runResult{Stderr: []byte(timeLimitStderr)},
 			fmt.Errorf("magick: exit status 1: %s", strings.TrimSpace(timeLimitStderr))
 	}}
 	_, err := env.runEncode(context.Background(), nil, encodeCheck{outputs: []string{out}})
@@ -296,13 +277,13 @@ func TestEncodeTimeLimitWithAFailingExit(t *testing.T) {
 func TestHeaderReadsReportATimeLimit(t *testing.T) {
 	t.Parallel()
 	for name, res := range map[string]struct {
-		res Result
+		res runResult
 		err error
 	}{
-		"exit 1": {Result{Stderr: []byte(timeLimitStderr)}, errors.New("magick: exit status 1")},
-		"exit 0": {Result{Stdout: []byte("0|||1|1|1|1|TIFF||DirectClass|False|END\n"), Stderr: []byte(timeLimitStderr)}, nil},
+		"exit 1": {runResult{Stderr: []byte(timeLimitStderr)}, errors.New("magick: exit status 1")},
+		"exit 0": {runResult{Stdout: []byte("0|||1|1|1|1|TIFF||DirectClass|False|END\n"), Stderr: []byte(timeLimitStderr)}, nil},
 	} {
-		env := Env{Run: func(context.Context, string, ...string) (Result, error) { return res.res, res.err }}
+		env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) { return res.res, res.err }}
 		if _, err := identifyHeaders(context.Background(), env, "x.tif", false); !errors.Is(err, ErrTimeLimit) {
 			t.Errorf("%s: identifyHeaders err = %v, want ErrTimeLimit", name, err)
 		}
@@ -321,8 +302,8 @@ func TestEncodeRefusesAFrameCountMismatch(t *testing.T) {
 		if err := os.WriteFile(out, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-			return Result{Stdout: []byte(report)}, nil
+		env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
+			return runResult{Stdout: []byte(report)}, nil
 		}}
 		_, err := env.runEncode(context.Background(), nil, encodeCheck{frames: 2, outputs: []string{out}})
 		if err == nil {
@@ -344,18 +325,19 @@ func TestEncodeRefusesAWrongExactSize(t *testing.T) {
 	wider.MaxEdge, wider.MaxArea = 200, 200*200
 	for name, targets := range map[string][]Encoding{"one target": {enc}, "two targets": {enc, wider}} {
 		t.Run(name, func(t *testing.T) {
-			staging := t.TempDir()
-			env := skipResize(stagedEnv(real, staging), 90, 60)
-			src := openSource(t, env, jpg, Hints{})
-			readOps, sizes := src.reduction(mustResolveAll(t, targets))
+			p := requireProcessor(t)
+			p.run = skipResize(p.run, 90, 60)
+			src := openSourceOn(t, p, jpg, OpenOptions{})
+			readOps, sizes := src.stills[0].reduction(mustResolveAll(t, targets))
 			if readOps == nil || sizes == nil {
 				t.Fatal("the fixture does not take the reduced route")
 			}
-			_, err := src.Encode(context.Background(), 0, targets...)
+			out := t.TempDir()
+			_, _, err := src.Encode(context.Background(), out, Select{}, targets...)
 			if err == nil || !strings.Contains(err.Error(), "want exactly") {
 				t.Fatalf("err = %v, want an exact size refusal", err)
 			}
-			assertEmptyDir(t, staging)
+			assertEmptyDir(t, out)
 		})
 	}
 }
@@ -369,20 +351,19 @@ func mustResolveAll(t *testing.T, targets []Encoding) []encoding {
 	return encs
 }
 
-// dropLastFrame removes the last line of the report of every encode that
-// writes output.
-func dropLastFrame(real Env) Env { return editReport(real, -1) }
+// dropLastFrame wraps run so that the last line of the report of every encode
+// that writes output is removed.
+func dropLastFrame(inner toolRun) toolRun { return editReport(inner, -1) }
 
-// repeatLastFrame repeats the last line of the report of every encode that
-// writes output.
-func repeatLastFrame(real Env) Env { return editReport(real, 1) }
+// repeatLastFrame wraps run so that the last line of the report of every
+// encode that writes output is repeated.
+func repeatLastFrame(inner toolRun) toolRun { return editReport(inner, 1) }
 
-// editReport adds a line (delta 1) or removes one (delta -1) in the report of
-// the encodes that write output.
-func editReport(real Env, delta int) Env {
-	inner := real.Run
-	real.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := inner(ctx, name, args...)
+// editReport wraps run so that a line is added (delta 1) or removed (delta -1)
+// in the report of the encodes that write output.
+func editReport(inner toolRun, delta int) toolRun {
+	return func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, name, args...)
 		if err != nil || name != "magick" || !slices.Contains(args, "-write") {
 			return res, err
 		}
@@ -407,7 +388,6 @@ func editReport(real Env, delta int) Env {
 		res.Stdout = []byte(strings.Join(append(uprights, reports...), "\n") + "\n")
 		return res, nil
 	}
-	return real
 }
 
 // Every route holds the report to the number of frames it asked for and
@@ -421,45 +401,39 @@ func TestEncodeRoutesRefuseAShortReport(t *testing.T) {
 	enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 100, MaxArea: 100 * 100}
 	wider := enc
 	wider.MaxEdge, wider.MaxArea = 200, 200*200
+	animated := enc
+	animated.Animate = true
 
-	t.Run("two still targets", func(t *testing.T) {
-		staging := t.TempDir()
-		src := openSource(t, dropLastFrame(stagedEnv(real, staging)), jpg, Hints{})
-		if _, err := src.Encode(context.Background(), 0, enc, wider); err == nil || !strings.Contains(err.Error(), "reported 1 frames, want 2") {
-			t.Fatalf("err = %v, want a frame count refusal", err)
-		}
-		assertEmptyDir(t, staging)
-	})
-	t.Run("one still target", func(t *testing.T) {
-		staging := t.TempDir()
-		src := openSource(t, repeatLastFrame(stagedEnv(real, staging)), jpg, Hints{})
-		if _, err := src.Encode(context.Background(), 0, enc); err == nil || !strings.Contains(err.Error(), "reported 2 frames, want 1") {
-			t.Fatalf("err = %v, want a frame count refusal", err)
-		}
-		assertEmptyDir(t, staging)
-	})
-	t.Run("animation", func(t *testing.T) {
-		staging := t.TempDir()
-		src := openSource(t, dropLastFrame(stagedEnv(real, staging)), gif, Hints{Frames: 4})
-		if _, err := src.Encode(context.Background(), 4, enc); err == nil || !strings.Contains(err.Error(), "frames, want") {
-			t.Fatalf("err = %v, want a frame count refusal", err)
-		}
-		assertEmptyDir(t, staging)
-	})
-	t.Run("animation frame files", func(t *testing.T) {
-		out := t.TempDir()
-		src := openSource(t, dropLastFrame(stagedEnv(real, t.TempDir())), gif, Hints{Frames: 4})
-		if _, err := src.EncodeFrames(context.Background(), enc, out); err == nil || !strings.Contains(err.Error(), "frames, want") {
-			t.Fatalf("err = %v, want a frame count refusal", err)
-		}
-		assertEmptyDir(t, out)
-	})
+	for _, c := range []struct {
+		name    string
+		wrap    func(toolRun) toolRun
+		path    string
+		sel     Select
+		targets []Encoding
+		want    string
+	}{
+		{"two still targets", dropLastFrame, jpg, Select{}, []Encoding{enc, wider}, "reported 1 frames, want 2"},
+		{"one still target", repeatLastFrame, jpg, Select{}, []Encoding{enc}, "reported 2 frames, want 1"},
+		{"animation", dropLastFrame, gif, Select{Frames: Even(4)}, []Encoding{animated}, "frames, want"},
+		{"animation frame files", dropLastFrame, gif, Select{Frames: Even(4)}, []Encoding{enc}, "frames, want"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessor(t)
+			p.run = c.wrap(p.run)
+			src := openSourceOn(t, p, c.path, OpenOptions{})
+			out := t.TempDir()
+			if _, _, err := src.Encode(context.Background(), out, c.sel, c.targets...); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want a frame count refusal saying %q", err, c.want)
+			}
+			assertEmptyDir(t, out)
+		})
+	}
 }
 
 // The animated WebPs of a video go through the same checks: the animated
 // encode, with the bound of their encoding and, for a frame reduced in
 // decoding, its exact size.
-func TestVideoWebPPairRefusesABadReport(t *testing.T) {
+func TestVideoAnimatedWebPsRefuseABadReport(t *testing.T) {
 	t.Parallel()
 	real := requireFFmpeg(t)
 	small := writeClip(t, real, ".mp4", testsrc("160x120", 10, 3)...)
@@ -467,17 +441,24 @@ func TestVideoWebPPairRefusesABadReport(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		clip string
-		env  func(Env) Env
+		wrap func(toolRun) toolRun
 		want string
 	}{
-		{"encode over the bounds", small, func(e Env) Env { return skipResize(e, 160, 120) }, "above the bounds"},
-		{"encode too short", small, func(e Env) Env { return editReport(e, -1) }, "frames, want"},
-		{"encode of the wrong exact size", big, func(e Env) Env { return skipResize(e, 30, 20) }, "want exactly"},
+		{"encode over the bounds", small, func(r toolRun) toolRun { return skipResize(r, 160, 120) }, "above the bounds"},
+		{"encode too short", small, func(r toolRun) toolRun { return editReport(r, -1) }, "frames, want"},
+		{"encode of the wrong exact size", big, func(r toolRun) toolRun { return skipResize(r, 30, 20) }, "want exactly"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessor(t)
+			p.run = c.wrap(p.run)
+			src := openSourceOn(t, p, c.clip, OpenOptions{})
 			out := t.TempDir()
-			err := encodeWebPPair(c.env(real), context.Background(), c.clip,
-				filepath.Join(out, "small.webp"), filepath.Join(out, "large.webp"), 64, 100, 80)
+			animated := func(edge int) Encoding {
+				enc := webpAtEdge(edge)
+				enc.Animate = true
+				return enc
+			}
+			_, _, err := src.Encode(context.Background(), out, Select{Frames: Even(3)}, animated(64), animated(100))
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want one containing %q", err, c.want)
 			}
@@ -486,91 +467,15 @@ func TestVideoWebPPairRefusesABadReport(t *testing.T) {
 	}
 }
 
-// ImageMagick exits 0 on a time limit, so a decode through the coder fallback
-// must fail on the message, and not retry with another coder.
-func TestRunMagickWithCoderFallbackReportsATimeLimit(t *testing.T) {
-	t.Parallel()
-	calls := 0
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-		calls++
-		return Result{Stdout: []byte("partial"), Stderr: []byte(timeLimitStderr)}, nil
-	}}
-	build := func(string) []string { return []string{"png:x"} }
-	for _, mime := range []string{"image/png", "image/x-tga"} {
-		calls = 0
-		if _, err := env.RunMagickWithCoderFallback(context.Background(), mime, build); !errors.Is(err, ErrTimeLimit) {
-			t.Errorf("%s: err = %v, want ErrTimeLimit", mime, err)
-		}
-		if calls != 1 {
-			t.Errorf("%s: %d runs, want 1: a time limit is not retried", mime, calls)
-		}
-	}
-}
-
-// A retry with the coder that reaches the time limit fails with ErrTimeLimit
-// too, as every run that reaches it does.
-func TestRunMagickWithCoderFallbackReportsATimeLimitOnTheRetry(t *testing.T) {
-	t.Parallel()
-	calls := 0
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-		calls++
-		if calls == 1 {
-			return Result{}, errors.New("magick: exit status 1: no decode delegate for this image format")
-		}
-		return Result{Stdout: []byte("partial"), Stderr: []byte(timeLimitStderr)}, nil
-	}}
-	_, err := env.RunMagickWithCoderFallback(context.Background(), "image/x-tga", func(string) []string { return []string{"x"} })
-	if calls != 2 || !errors.Is(err, ErrTimeLimit) {
-		t.Errorf("%d runs, err = %v; want a retry failing with ErrTimeLimit", calls, err)
-	}
-}
-
-// Through the real tool, a time-limited decode exits 0 with an unfinished
-// image; the fallback fails with ErrTimeLimit and runs magick once.
-func TestRunMagickWithCoderFallbackReportsARealTimeLimit(t *testing.T) {
-	t.Parallel()
-	env := testEnv(t)
-	src := writeBigPNG(t, env)
-	runs := 0
-	run := env.Run
-	env.Run = func(ctx context.Context, tool string, args ...string) (Result, error) {
-		runs++
-		return run(ctx, tool, args...)
-	}
-	out := filepath.Join(t.TempDir(), "out.jpg")
-	args := timeLimitArgs(t, slowEncode(src, out), "1")
-	for _, mime := range []string{"image/png", "image/x-tga"} {
-		runs = 0
-		_, err := env.RunMagickWithCoderFallback(context.Background(), mime, func(string) []string { return args })
-		if !errors.Is(err, ErrTimeLimit) || runs != 1 {
-			t.Errorf("%s: err = %v after %d runs, want ErrTimeLimit after 1", mime, err, runs)
-		}
-	}
-}
-
 // A header read whose stderr carries both messages is a time limit, not a
 // scene-count refusal.
 func TestIdentifyHeadersTimeLimitOutranksListLength(t *testing.T) {
 	t.Parallel()
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-		return Result{Stderr: []byte(timeLimitStderr)}, errors.New("magick: " + listLengthRefusal)
+	env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
+		return runResult{Stderr: []byte(timeLimitStderr)}, errors.New("magick: " + listLengthRefusal)
 	}}
 	_, err := identifyHeaders(context.Background(), env, "x.tif", true)
 	if !errors.Is(err, ErrTimeLimit) || errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTimeLimit", err)
-	}
-}
-
-// identifyWithFallback does not retry a time-limited read with the coder.
-func TestIdentifyWithFallbackDoesNotRetryATimeLimit(t *testing.T) {
-	t.Parallel()
-	calls := 0
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
-		calls++
-		return Result{Stderr: []byte(timeLimitStderr)}, nil
-	}}
-	_, _, err := identifyWithFallback(context.Background(), env, "x", "", "image/x-tga")
-	if !errors.Is(err, ErrTimeLimit) || calls != 1 {
-		t.Fatalf("err = %v after %d runs, want ErrTimeLimit after 1", err, calls)
 	}
 }

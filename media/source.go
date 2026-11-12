@@ -140,7 +140,7 @@ type Source struct {
 	// A still: its header read and its decodes, one per image read so far.
 	hdr    headerRead
 	req    openRequest
-	stills map[int]*EnvSource
+	stills map[int]*frameSource
 	// reuse is OpenOptions.Reuse; kept holds the decodes it keeps, by image.
 	reuse bool
 	kept  map[int]*keptDecode
@@ -186,21 +186,20 @@ type Source struct {
 //
 // The caller must Close the Source, or close the Processor.
 func (p *Processor) Open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {
-	src, usage, err := p.openKinds(ctx, path, opts, kindStill|kindAnimation|kindVideo)
+	src, usage, err := p.open(ctx, path, opts)
 	if err != nil {
 		return nil, usage, fmt.Errorf("open: %w", err)
 	}
 	return src, usage, nil
 }
 
-// openKinds is Open for the types of kinds only.
-func (p *Processor) openKinds(ctx context.Context, path string, opts OpenOptions, kinds mediaKind) (*Source, Usage, error) {
+func (p *Processor) open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {
 	var m meter
 	override, err := orientationName(opts.Orientation)
 	if err != nil {
 		return nil, m.usage, err
 	}
-	in, err := p.admitInput(ctx, &m, accepted{kind: kinds, typ: opts.Type}, path)
+	in, err := p.admitInput(ctx, &m, opts.Type, path)
 	if err != nil {
 		return nil, m.usage, err
 	}
@@ -242,10 +241,9 @@ func (s *Source) applied(tag string) string {
 	return ""
 }
 
-func (s *Source) openImage(ctx context.Context, env Env, in admitted) error {
+func (s *Source) openImage(ctx context.Context, env toolEnv, in admitted) error {
 	s.req = openRequest{
-		path: in.ref, file: in.file, dec: in.decoder, pinned: true, caps: true, scenes: in.scenes,
-		allScenes: true, webpProfileFromTool: true,
+		path: in.ref, file: in.file, dec: in.decoder, scenes: in.scenes,
 	}
 	hdr, err := env.readSource(ctx, s.req)
 	if err != nil {
@@ -260,14 +258,14 @@ func (s *Source) openImage(ctx context.Context, env Env, in admitted) error {
 
 func (s *Source) openStill() error {
 	s.kind = Still
-	s.stills = map[int]*EnvSource{}
+	s.stills = map[int]*frameSource{}
 	s.kept = map[int]*keptDecode{}
 	s.noKeep = map[int]bool{}
 	s.profiled = map[int]bool{0: true}
 	info := Info{Type: s.typ, Kind: Still, Frames: len(s.hdr.scenes)}
 	for i, sc := range s.hdr.scenes {
 		ov := s.applied(sc.orientation)
-		es := &EnvSource{route: routeStill, orientation: ov, reduce: true, dir: s.dir}
+		es := &frameSource{route: routeStill, orientation: ov, dir: s.dir}
 		if err := es.initStill(s.req, s.hdr, i, ov); err != nil {
 			return err
 		}
@@ -294,14 +292,14 @@ func auxiliarySubfile(subfile string) bool {
 
 // shownSize is the size of the image as the header read gives it: upright when
 // the source is settled, else as stored.
-func (s *EnvSource) shownSize() [2]int {
+func (s *frameSource) shownSize() [2]int {
 	if s.unsettled {
 		return s.stored
 	}
 	return s.upright
 }
 
-func (s *Source) openAnimation(env Env) error {
+func (s *Source) openAnimation(env toolEnv) error {
 	s.kind = Animation
 	hdr := s.hdr
 	first := hdr.scenes[0]
@@ -337,7 +335,7 @@ func (s *Source) openAnimation(env Env) error {
 	return nil
 }
 
-func (s *Source) openVideo(ctx context.Context, env Env, opts OpenOptions) error {
+func (s *Source) openVideo(ctx context.Context, env toolEnv, opts OpenOptions) error {
 	if opts.Orientation != 0 {
 		return errors.New("orientation does not apply to a video")
 	}
@@ -508,7 +506,7 @@ func (s *Source) refreshInfo() {
 
 // stillAt returns the decode of image i, bound to env, with the profile of the
 // image read if its coder cannot report it from the header.
-func (s *Source) stillAt(ctx context.Context, env Env, i int) (*EnvSource, error) {
+func (s *Source) stillAt(ctx context.Context, env toolEnv, i int) (*frameSource, error) {
 	es := s.stills[i]
 	if !s.profiled[i] {
 		scenes := s.hdr.scenes[i : i+1]
@@ -524,7 +522,7 @@ func (s *Source) stillAt(ctx context.Context, env Env, i int) (*EnvSource, error
 	return es, nil
 }
 
-func (s *Source) encodeStills(ctx context.Context, env Env, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	idx, err := fr.images(len(s.hdr.scenes))
 	if err != nil {
 		return nil, err
@@ -535,7 +533,7 @@ func (s *Source) encodeStills(ctx context.Context, env Env, dir string, fr Frame
 		}
 	}
 	s.dropKeptExcept(idx)
-	srcs := make([]*EnvSource, len(idx))
+	srcs := make([]*frameSource, len(idx))
 	for f, k := range idx {
 		if srcs[f], err = s.stillAt(ctx, env, k); err != nil {
 			return nil, err
@@ -577,7 +575,7 @@ func (s *Source) encodeStills(ctx context.Context, env Env, dir string, fr Frame
 // reuses decodes. If the run that writes the kept files fails, which includes
 // a full-size decode that exceeds the caps, the encode is tried once without
 // them, and the image is then remembered as one that cannot be kept.
-func (s *Source) encodeFresh(ctx context.Context, es *EnvSource, k int, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
+func (s *Source) encodeFresh(ctx context.Context, es *frameSource, k int, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
 	es.keep = s.planKeep(k, es)
 	res, err := es.encodeStills(ctx, r, encs, paths)
 	if es.keep == nil {
@@ -597,15 +595,15 @@ func (s *Source) encodeFresh(ctx context.Context, es *EnvSource, k int, r region
 
 // animationSource returns the decode of the frames idx of the animation: the
 // frames themselves are attached once composited.
-func (s *Source) animationSource(env Env, idx []int) *EnvSource {
+func (s *Source) animationSource(env toolEnv, idx []int) *frameSource {
 	layout := s.layout
-	return &EnvSource{
-		env: env, route: s.hdr.route, layout: layout, orientation: s.orientation, reduce: true,
+	return &frameSource{
+		env: env, route: s.hdr.route, layout: layout, orientation: s.orientation,
 		selected: idx, dir: s.dir, destination: s.srgb, upright: s.upright,
 	}
 }
 
-func (s *Source) encodeAnimation(ctx context.Context, env Env, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) encodeAnimation(ctx context.Context, env toolEnv, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	starts := timestamps(frameDelays(s.layout.infos))
 	idx, err := fr.animation(starts, s.info.DurationMS)
 	if err != nil {
@@ -639,7 +637,7 @@ func (s *Source) encodeAnimation(ctx context.Context, env Env, dir string, fr Fr
 // compositor waits for each batch to be encoded, so about one batch is on disk
 // at a time and nothing is kept. Each target composites afresh, and a target
 // that holds all the frames in one file cannot be written.
-func (s *Source) streamAnimation(ctx context.Context, env Env, src *EnvSource, dir string, idx []int, need int64, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) streamAnimation(ctx context.Context, env toolEnv, src *frameSource, dir string, idx []int, need int64, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	for _, enc := range encs {
 		if enc.animate {
 			return nil, tooLarge("%d frames of %dx%d need %d bytes of scratch to write as one animation, Resources.Disk is %d",
@@ -667,7 +665,7 @@ func checkAnimate(encs []encoding, n int) error {
 
 // composite makes every frame of idx available in s.frames, composing only
 // the missing ones in one run of the compositor.
-func (s *Source) composite(ctx context.Context, env Env, idx []int) error {
+func (s *Source) composite(ctx context.Context, env toolEnv, idx []int) error {
 	var missing []int
 	for _, k := range idx {
 		if _, ok := s.frames[k]; !ok {
@@ -680,7 +678,7 @@ func (s *Source) composite(ctx context.Context, env Env, idx []int) error {
 	req := s.compose
 	req.selected, req.inFlight, req.consumeTimeout = missing, len(missing), env.consumeTimeout()
 	got := 0
-	err := env.composeFrames(ctx, req, func(f composedFrame) error {
+	err := env.compose(ctx, req, func(f composedFrame) error {
 		if got >= len(missing) {
 			return errors.New("the compositor wrote more frames than selected")
 		}
@@ -723,7 +721,7 @@ func (s *Source) keepOnly(idx []int) {
 	}
 }
 
-func (s *Source) encodeVideo(ctx context.Context, env Env, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) encodeVideo(ctx context.Context, env toolEnv, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	times, run, err := fr.video(s.probe)
 	if err != nil {
 		return nil, err
@@ -736,7 +734,7 @@ func (s *Source) encodeVideo(ctx context.Context, env Env, dir string, fr Frames
 		return nil, err
 	}
 	src, err := env.videoFromProbe(openRequest{
-		path: s.ref, file: s.file, dec: s.dec, pinned: true, scratch: s.dir,
+		path: s.ref, file: s.file, dec: s.dec, scratch: s.dir,
 		video: &videoRequest{times: func(videoInfo) ([]int64, error) { return times, nil }, run: run},
 	}, s.probe)
 	if err != nil {
@@ -755,12 +753,12 @@ func (s *Source) encodeVideo(ctx context.Context, env Env, dir string, fr Frames
 
 // encodeSamples writes the frames src holds, composited or sampled, for each
 // of encs.
-func encodeSamples(ctx context.Context, src *EnvSource, dir string, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func encodeSamples(ctx context.Context, src *frameSource, dir string, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	var images []Image
 	for t, enc := range encs {
 		base := len(images)
 		if enc.animate {
-			pos, _ := src.positions(0)
+			pos := src.positions()
 			file := name(base, enc.ext)
 			w, h, kept, err := src.encodeAnimation(ctx, r, enc, pos, filepath.Join(dir, file))
 			if err != nil {

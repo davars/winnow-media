@@ -1,7 +1,6 @@
 package media
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,18 +8,14 @@ import (
 	"slices"
 )
 
-// maxVideoSampleFrames is the number of samples Open takes of a video when
-// Hints.Frames is 0; it is tied to the animation's playback rate.
-const maxVideoSampleFrames = 15
-
 // videoFrameDelayCS is how long each sample is displayed in an animated
 // output, in centiseconds: two frames a second.
 const videoFrameDelayCS = 50
 
-// videoRequest is what the sampling of a video needs beyond the hints.
+// videoRequest is what the sampling of a video needs.
 type videoRequest struct {
 	// times chooses the sample times, in ms, from the probe: ascending
-	// without repeats. nil takes Hints.Frames evenly spaced.
+	// without repeats. It is nil when run is set.
 	times func(videoInfo) ([]int64, error)
 	// run, when set, samples consecutive frames instead of times.
 	run *frameRun
@@ -32,91 +27,57 @@ type frameRun struct {
 	count   int
 }
 
-// videoSource is what an EnvSource holds of a video: the probe, which Open
-// makes, and the samples, which the first encode decodes.
+// videoSource is what a frameSource holds of a video: the probe and the
+// samples, which the encode decodes.
 type videoSource struct {
 	dec  decoder
 	path string
 	info videoInfo
 	run  *frameRun
-	// times are the sample times: those Open chose until the samples are
-	// decoded, then the time of each sample.
+	// times are the sample times asked for until the samples are decoded, then
+	// the time of each sample.
 	times []int64
 	// plan is how the decoded samples are sized; set once decoded.
 	plan    videoPlan
 	decoded bool
 }
 
-// hintError is a hint that does not apply to a video. It is returned only
-// once the probe has found a video.
-type hintError struct{ msg string }
-
-func (e hintError) Error() string { return e.msg }
-
-// openVideo is open for a video: it probes it and chooses the sample times,
-// and decodes nothing, since the size to decode at depends on the targets of
-// the encode.
-func (e Env) openVideo(ctx context.Context, req openRequest) (*EnvSource, error) {
-	info, err := e.probeChecked(ctx, req.dec, req.path)
-	if err != nil {
-		return nil, err
-	}
-	return e.videoFromProbe(req, info)
-}
-
-// videoFromProbe is openVideo given the probe of the video.
-func (e Env) videoFromProbe(req openRequest, info videoInfo) (*EnvSource, error) {
-	h := req.hints
-	var err error
-	switch {
-	case h.Frames < 0:
-		return nil, hintError{fmt.Sprintf("frames %d is negative", h.Frames)}
-	case h.Frames > maxMaxFrames:
-		return nil, hintError{fmt.Sprintf("frames %d is above %d samples of a video", h.Frames, maxMaxFrames)}
-	case h.Still:
-		return nil, hintError{"hint Still does not apply to a video"}
-	case h.Orientation != 0:
-		return nil, hintError{"hint Orientation does not apply to a video"}
-	}
+// videoFromProbe makes the source of the samples the request names of a video
+// with the given probe. It decodes nothing, since the size to decode at depends
+// on the targets of the encode.
+func (e toolEnv) videoFromProbe(req openRequest, info videoInfo) (*frameSource, error) {
 	v := &videoSource{dec: req.dec, path: req.path, info: info, run: req.video.run}
-	switch {
-	case v.run != nil:
+	var err error
+	if v.run != nil {
 		err = checkSeekTime(info, v.run.startMS)
-	case req.video.times != nil:
+	} else {
 		v.times, err = req.video.times(info)
-	default:
-		v.times = sampleTimesMS(info, cmp.Or(h.Frames, maxVideoSampleFrames))
 	}
 	if err != nil {
 		return nil, err
 	}
-	s := &EnvSource{env: e, route: routeVideo, video: v}
+	s := &frameSource{env: e, route: routeVideo, video: v, dir: req.scratch}
 	s.layout.uw, s.layout.uh = info.upright()
 	s.layout.cw, s.layout.ch = info.width, info.height
 	s.upright = [2]int{s.layout.uw, s.layout.uh}
 	s.setSamples(len(v.times))
-	if s.dir, s.cleanup, err = e.scratchFor(req); err != nil {
-		return nil, err
-	}
 	return s, nil
 }
 
 // setSamples makes the source hold n samples, numbered from 0.
-func (s *EnvSource) setSamples(n int) {
+func (s *frameSource) setSamples(n int) {
 	s.selected = make([]int, n)
-	s.layout.infos = make([]FrameInfo, n)
+	s.layout.infos = make([]frameInfo, n)
 	for i := range n {
 		s.selected[i] = i
-		s.layout.infos[i] = FrameInfo{delayCS: videoFrameDelayCS}
+		s.layout.infos[i] = frameInfo{delayCS: videoFrameDelayCS}
 	}
 }
 
 // decodeVideo samples the video at the size the encodes of encs need, unless
 // the samples already decoded serve them. A source decoded for a smaller
-// target is decoded again. A failed decode leaves no samples and keeps the
-// times the source held before it, those Open chose or the last decode
-// found, so that the encode can be retried.
-func (s *EnvSource) decodeVideo(ctx context.Context, r region, encs []encoding) error {
+// target is decoded again. A failed decode leaves no samples.
+func (s *frameSource) decodeVideo(ctx context.Context, r region, encs []encoding) error {
 	v := s.video
 	w, h := v.info.upright()
 	decode, best := encs[0], 0

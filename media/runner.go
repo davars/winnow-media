@@ -42,25 +42,30 @@ type toolResult struct {
 // delivered. Cancelling ctx kills the process and everything it started.
 type runner func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error)
 
-// runTool runs one tool through the Processor's runner.
-func (p *Processor) runTool(ctx context.Context, name string, args ...string) (Result, error) {
+// toolRun runs one tool by name to completion, with in, when not nil, as its
+// input descriptor.
+type toolRun func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error)
+
+// runTool runs one tool through the Processor's runner, with in, when not nil,
+// as its input descriptor.
+func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 	path, ok := p.tools[name]
 	if !ok {
-		return Result{}, fmt.Errorf("unknown tool %q", name)
+		return runResult{}, fmt.Errorf("unknown tool %q", name)
 	}
-	if err := requireInput(inputOf(ctx), args); err != nil {
-		return Result{}, err
+	if err := requireInput(in, args); err != nil {
+		return runResult{}, err
 	}
 	tmp, err := p.runTempDir()
 	if err != nil {
-		return Result{}, err
+		return runResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	var stdout bytes.Buffer
 	var stderr headTailBuffer
-	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir, Input: inputOf(ctx)}, &stdout, &stderr)
+	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir, Input: in}, &stdout, &stderr)
 	tail := bytes.TrimSpace(stderr.bytes())
-	return Result{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
+	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
 }
 
 // runError turns the outcome of one run into an error, or nil.
@@ -83,11 +88,11 @@ func runError(ctx context.Context, name string, res toolResult, err error, tail 
 // composeFrames runs a frame compositor through the Processor's runner, under
 // the same limits as any tool: the GIF compositor, which is this executable
 // started again with compositorEnv set, or the external tool the request
-// names. onFrame is called, in order, with the path of each frame as the
-// compositor finishes it; if it fails the compositor is stopped and its error
-// returned. The usage returned covers the compositor.
-func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
-	if err := requireInput(inputOf(ctx), req.args()); err != nil {
+// names; in is its input, when not nil. onFrame is called, in order, with the
+// path of each frame as the compositor finishes it; if it fails the compositor
+// is stopped and its error returned. The usage returned covers the compositor.
+func (p *Processor) composeFrames(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+	if err := requireInput(in, req.args()); err != nil {
 		return nil, err
 	}
 	tmp, err := p.runTempDir()
@@ -95,7 +100,7 @@ func (p *Processor) composeFrames(ctx context.Context, req composeRequest, onFra
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
-	spec := runSpec{Args: req.args(), Dir: p.dir, Input: inputOf(ctx)}
+	spec := runSpec{Args: req.args(), Dir: p.dir, Input: in}
 	name := "gif compositor"
 	if req.external != "" {
 		path, ok := p.tools[req.external]

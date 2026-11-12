@@ -2,7 +2,6 @@ package media
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,11 +32,8 @@ func policyValue(t *testing.T, rules []policyRule, name string) string {
 	return ""
 }
 
-func TestHighMemoryIsTheZeroValueAndTheDefaultFlags(t *testing.T) {
+func TestDefaultResourcesGiveTheDefaultFlags(t *testing.T) {
 	t.Parallel()
-	if HighMemory != MemoryProfile(0) {
-		t.Fatal("HighMemory is not the zero value")
-	}
 	want := []string{
 		"-limit", "memory", "1GiB",
 		"-limit", "map", "2GiB",
@@ -45,21 +41,18 @@ func TestHighMemoryIsTheZeroValueAndTheDefaultFlags(t *testing.T) {
 		"-limit", "list-length", "2048",
 		"-limit", "time", "300",
 	}
-	if got := LimitArgs(); !slices.Equal(got, want) {
-		t.Errorf("LimitArgs() = %q, want %q", got, want)
-	}
-	if got := HighMemory.LimitArgs(); !slices.Equal(got, want) {
-		t.Errorf("HighMemory.LimitArgs() = %q, want %q", got, want)
+	if got := defaultResources().limitArgs(); !slices.Equal(got, want) {
+		t.Errorf("limitArgs() = %q, want %q", got, want)
 	}
 }
 
-func TestLowMemoryFlagsAndPolicyAgree(t *testing.T) {
+// lowMemory is Resources for a memory-limited container.
+func lowMemory() Resources { return Resources{Memory: 512 << 20, Map: 1 << 30}.withDefaults() }
+
+func TestResourceFlagsAndPolicyAgree(t *testing.T) {
 	t.Parallel()
-	flags := LowMemory.LimitArgs()
-	r, err := LowMemory.resources()
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := lowMemory()
+	flags := r.limitArgs()
 	rules := processorPolicy(r, Types())
 	for name, want := range map[string]string{"memory": "512MiB", "map": "1GiB"} {
 		if got := flagValue(t, flags, name); got != want {
@@ -69,17 +62,17 @@ func TestLowMemoryFlagsAndPolicyAgree(t *testing.T) {
 			t.Errorf("policy %s = %s, want %s", name, got, want)
 		}
 	}
-	// Everything else is the same under both profiles.
-	high := LimitArgs()
+	// Everything else is the same under both.
+	high := defaultResources().limitArgs()
 	for _, name := range []string{"area", "list-length", "time"} {
 		if flagValue(t, flags, name) != flagValue(t, high, name) {
-			t.Errorf("flag %s differs between profiles", name)
+			t.Errorf("flag %s differs between the resources", name)
 		}
 	}
 }
 
 // assertLimited requires the magick argv that ran to carry exactly the
-// profile's limit flags, once, ahead of the rest and after a leading
+// Resources' limit flags, once, ahead of the rest and after a leading
 // "identify".
 func assertLimited(t *testing.T, argv []string, want []string) {
 	t.Helper()
@@ -101,128 +94,71 @@ func assertLimited(t *testing.T, argv []string, want []string) {
 	}
 }
 
-// Every route that runs magick passes through Env.runMagick, whatever its
+// Every route that runs magick passes through toolEnv.runMagick, whatever its
 // own arguments.
-func TestMagickRoutesCarryTheProfile(t *testing.T) {
+func TestMagickRoutesCarryTheResources(t *testing.T) {
 	t.Parallel()
 	frame := encodeFrame{input: "pam:/in"}
 	enc := webpEncoding(100)
-	routes := map[string]func(Env) error{
-		"IdentifyArtifact": func(e Env) error {
-			_, _, _, err := e.IdentifyArtifact(context.Background(), "/a.webp")
+	routes := map[string]func(toolEnv) error{
+		"identifyScenes": func(e toolEnv) error {
+			_, _, _, err := e.identifyScenes(context.Background(), "/a.webp")
 			return err
 		},
-		"identifyHeaders": func(e Env) error {
+		"identifyHeaders": func(e toolEnv) error {
 			_, err := identifyHeaders(context.Background(), e, "png:/a", true)
 			return err
 		},
-		"identifyHeaders full": func(e Env) error {
+		"identifyHeaders full": func(e toolEnv) error {
 			_, err := identifyHeaders(context.Background(), e, "png:/a", false)
 			return err
 		},
-		"RunMagickWithCoderFallback": func(e Env) error {
-			_, err := e.RunMagickWithCoderFallback(context.Background(), "image/png",
-				func(string) []string { return []string{"a.png", "-resize", "1x1", "info:"} })
-			return err
-		},
-		"RunMagickWithCoderFallback identify": func(e Env) error {
-			_, err := e.RunMagickWithCoderFallback(context.Background(), "image/png",
-				func(string) []string { return []string{"identify", "-ping", "a.png"} })
-			return err
-		},
-		"RunMagickWithCoderFallback retry": func(e Env) error {
-			_, err := e.RunMagickWithCoderFallback(context.Background(), "image/x-tga",
-				func(coder string) []string { return []string{coder + ":a.tga", "info:"} })
-			return err
-		},
-		"runEncode": func(e Env) error {
+		"runEncode": func(e toolEnv) error {
 			_, err := e.runEncode(context.Background(),
 				encodeArgs([]encodeFrame{frame}, encodeSource{}, enc, encodeOutput{kind: outputStill, path: "/o.webp"}), encodeCheck{})
 			return err
 		},
-		"runEncode fused": func(e Env) error {
+		"runEncode fused": func(e toolEnv) error {
 			_, err := e.runEncode(context.Background(),
 				fusedArgs(nil, encodeSource{}, []fusedTarget{{frame: frame, enc: enc, path: "/o.webp"}}), encodeCheck{})
 			return err
 		},
 	}
 	for name, route := range routes {
-		for _, profile := range []MemoryProfile{HighMemory, LowMemory} {
-			t.Run(name+"/"+profile.String(), func(t *testing.T) {
+		for pname, res := range map[string]Resources{"default": defaultResources(), "low memory": lowMemory()} {
+			t.Run(name+"/"+pname, func(t *testing.T) {
 				var ran [][]string
-				retry := strings.HasSuffix(name, "retry")
-				env := Env{Memory: profile, Run: func(_ context.Context, tool string, args ...string) (Result, error) {
+				env := toolEnv{resources: res, caps: measuredCaps, run: func(_ context.Context, tool string, args ...string) (runResult, error) {
 					if tool != "magick" {
 						t.Errorf("ran %s", tool)
 					}
 					ran = append(ran, args)
-					if retry && len(ran) == 1 {
-						return Result{}, errors.New("first attempt fails")
-					}
-					return Result{Stdout: []byte("1 8 8\n")}, nil
+					return runResult{Stdout: []byte("1 8 8\n")}, nil
 				}}
 				_ = route(env) // the fake output need not parse
 				if len(ran) == 0 {
 					t.Fatal("no magick run")
 				}
-				if retry && len(ran) != 2 {
-					t.Fatalf("%d runs, want the attempt and its retry", len(ran))
-				}
 				for _, argv := range ran {
 					if strings.Contains(strings.ToLower(name), "identify") && argv[0] != "identify" {
 						t.Errorf("argv %q does not start with the identify subcommand", argv)
 					}
-					assertLimited(t, argv, profile.LimitArgs())
+					assertLimited(t, argv, res.limitArgs())
 				}
 			})
 		}
 	}
 }
 
-func TestUnknownMemoryProfileIsRefused(t *testing.T) {
-	t.Parallel()
-	bad := MemoryProfile(99)
-	if bad.Valid() || !HighMemory.Valid() || !LowMemory.Valid() {
-		t.Error("Valid is wrong")
-	}
-	if _, err := bad.resources(); err == nil {
-		t.Error("resources accepted an unknown profile")
-	}
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("LimitArgs did not panic on an unknown profile")
-			}
-		}()
-		bad.LimitArgs()
-	}()
-	env := Env{Memory: bad, Run: func(context.Context, string, ...string) (Result, error) {
-		t.Error("tool ran under an unknown profile")
-		return Result{}, nil
-	}}
-	if _, _, _, err := env.IdentifyArtifact(context.Background(), "/a.webp"); err == nil {
-		t.Error("IdentifyArtifact accepted an unknown profile")
-	}
-	if _, err := identifyHeaders(context.Background(), env, "png:/a", true); err == nil {
-		t.Error("identifyHeaders accepted an unknown profile")
-	}
-	if _, err := env.runEncode(context.Background(), nil, encodeCheck{}); err == nil {
-		t.Error("runEncode accepted an unknown profile")
-	}
-}
-
 func TestProcessorInstallsTheResources(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		profile       MemoryProfile
+		name          string
+		resources     Resources
 		memory, mapLm string
-	}{{HighMemory, "1GiB", "2GiB"}, {LowMemory, "512MiB", "1GiB"}} {
-		t.Run(c.profile.String(), func(t *testing.T) {
-			r, err := c.profile.resources()
-			if err != nil {
-				t.Fatal(err)
-			}
-			p := requireProcessorWith(t, Config{Resources: r})
+	}{{"default", defaultResources(), "1GiB", "2GiB"}, {"low memory", lowMemory(), "512MiB", "1GiB"}} {
+		t.Run(c.name, func(t *testing.T) {
+			p := requireProcessorWith(t, Config{Resources: c.resources})
 			data, err := os.ReadFile(filepath.Join(p.dir, "policy.xml"))
 			if err != nil {
 				t.Fatal(err)
@@ -232,7 +168,7 @@ func TestProcessorInstallsTheResources(t *testing.T) {
 					t.Errorf("policy.xml lacks %s=%s:\n%s", name, want, data)
 				}
 			}
-			res, err := p.run(context.Background(), "magick", "-list", "resource")
+			res, err := p.run(context.Background(), nil, "magick", "-list", "resource")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -247,72 +183,77 @@ func TestProcessorInstallsTheResources(t *testing.T) {
 			var m meter
 			var ran []string
 			env := p.env(&m, nil)
-			inner := env.Run
-			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
+			inner := env.run
+			env.run = func(ctx context.Context, name string, args ...string) (runResult, error) {
 				ran = args
 				return inner(ctx, name, args...)
 			}
-			if _, _, _, err := env.IdentifyArtifact(context.Background(), filepath.Join(t.TempDir(), "none.webp")); err == nil {
+			if _, _, _, err := env.identifyScenes(context.Background(), filepath.Join(t.TempDir(), "none.webp")); err == nil {
 				t.Error("identify of a missing file succeeded")
 			}
-			assertLimited(t, ran, c.profile.LimitArgs())
+			assertLimited(t, ran, c.resources.limitArgs())
 		})
 	}
 }
 
-// Every magick run of an EnvSource, whichever encode path it takes, carries the
-// Env's profile.
-func TestSourceRunsCarryTheProfile(t *testing.T) {
+// Every magick run of a Source, whichever encode path it takes, carries the
+// Processor's Resources.
+func TestSourceRunsCarryTheResources(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
-	env, calls := sourceEnv(t)
-	env.Memory = LowMemory
+	p := requireProcessorWith(t, Config{Resources: lowMemory()})
+	rec := record(p)
 	dir := t.TempDir()
 	png := filepath.Join(dir, "x.png")
-	magick(t, env, "-size", "16x16", "xc:red", png)
+	magick(t, requireMagick(t), "-size", "16x16", "xc:red", png)
 	gif := filepath.Join(dir, "x.gif")
 	if err := os.WriteFile(gif, oneColourGIF(t, 8, 8, 3), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	enc := Encoding{Format: WebP, Quality: 80, MaxEdge: 16, MaxArea: 256}
 	other := Encoding{Format: WebP, Quality: 80, MaxEdge: 32, MaxArea: 1024}
+	animated := enc
+	animated.Animate = true
 	for name, c := range map[string]struct {
 		path    string
 		targets []Encoding
 	}{
 		"still, two targets (fused)": {png, []Encoding{enc, other}},
-		"animation":                  {gif, []Encoding{enc}},
+		"animation":                  {gif, []Encoding{animated}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			before := len(calls())
-			src := openSource(t, env, c.path, Hints{})
-			if _, err := src.Encode(context.Background(), 0, c.targets...); err != nil {
+			before := rec.count()
+			src := openSourceOn(t, p, c.path, OpenOptions{})
+			if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{}, c.targets...); err != nil {
 				t.Fatal(err)
 			}
+			rec.mu.Lock()
+			calls := slices.Clone(rec.calls[before:])
+			rec.mu.Unlock()
 			ran := 0
-			for _, call := range calls()[before:] {
+			for _, call := range calls {
 				if call[0] != "magick" {
 					continue
 				}
 				ran++
 				if flagValue(t, call, "memory") != "512MiB" || flagValue(t, call, "map") != "1GiB" {
-					t.Errorf("run %q lacks the LowMemory limits", call)
+					t.Errorf("run %q lacks the low-memory limits", call)
 				}
 			}
-			if ran < 2 {
+			if ran < 1 {
 				t.Errorf("only %d magick runs", ran)
 			}
 		})
 	}
 }
 
-func TestProcessorVideoRunsCarryTheProfile(t *testing.T) {
+func TestProcessorVideoRunsCarryTheResources(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
 	src := sdrClip(t, requireFFmpeg(t), "160x120", 10, 4)
 	p := requireProcessorWith(t, Config{Resources: Resources{Memory: 512 << 20, Map: 1 << 30}})
 	rec := record(p)
-	if _, _, err := p.VideoFrames(context.Background(), src, Encoding{}, 4, t.TempDir()); err != nil {
+	if _, _, err := p.encodeEven(context.Background(), src, Encoding{}, 4, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	ran := 0
@@ -322,7 +263,7 @@ func TestProcessorVideoRunsCarryTheProfile(t *testing.T) {
 		}
 		ran++
 		if flagValue(t, call, "memory") != "512MiB" || flagValue(t, call, "map") != "1GiB" {
-			t.Errorf("run %q lacks the LowMemory limits", call)
+			t.Errorf("run %q lacks the low-memory limits", call)
 		}
 	}
 	if ran == 0 {

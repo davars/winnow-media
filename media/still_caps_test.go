@@ -12,31 +12,20 @@ import (
 	"testing"
 )
 
-// stillCapPaths are the two ways an Env opens a still, as a function of the
-// file, its ImageMagick coder and the target's MaxEdge: as Env.Open does, and
-// as the Processor's operations do, with the caps flag set. The Processor's
-// own sandbox admits a still only as HEIC or HEIF (TestProcessorStillCapsOnHEIC),
-// so the other types cannot go through it.
+// stillCapPaths are the ways a Processor under the measured caps opens a still,
+// as a function of the file, its ImageMagick coder and the target's MaxEdge.
 func stillCapPaths(t *testing.T) map[string]func(path, coder string, maxEdge int) error {
 	t.Helper()
-	run := func(caps bool) func(string, string, int) error {
-		return func(path, coder string, maxEdge int) error {
-			env, _ := sourceEnv(t)
-			src, err := env.open(context.Background(), openRequest{
-				path: path, dec: decoder{"magick", coder}, pinned: true, caps: caps, hints: Hints{Still: true},
-			})
-			if err != nil {
-				return err
-			}
-			defer src.Close()
-			out, err := src.Encode(context.Background(), 0, stillTarget(maxEdge))
-			if err == nil {
-				out[0].Cleanup()
-			}
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
+	return map[string]func(string, string, int) error{"processor": func(path, coder string, maxEdge int) error {
+		src, _, err := p.Open(context.Background(), path, OpenOptions{Type: map[string]string{"jpeg": "image/jpeg", "png": "image/png"}[coder]})
+		if err != nil {
 			return err
 		}
-	}
-	return map[string]func(string, string, int) error{"env": run(false), "caps requested": run(true)}
+		defer func() { _ = src.Close() }()
+		_, _, err = src.Encode(context.Background(), t.TempDir(), Select{}, stillTarget(maxEdge))
+		return err
+	}}
 }
 
 func stillTarget(maxEdge int) Encoding {
@@ -78,14 +67,14 @@ func TestStillCapsJudgeTheReducedJPEG(t *testing.T) {
 // The error names the reduced and the stored size.
 func TestStillCapRefusalNamesBothSizes(t *testing.T) {
 	t.Parallel()
-	s := &EnvSource{jpeg: true, reduce: true, stored: [2]int{10000, 7308}, upright: [2]int{10000, 7308}}
+	s := &frameSource{jpeg: true, stored: [2]int{10000, 7308}, upright: [2]int{10000, 7308}}
 	// A target of 9000 reduces by nothing: 8*2*9000/10000 rounds above 8.
-	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 9000, maxArea: 81_000_000}}), envCaps)
+	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 9000, maxArea: 81_000_000}}), measuredCaps)
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "10000x7308") {
 		t.Fatalf("err = %v", err)
 	}
-	big := &EnvSource{jpeg: true, reduce: true, stored: [2]int{20000, 16000}, upright: [2]int{20000, 16000}}
-	err = checkStillSize(big.stored, big.decodedSize([]encoding{{maxEdge: 5000, maxArea: 25_000_000}}), envCaps)
+	big := &frameSource{jpeg: true, stored: [2]int{20000, 16000}, upright: [2]int{20000, 16000}}
+	err = checkStillSize(big.stored, big.decodedSize([]encoding{{maxEdge: 5000, maxArea: 25_000_000}}), measuredCaps)
 	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "stored 20000x16000") {
 		t.Fatalf("err = %v, want both sizes", err)
 	}
@@ -107,8 +96,8 @@ func TestStillSideCapAppliesAfterReduction(t *testing.T) {
 		})
 	}
 	// Reduced, but still over the side cap.
-	s := &EnvSource{jpeg: true, reduce: true, stored: [2]int{60000, 100}, upright: [2]int{60000, 100}}
-	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 20000, maxArea: 1 << 40}}), envCaps)
+	s := &frameSource{jpeg: true, stored: [2]int{60000, 100}, upright: [2]int{60000, 100}}
+	err := checkStillSize(s.stored, s.decodedSize([]encoding{{maxEdge: 20000, maxArea: 1 << 40}}), measuredCaps)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -138,7 +127,7 @@ func TestStillCapsOnNonReducibleFormats(t *testing.T) {
 // the size its header declares and admits one at the cap.
 func TestProcessorStillCapsOnHEIC(t *testing.T) {
 	t.Parallel()
-	p := requireProcessorWith(t, Config{Caps: envTestCaps})
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	original, err := os.ReadFile(filepath.Join("testdata", "heic", "gradient-righttop.heic"))
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +146,7 @@ func TestProcessorStillCapsOnHEIC(t *testing.T) {
 			if n := setHEICExtents(t, data, c.w, c.h); n == 0 {
 				t.Fatal("no ispe box in the fixture")
 			}
-			_, _, err := p.Still(context.Background(), writeFile(t, "in.heic", data), Encoding{}, t.TempDir())
+			_, _, err := p.encodeFirst(context.Background(), writeFile(t, "in.heic", data), Encoding{}, t.TempDir())
 			if c.refused != errors.Is(err, ErrTooLarge) || (!c.refused && err != nil) {
 				t.Fatalf("err = %v, want ErrTooLarge = %v and no other error", err, c.refused)
 			}
@@ -173,7 +162,7 @@ func TestDecodedSizeIsWhatTheHintDecodes(t *testing.T) {
 	for _, sz := range [][2]int{{6000, 4000}, {4001, 3001}, {8064, 6048}, {3000, 9001}} {
 		path := flatImage(t, "x.jpg", sz[0], sz[1], "-quality", "50")
 		for _, edge := range []int{256, 600, 1024, 2048} {
-			s := &EnvSource{jpeg: true, reduce: true, stored: sz, upright: sz}
+			s := &frameSource{jpeg: true, stored: sz, upright: sz}
 			encs := []encoding{{maxEdge: edge, maxArea: edge * edge}}
 			ops, _ := s.reduction(encs)
 			if ops == nil {
@@ -204,13 +193,11 @@ func TestDecodedSizeIsWhatTheHintDecodes(t *testing.T) {
 func TestUnreducibleStillIsCappedBeforeTheProfileRead(t *testing.T) {
 	t.Parallel()
 	var runs int
-	env := Env{Run: func(context.Context, string, ...string) (Result, error) {
+	env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
 		runs++
-		return Result{Stdout: []byte("0||10000|6000|0|0|JXL|Undefined|DirectClass sRGB|False|END\n")}, nil
+		return runResult{Stdout: []byte("0||10000|6000|0|0|JXL|Undefined|DirectClass sRGB|False|END\n")}, nil
 	}}
-	_, err := env.readSource(context.Background(), openRequest{
-		path: "x", dec: decoder{"magick", "jxl"}, pinned: true, hints: Hints{Still: true},
-	})
+	_, err := env.readSource(context.Background(), openRequest{path: "x", dec: decoder{"magick", "jxl"}})
 	if !errors.Is(err, ErrTooLarge) || runs != 1 {
 		t.Fatalf("err = %v after %d runs, want ErrTooLarge after the header read", err, runs)
 	}
@@ -221,14 +208,8 @@ func TestUnreducibleStillIsCappedBeforeTheProfileRead(t *testing.T) {
 func TestStillCapLargestTargetDecides(t *testing.T) {
 	t.Parallel()
 	path := flatImage(t, "big.jpg", 7308, 10000, "-quality", "50")
-	env, _ := sourceEnv(t)
-	src := openSource(t, env, path, Hints{Still: true})
-	out, err := src.Encode(context.Background(), 0, stillTarget(256), stillTarget(16384))
-	if err == nil {
-		for _, a := range out {
-			a.Cleanup()
-		}
-	}
+	src := openSourceOn(t, requireProcessorWith(t, Config{Caps: measuredCapsConfig}), path, OpenOptions{})
+	_, _, err := src.Encode(context.Background(), t.TempDir(), Select{}, stillTarget(256), stillTarget(16384))
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -238,13 +219,10 @@ func TestStillCapLargestTargetDecides(t *testing.T) {
 func TestStillCapAtSevenEighths(t *testing.T) {
 	t.Parallel()
 	path := flatImage(t, "big.jpg", 7308, 10000, "-quality", "50")
-	env, _ := sourceEnv(t)
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
 	for edge, refused := range map[int]bool{3750: false, 3751: true, 4375: true} {
-		src := openSource(t, env, path, Hints{Still: true})
-		out, err := src.Encode(context.Background(), 0, stillTarget(edge))
-		if err == nil {
-			out[0].Cleanup()
-		}
+		src := openSourceOn(t, p, path, OpenOptions{})
+		_, _, err := src.Encode(context.Background(), t.TempDir(), Select{}, stillTarget(edge))
 		if got := errors.Is(err, ErrTooLarge); got != refused || (!refused && err != nil) {
 			t.Errorf("target %d: err = %v, want ErrTooLarge = %v", edge, err, refused)
 		}
@@ -274,25 +252,20 @@ func losslessJPEG(t *testing.T, w, h int) string {
 func TestStillCapLosslessJPEG(t *testing.T) {
 	t.Parallel()
 	over := losslessJPEG(t, 10000, 6000)
-	env, _ := sourceEnv(t)
-	src := openSource(t, env, over, Hints{Still: true})
-	out, err := src.Encode(context.Background(), 0, stillTarget(256))
-	if err == nil {
-		out[0].Cleanup()
-	}
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
+	src := openSourceOn(t, p, over, OpenOptions{})
+	_, _, err := src.Encode(context.Background(), t.TempDir(), Select{}, stillTarget(256))
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("60 MP lossless JPEG at 256: err = %v, want ErrTooLarge", err)
 	}
 
 	under := losslessJPEG(t, 4001, 3001)
-	env, calls := sourceEnv(t)
-	src = openSource(t, env, under, Hints{Still: true})
-	out, err = src.Encode(context.Background(), 0, stillTarget(256))
-	if err != nil {
+	rec := record(p)
+	src = openSourceOn(t, p, under, OpenOptions{})
+	if _, _, err = src.Encode(context.Background(), t.TempDir(), Select{}, stillTarget(256)); err != nil {
 		t.Fatalf("lossless JPEG under the cap: %v", err)
 	}
-	out[0].Cleanup()
-	for _, c := range calls() {
+	for _, c := range rec.calls {
 		if slices.Contains(c, "-define") && slices.Contains(c, "jpeg:size=1001x751") && !slices.Contains(c, "identify") {
 			t.Errorf("the encode used the hint: %q", c)
 		}
@@ -335,8 +308,12 @@ func TestPingedDecodeSizeAgreesWithDecodedSize(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(dir, name+".jpg")
 			build(path)
-			env, _ := sourceEnv(t)
-			src := openSource(t, env, path, Hints{Still: true})
+			p := requireProcessor(t)
+			opened := openSourceOn(t, p, path, OpenOptions{})
+			src, err := opened.stillAt(context.Background(), p.env(&meter{}, opened.file), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, edge := range []int{256, 1024} {
 				encs := []encoding{{maxEdge: edge, maxArea: edge * edge}}
 				ops, _ := src.reduction(encs)

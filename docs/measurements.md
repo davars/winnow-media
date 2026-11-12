@@ -2,14 +2,18 @@
 
 The caps, ceilings and limits of the `media` package were set from
 measurements of the largest inputs they admit. This file records the numbers,
-how they were taken and what each justified. The constants that state them
-(`media/limits.go`, `media/sandbox_linux.go`, `media/op_video.go`) link here.
-Figures that are projections, not measurements, are marked as such.
+how they were taken and what each justified. The constants that state the
+bounds the library enforces (`media/limits.go`, `media/sandbox_linux.go`,
+`media/op_video.go`) link here. Figures that are projections, not measurements,
+are marked as such.
 
-The input size (25 MiB), frame (52 million pixels), returned (64 million) and
-decoded (900 million) pixel values below are the caps of the `Env` methods and
-a deployment's choice for `Config.Caps`; the ceilings a zero `Caps` has are in
-the `Caps` doc comment.
+The input size (25 MiB, a requirement of the deployment rather than a
+measurement), frame (52 million pixels), returned (64 million) and decoded
+(900 million) pixel values below, and 2000 frames, are a deployment's choice
+for `Config.Caps`; the library applies none of them by default, and the
+ceilings a zero `Caps` has are in the `Caps` doc comment. The tests hold the
+gate to these values through `measuredCaps` in `media/helpers_test.go`, which
+cites this file for them.
 
 ## Method
 
@@ -34,7 +38,7 @@ animation. `-list` prints the input names.
 
 Two hosts were used. The reference host is a 12-CPU x86_64 machine. The
 Raspberry Pi 5 figures come from three Raspberry Pi 5 nodes running the
-`LowMemory` limits (512 MiB memory, 1 GiB map), one request per 1536Mi pod.
+low-memory limits (512 MiB memory, 1 GiB map), one request per 1536Mi pod.
 
 ## Caps and ceilings
 
@@ -47,11 +51,14 @@ On the reference host, with `measure`:
 - A 48 MP HEIC takes 8 s and 0.9 GiB.
 - The limit of 64 samples per call is the largest count the caps were
   measured with. A caller with a time budget chooses a smaller count from the
-  fields of `ProbeVideo`.
+  fields of `Source.Info`.
 
 On the three Raspberry Pi 5 nodes, the still values (a side of 16384 and 52
 million pixels):
 
+- 52 million pixels sits just above the largest phone formats: 48 MP (8064x6048,
+  48.8 MP) and 50 MP sensors (at most 8192x6144, 50.3 MP). Every format
+  admitted at this size completes within the 1536Mi pod limit.
 - Every format passes at 52 MP with at least 34% time and 39% memory
   headroom, and a HEIC panorama at 52 MP takes about 25 s (projected from
   28.7 s at 59.6 MP).
@@ -68,8 +75,11 @@ Animations:
 - The header read holds about 62 KiB per frame: 10000 frames of a GIF peaked
   at 624 MiB in ImageMagick. This is why the frame count is capped at 2000, a
   structural bound below the policy's list length of 2048.
-- The values `maxReturnedPixels` (64 million) and `maxDecodedPixels` (900
-  million) keep an animation within a 30 s budget per call on a Raspberry Pi
+- A frame composites onto the frames before it, so every frame up to the last
+  selected is decoded, and a one-colour GIF under 25 MiB can declare tens of
+  gigapixels; decoding therefore has a bound of its own, the decoded pixels.
+- The returned (64 million) and decoded (900 million) pixel caps keep an
+  animation within a 30 s budget per call on a Raspberry Pi
   5. The worst admitted GIF, 225 frames of 2000x2000 with 16 returned (64 MP
   returned, 900 MP decoded), took 27.8 s there, and 16 frames of 2000x2000
   alone took 20.2 s. A returned megapixel costs about 0.28 s and a decoded
@@ -78,7 +88,7 @@ Animations:
 ImageMagick policy ceilings:
 
 - The memory, map and disk ceilings are those of the Processor's `Resources`
-  (1, 2 and 4 GiB by default, which `HighMemory` measured).
+  (1, 2 and 4 GiB by default, the limits of the high-memory measurements).
 - The time ceiling is at least four times the longest ImageMagick run
   measured to complete (36 s). The ffmpeg allocation limit is four times what
   an 8K frame needs (1 GiB; a 4K HDR frame needs 32 MiB, one float plane of the
@@ -135,7 +145,7 @@ The values chosen, from those peaks:
 The measured model is one request per pod:
 
 - a memory limit of 1536Mi per request in flight, with `Resources` of 512 MiB
-  memory and 1 GiB map (the `LowMemory` limits);
+  memory and 1 GiB map (the low-memory limits);
 - scratch on a disk-backed `emptyDir` (never `medium: Memory`) with a
   `sizeLimit` of about 8Gi, holding ImageMagick's temporary directory and the
   processor's scratch. ImageMagick's pixel cache is memory-mapped there, so
@@ -163,12 +173,13 @@ limit.
 
 ## Memory profiles
 
-`LowMemory` was measured on 1536Mi Raspberry Pi 5 pods. At the `HighMemory`
-limits an 80 MP image thrashed or was OOMKilled in most runs (the png8 and
-lossy WebP outputs each passed once); at the `LowMemory` limits it completed,
+The low-memory limits were measured on 1536Mi Raspberry Pi 5 pods. At the
+high-memory limits (the default `Resources`) an 80 MP image thrashed or was
+OOMKilled in most runs (the png8 and lossy WebP outputs each passed once); at
+the low-memory limits it completed,
 with every lossy format taking 20 to 27 s. Caveats: the measurement is of one
 request per pod, for a 2048 WebP output; avif stays near 1400 MiB of anonymous
-memory whatever the profile; and PNG and lossless WebP inputs took 30 to 35 s.
+memory whatever the limits; and PNG and lossless WebP inputs took 30 to 35 s.
 
 ## Decoding
 

@@ -16,8 +16,7 @@ in file names, identifiers, doc comments, the README, error text or scratch
 file names. Generic tool vocabulary (ImageMagick's `-thumbnail`) is fine.
 
 Consumers add their own context. Errors describe the operation that failed
-and carry no consumer prefix; a consumer that needs one wraps them. A
-`Stager` receives only the output extension; the consumer names the file.
+and carry no consumer prefix; a consumer that needs one wraps them.
 
 Code moving in from a consumer is renamed in the change that moves it.
 

@@ -22,7 +22,7 @@ func forbidCompositor(t *testing.T, p *Processor) {
 	t.Helper()
 	old := p.compose
 	t.Cleanup(func() { p.compose = old })
-	p.compose = func(context.Context, composeRequest, func(composedFrame) error) (*Usage, error) {
+	p.compose = func(context.Context, *os.File, composeRequest, func(composedFrame) error) (*Usage, error) {
 		t.Error("the compositor was started")
 		return nil, nil
 	}
@@ -106,7 +106,7 @@ func TestScanGIF(t *testing.T) {
 }
 
 // TestBrokenGIFsFailCleanly runs GIFs the header read accepts but the
-// compositor cannot decode through AnimationFrames.
+// compositor cannot decode through an encode of evenly spaced frames.
 func TestBrokenGIFsFailCleanly(t *testing.T) {
 	t.Parallel()
 	requireMagick(t)
@@ -293,8 +293,8 @@ func TestGIFWithoutTrailerGivesTheSameFrames(t *testing.T) {
 	if data[len(data)-1] != 0x3B {
 		t.Fatal("fixture has no trailer")
 	}
-	want, _ := framesInto(t, p, full, Encoding{Format: PNG}, 0)
-	got, out := framesInto(t, p, writeFile(t, "x.gif", data[:len(data)-1]), Encoding{Format: PNG}, 0)
+	want, _ := framesInto(t, p, full, Encoding{Format: PNG}, defaultFrames)
+	got, out := framesInto(t, p, writeFile(t, "x.gif", data[:len(data)-1]), Encoding{Format: PNG}, defaultFrames)
 	if len(got) != len(want) || len(got) != 6 {
 		t.Fatalf("%d frames without the trailer, %d with, want 6", len(got), len(want))
 	}
@@ -309,7 +309,7 @@ func TestGIFWithoutTrailerGivesTheSameFrames(t *testing.T) {
 }
 
 // TestProfiledGIFsMatchImageMagick runs GIFs carrying an Adobe RGB profile
-// through AnimationFrames and compares every output pixel with the one
+// through an encode of evenly spaced frames and compares every output pixel with the one
 // ImageMagick gives for the same file: -coalesce, the sRGB conversion and the
 // resize, in one run.
 func TestProfiledGIFsMatchImageMagick(t *testing.T) {
@@ -391,7 +391,7 @@ func TestProfiledGIFsMatchImageMagick(t *testing.T) {
 					}
 					ref := t.TempDir()
 					magick(t, env, append(refArgs, "-strip", "-depth", "8", "+adjoin", filepath.Join(ref, "%03d.png"))...)
-					images, out := framesInto(t, p, path, enc, 0)
+					images, out := framesInto(t, p, path, enc, defaultFrames)
 					if len(images) != 4 {
 						t.Fatalf("%d images, want 4", len(images))
 					}
@@ -448,7 +448,7 @@ func TestProfilesThatChangeOnEveryFrameShareOneRun(t *testing.T) {
 	}
 	data := withProfiles(t, buildGIF(t, 24, 20, paletteA, frames), []int{1, 2, 1, 2, 1, 2, 0}, adobe, swappedProfile(t, adobe))
 	rec := record(p)
-	images, out := framesInto(t, p, writeFile(t, "x.gif", data), Encoding{Format: PNG}, 0)
+	images, out := framesInto(t, p, writeFile(t, "x.gif", data), Encoding{Format: PNG}, defaultFrames)
 	if len(images) != 6 {
 		t.Fatalf("%d images, want 6", len(images))
 	}
@@ -488,9 +488,9 @@ func TestProfiledGIFConvertsColours(t *testing.T) {
 		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA},
 		{rect: image.Rect(0, 0, 24, 20), disposal: 1, delay: 5, palette: paletteA, shift: 1},
 	})
-	plain, _ := framesInto(t, p, writeFile(t, "p.gif", base), Encoding{Format: PNG}, 0)
-	_, plainOut := framesInto(t, p, writeFile(t, "p.gif", base), Encoding{Format: PNG}, 0)
-	_, taggedOut := framesInto(t, p, writeFile(t, "t.gif", withICC(t, base, adobe, 0)), Encoding{Format: PNG}, 0)
+	plain, _ := framesInto(t, p, writeFile(t, "p.gif", base), Encoding{Format: PNG}, defaultFrames)
+	_, plainOut := framesInto(t, p, writeFile(t, "p.gif", base), Encoding{Format: PNG}, defaultFrames)
+	_, taggedOut := framesInto(t, p, writeFile(t, "t.gif", withICC(t, base, adobe, 0)), Encoding{Format: PNG}, defaultFrames)
 	if len(plain) != 2 {
 		t.Fatalf("%d images", len(plain))
 	}

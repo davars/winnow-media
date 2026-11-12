@@ -21,21 +21,6 @@ func TestCURFileIsReadAsIcon(t *testing.T) {
 	}
 }
 
-// runAll calls every operation of p on path and returns their errors by name.
-func runAll(t *testing.T, p *Processor, path string) map[string]error {
-	t.Helper()
-	ctx := context.Background()
-	errs := map[string]error{}
-	_, _, errs["Still"] = p.Still(ctx, path, Encoding{}, t.TempDir())
-	for name, op := range animationOps(p) {
-		_, errs[name] = op(path, t.TempDir())
-	}
-	for _, e := range videoEntries() {
-		errs[e.name] = e.call(p, path, Encoding{}, 0, t.TempDir())
-	}
-	return errs
-}
-
 func TestSniffedTypeOutsideTypesIsRefusedBeforeAnyToolRuns(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
@@ -51,10 +36,8 @@ func TestSniffedTypeOutsideTypesIsRefusedBeforeAnyToolRuns(t *testing.T) {
 		"mp4":  sdrClip(t, env, "160x120", 10, 1),
 	}
 	for name, path := range cases {
-		for op, err := range runAll(t, p, path) {
-			if !isUnsupported(err) {
-				t.Errorf("%s through %s: err = %v, want ErrUnsupportedType", name, op, err)
-			}
+		if _, _, err := p.Open(context.Background(), path, OpenOptions{}); !isUnsupported(err) {
+			t.Errorf("%s: err = %v, want ErrUnsupportedType", name, err)
 		}
 	}
 	if n := rec.count(); n != 0 {
@@ -83,10 +66,8 @@ func TestDangerousContentIsRefusedWithoutDecoding(t *testing.T) {
 			p := requireProcessor(t)
 			rec := record(p)
 			path := writeFile(t, "input", data)
-			for op, err := range runAll(t, p, path) {
-				if !isUnsupported(err) {
-					t.Errorf("%s: err = %v, want ErrUnsupportedType", op, err)
-				}
+			if _, _, err := p.Open(context.Background(), path, OpenOptions{}); !isUnsupported(err) {
+				t.Errorf("err = %v, want ErrUnsupportedType", err)
 			}
 			onlyTypeDetection(t, rec)
 		})
@@ -111,7 +92,7 @@ func TestMisleadingExtensionMakesNoDifference(t *testing.T) {
 	for _, name := range []string{"x.png", "x.svg", "x.jpg", "x.gif", "x.heic", "x"} {
 		path := writeFile(t, name, data)
 		out := t.TempDir()
-		img, _, err := p.Still(context.Background(), path, enc, out)
+		img, _, err := p.encodeFirst(context.Background(), path, enc, out)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -132,14 +113,14 @@ func TestMisleadingExtensionMakesNoDifference(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"x.tga", "x.png", "x"} {
-		_, _, err := p.Still(context.Background(), writeFile(t, name, tga), enc, t.TempDir())
+		_, _, err := p.encodeFirst(context.Background(), writeFile(t, name, tga), enc, t.TempDir())
 		if !isUnsupported(err) {
 			t.Errorf("TGA bytes named %s: err = %v, want ErrUnsupportedType", name, err)
 		}
 	}
 	// And a vector file keeps no safe name.
 	svg := writeFile(t, "x.png", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>`))
-	if _, _, err := p.Still(context.Background(), svg, enc, t.TempDir()); !isUnsupported(err) {
+	if _, _, err := p.encodeFirst(context.Background(), svg, enc, t.TempDir()); !isUnsupported(err) {
 		t.Errorf("SVG named .png: err = %v, want ErrUnsupportedType", err)
 	}
 }
@@ -152,7 +133,7 @@ func TestContentNamingADeniedCoderIsRefusedUnderThePolicy(t *testing.T) {
 			t.Parallel()
 			path := gradient(ext)(t)
 			p := requireProcessorWith(t, Config{Types: []string{"image/jpeg"}})
-			_, _, err := p.Still(context.Background(), path, Encoding{}, t.TempDir())
+			_, _, err := p.encodeFirst(context.Background(), path, Encoding{}, t.TempDir())
 			if !isUnsupported(err) {
 				t.Fatalf("err = %v, want ErrUnsupportedType", err)
 			}
@@ -160,29 +141,27 @@ func TestContentNamingADeniedCoderIsRefusedUnderThePolicy(t *testing.T) {
 				t.Errorf("err = %v, want ImageMagick's refusal under the policy", err)
 			}
 			allowed := requireProcessorWith(t, Config{Types: []string{typ}})
-			if _, _, err := allowed.Still(context.Background(), path, Encoding{}, t.TempDir()); err != nil {
+			if _, _, err := allowed.encodeFirst(context.Background(), path, Encoding{}, t.TempDir()); err != nil {
 				t.Errorf("with Types naming %s: %v", typ, err)
 			}
 		})
 	}
 }
 
-func TestStillAcceptsOnlyConfiguredStillTypes(t *testing.T) {
+func TestOpenAcceptsOnlyConfiguredTypes(t *testing.T) {
 	t.Parallel()
 	p := requireProcessorWith(t, Config{Types: []string{"image/png", "image/gif"}})
 	ctx := context.Background()
-	png, gif := gradient(".png")(t), writeGIF(t, solid, 3)
-	if _, _, err := p.Still(ctx, png, Encoding{}, t.TempDir()); err != nil {
-		t.Errorf("Still of PNG: %v", err)
+	for _, path := range []string{gradient(".png")(t), writeGIF(t, solid, 3)} {
+		src, _, err := p.Open(ctx, path, OpenOptions{})
+		if err != nil {
+			t.Errorf("Open of a configured type: %v", err)
+			continue
+		}
+		_ = src.Close()
 	}
-	if _, _, err := p.Still(ctx, gif, Encoding{}, t.TempDir()); !isUnsupported(err) {
-		t.Errorf("Still of GIF: err = %v, want ErrUnsupportedType (animation type)", err)
-	}
-	if _, _, err := p.AnimationFrames(ctx, png, Encoding{}, 0, t.TempDir()); !isUnsupported(err) {
-		t.Errorf("AnimationFrames of PNG: err = %v, want ErrUnsupportedType (still type)", err)
-	}
-	if _, _, err := p.AnimationFrames(ctx, gif, Encoding{}, 0, t.TempDir()); err != nil {
-		t.Errorf("AnimationFrames of GIF: %v", err)
+	if _, _, err := p.Open(ctx, gradient(".jpg")(t), OpenOptions{}); !isUnsupported(err) {
+		t.Errorf("Open of JPEG: err = %v, want ErrUnsupportedType", err)
 	}
 }
 
@@ -190,10 +169,10 @@ func TestNeutralLinkIsRemoved(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	png := gradient(".png")(t)
-	if _, _, err := p.Still(context.Background(), png, Encoding{}, t.TempDir()); err != nil {
+	if _, _, err := p.encodeFirst(context.Background(), png, Encoding{}, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := p.Still(context.Background(), writeFile(t, "x", []byte("text")), Encoding{}, t.TempDir()); err == nil {
+	if _, _, err := p.encodeFirst(context.Background(), writeFile(t, "x", []byte("text")), Encoding{}, t.TempDir()); err == nil {
 		t.Fatal("text was read")
 	}
 	entries, err := os.ReadDir(p.tmpDir())
@@ -271,7 +250,7 @@ func TestCapsAreEnforcedAtTheirLimit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	animation := func(p *Processor, path, dir string) error {
-		_, _, err := p.AnimationFrames(ctx, path, Encoding{}, 0, dir)
+		_, _, err := p.encodeEven(ctx, path, Encoding{}, 16, dir)
 		return err
 	}
 	cases := []capCase{
@@ -290,7 +269,7 @@ func TestCapsAreEnforcedAtTheirLimit(t *testing.T) {
 			"MaxFramePixels still", func(t *testing.T) (string, int64) { return gradient(".png")(t), 32 * 24 },
 			func(c *Caps, n int64) { c.MaxFramePixels = n },
 			func(p *Processor, path, dir string) error {
-				_, _, err := p.Still(ctx, path, Encoding{}, dir)
+				_, _, err := p.encodeFirst(ctx, path, Encoding{}, dir)
 				return err
 			},
 		},
@@ -354,7 +333,7 @@ func TestFourThreadOutputIsIdenticalRunAfterRun(t *testing.T) {
 			var first []byte
 			for run := range 4 {
 				out := t.TempDir()
-				img, _, err := p.Still(context.Background(), path, enc, out)
+				img, _, err := p.encodeFirst(context.Background(), path, enc, out)
 				if err != nil {
 					t.Fatalf("%s %s run %d: %v", name, format, run, err)
 				}
@@ -378,7 +357,7 @@ func TestBigTIFFIsReadAsTIFF(t *testing.T) {
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "big.tiff")
 	magick(t, requireMagick(t), "-size", "32x24", "gradient:red-blue", "tiff64:"+path)
-	img, _, err := p.Still(context.Background(), path, Encoding{Format: PNG}, t.TempDir())
+	img, _, err := p.encodeFirst(context.Background(), path, Encoding{Format: PNG}, t.TempDir())
 	if err != nil || img.Width != 32 || img.Height != 24 {
 		t.Errorf("BigTIFF: %+v, %v", img, err)
 	}
@@ -403,7 +382,7 @@ func TestISOBaseMediaTypesAreNamedTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	copy(data[8:12], "avif")
-	img, _, err := p.Still(context.Background(), writeFile(t, "input", data), Encoding{Format: PNG}, t.TempDir())
+	img, _, err := p.encodeFirst(context.Background(), writeFile(t, "input", data), Encoding{Format: PNG}, t.TempDir())
 	if err != nil || img.Width != 64 {
 		t.Errorf("HEVC items under an avif brand: %+v, %v", img, err)
 	}
@@ -457,49 +436,9 @@ func TestReducedResolutionTIFFIsNotDecodedAsTheImage(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	path := writeFile(t, "raw", reducedTIFF())
-	img, _, err := p.Still(context.Background(), path, Encoding{Format: PNG}, t.TempDir())
+	img, _, err := p.encodeFirst(context.Background(), path, Encoding{Format: PNG}, t.TempDir())
 	if !isUnsupported(err) {
 		t.Errorf("decoded the reduced-resolution directory as %dx%d, err = %v; want ErrUnsupportedType", img.Width, img.Height, err)
-	}
-}
-
-// Still refuses an animated WebP; the route is known from the bytes, so no
-// frame may be composited before the refusal.
-func TestStillRefusesAnimatedWebPBeforeDecodingAFrame(t *testing.T) {
-	t.Parallel()
-	p := requireProcessor(t)
-	forbidCompositor(t, p)
-	path := buildWebP(t, webpCase{codec: "lossless", frames: 3})
-	if _, _, err := p.Still(context.Background(), path, Encoding{Format: PNG}, t.TempDir()); !isUnsupported(err) {
-		t.Errorf("err = %v, want ErrUnsupportedType", err)
-	}
-}
-
-// Every animation and video type is named by its leading bytes, so content
-// they do not name can be no type an animation or video operation reads, and
-// is refused without ImageMagick parsing it.
-func TestUnnamedContentGivenToAnimationOrVideoRunsNoTool(t *testing.T) {
-	t.Parallel()
-	p := requireProcessor(t)
-	rec := record(p)
-	cases := map[string]string{
-		"png":     gradient(".png")(t),
-		"garbage": writeFile(t, "input", []byte("x")),
-	}
-	for name, path := range cases {
-		for op, call := range animationOps(p) {
-			if _, err := call(path, t.TempDir()); !isUnsupported(err) {
-				t.Errorf("%s through %s: err = %v, want ErrUnsupportedType", name, op, err)
-			}
-		}
-		for _, e := range videoEntries() {
-			if err := e.call(p, path, Encoding{}, 0, t.TempDir()); !isUnsupported(err) {
-				t.Errorf("%s through %s: err = %v, want ErrUnsupportedType", name, e.name, err)
-			}
-		}
-	}
-	if n := rec.count(); n != 0 {
-		t.Errorf("%d tool runs: %q", n, rec.calls)
 	}
 }
 
@@ -507,7 +446,7 @@ func TestJPEGStillCostsOneHeaderReadAndOneEncode(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
-	if _, _, err := p.Still(context.Background(), gradient(".jpg")(t), Encoding{}, t.TempDir()); err != nil {
+	if _, _, err := p.encodeFirst(context.Background(), gradient(".jpg")(t), Encoding{}, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	if n := rec.count(); n != 2 {
@@ -518,7 +457,7 @@ func TestJPEGStillCostsOneHeaderReadAndOneEncode(t *testing.T) {
 func TestTIFFWithoutASubfileTypeIsRead(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
-	img, _, err := p.Still(context.Background(), gradient(".tiff")(t), Encoding{Format: PNG}, t.TempDir())
+	img, _, err := p.encodeFirst(context.Background(), gradient(".tiff")(t), Encoding{Format: PNG}, t.TempDir())
 	if err != nil || img.Width != 32 {
 		t.Errorf("TIFF: %+v, %v", img, err)
 	}
@@ -532,10 +471,12 @@ func TestOutputDirectoryIsCheckedBeforeAnyToolRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "leftover"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := p.Still(context.Background(), gradient(".png")(t), Encoding{}, dir); err == nil {
+	src := openSourceOn(t, p, gradient(".png")(t), OpenOptions{})
+	before := rec.count()
+	if _, _, err := src.Encode(context.Background(), dir, Select{}, Encoding{}); err == nil {
 		t.Fatal("a non-empty directory was accepted")
 	}
-	if n := rec.count(); n != 0 {
-		t.Errorf("%d tool runs: %q", n, rec.calls)
+	if n := rec.count() - before; n != 0 {
+		t.Errorf("%d tool runs: %q", n, rec.calls[before:])
 	}
 }

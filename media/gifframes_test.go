@@ -326,7 +326,7 @@ func compositorPeakRSS(t *testing.T, w, h, n int) int64 {
 	if got := dirNames(t, dir); len(got) != 2 {
 		t.Fatalf("compositor wrote %v, want 2 frames", got)
 	}
-	usage := UsageOf(cmd.ProcessState)
+	usage := usageOf(cmd.ProcessState)
 	if usage == nil {
 		t.Skip("no resource usage on this platform")
 	}

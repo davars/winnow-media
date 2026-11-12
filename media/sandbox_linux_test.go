@@ -40,9 +40,9 @@ func fakeProcessorWith(t *testing.T, r Resources) *Processor {
 	return p
 }
 
-func runFake(t *testing.T, p *Processor, args ...string) (Result, error) {
+func runFake(t *testing.T, p *Processor, args ...string) (runResult, error) {
 	t.Helper()
-	return p.run(context.Background(), "tool", append([]string{"--tool"}, args...)...)
+	return p.run(context.Background(), nil, "tool", append([]string{"--tool"}, args...)...)
 }
 
 func lines(out []byte) []string { return strings.Split(strings.TrimSpace(string(out)), "\n") }
@@ -341,7 +341,7 @@ func TestCancellingTheContextStopsTheToolAndItsDescendants(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.run(ctx, "tool", "--tool", "spawn", "marker-cancel", ready, "hold")
+		_, err := p.run(ctx, nil, "tool", "--tool", "spawn", "marker-cancel", ready, "hold")
 		done <- err
 	}()
 	deadline := time.Now().Add(20 * time.Second)
@@ -394,7 +394,7 @@ func TestSandboxedRunReportsTheToolsUsage(t *testing.T) {
 	if err := direct.Run(); err != nil {
 		t.Fatal(err)
 	}
-	d := UsageOf(direct.ProcessState)
+	d := usageOf(direct.ProcessState)
 	if diff := res.Usage.MaxRSS - d.MaxRSS; diff < -(20<<20) || diff > 20<<20 {
 		t.Errorf("MaxRSS through the helper %d MiB, directly %d MiB", res.Usage.MaxRSS>>20, d.MaxRSS>>20)
 	}
@@ -592,7 +592,7 @@ func composeWithScript(t *testing.T, p *Processor, body string) error {
 	req := composeRequest{external: "compositor", dir: t.TempDir(), path: "x", selected: []int{0}, frames: 1, width: 1, height: 1, inFlight: 1}
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.composeFrames(ctx, req, func(composedFrame) error { return nil })
+		_, err := p.composeFrames(ctx, nil, req, func(composedFrame) error { return nil })
 		done <- err
 	}()
 	select {
@@ -646,7 +646,7 @@ func TestComposeRemovesItsRunDirectoryOnSuccess(t *testing.T) {
 func TestNewProcessorProbesUnderItsResources(t *testing.T) {
 	t.Parallel()
 	p := requireProcessorWith(t, Config{Resources: Resources{Memory: 256 << 20, Map: 512 << 20, TimeLimit: 100 * time.Second}})
-	if _, err := p.run(context.Background(), "magick", "-version"); err != nil {
+	if _, err := p.run(context.Background(), nil, "magick", "-version"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -689,7 +689,7 @@ func TestSandboxedFailuresNameTheHelper(t *testing.T) {
 	t.Parallel()
 	p := fakeProcessor(t)
 	p.tools["missing"] = filepath.Join(t.TempDir(), "no-such-tool")
-	_, err := p.run(context.Background(), "missing")
+	_, err := p.run(context.Background(), nil, "missing")
 	if err == nil || !strings.Contains(err.Error(), "sandbox helper: starting the tool") {
 		t.Errorf("err = %v, want one that names the sandbox helper and the failed start", err)
 	}

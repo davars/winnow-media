@@ -1263,13 +1263,13 @@ func TestKeptBytesDoesNotWaitForAnEncode(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	inner := p.run
 	var once sync.Once
-	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
+	p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 		once.Do(func() { close(entered) })
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
-		return inner(ctx, name, args...)
+		return inner(ctx, in, name, args...)
 	}
 	done := make(chan error, 1)
 	go func() {

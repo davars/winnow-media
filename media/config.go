@@ -13,7 +13,7 @@ type Config struct {
 	// Types(); naming any other is an error, as is an empty non-nil slice.
 	// Nil means every type in Types(). An input of another type is refused
 	// with ErrUnsupportedType, and the generated ImageMagick policy allows no
-	// coder that reads one, except those the operations read themselves (the
+	// coder that reads one, except those the library reads itself (the
 	// ICC and PAM intermediates). image/heic, image/heif and image/avif are
 	// all named or none, since one decoder reads all three.
 	Types []string
@@ -70,15 +70,6 @@ var ceilingCaps = caps{
 	framePixels:    maxDimension * maxDimension,
 	returnedPixels: math.MaxInt64,
 	decodedPixels:  math.MaxInt64,
-	frames:         maxAnimationFrames,
-}
-
-// envCaps are the caps of the Env methods, which take no Config.
-var envCaps = caps{
-	inputBytes:     maxInputBytes,
-	framePixels:    maxFramePixels,
-	returnedPixels: maxReturnedPixels,
-	decodedPixels:  maxDecodedPixels,
 	frames:         maxAnimationFrames,
 }
 
@@ -144,8 +135,6 @@ const (
 	defaultTimeLimit = 300 * time.Second
 )
 
-func defaultResources() Resources { return Resources{}.withDefaults() }
-
 func (r Resources) withDefaults() Resources {
 	if r.Memory == 0 {
 		r.Memory = defaultMemory
@@ -201,9 +190,8 @@ func magickSize(n int64) string {
 
 func (r Resources) seconds() string { return strconv.FormatInt(int64(r.TimeLimit/time.Second), 10) }
 
-// limitArgs returns the -limit flags that bound one magick process: the one
-// implementation behind Processor runs and MemoryProfile.LimitArgs. r must be
-// resolved.
+// limitArgs returns the -limit flags that bound one magick process, for every
+// Processor run. r must be resolved.
 func (r Resources) limitArgs() []string {
 	return []string{
 		"-limit", "memory", magickSize(r.Memory),

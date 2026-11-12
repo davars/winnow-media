@@ -215,17 +215,17 @@ func decodeFixture(t *testing.T, p *Processor, typ, path, typeName string) (w, h
 	t.Helper()
 	ctx := context.Background()
 	enc := Encoding{Format: PNG, MaxEdge: 4096, MaxArea: 20_000_000}
-	switch kind := typeTable[typ].kind; {
-	case kind == kindVideo:
-		images, _, err := p.VideoFrames(ctx, path, enc, 2, t.TempDir())
+	switch {
+	case typeTable[typ].video:
+		images, _, err := p.encodeEven(ctx, path, enc, 2, t.TempDir())
 		if err != nil || len(images) == 0 {
-			t.Fatalf("VideoFrames: %d images, %v", len(images), err)
+			t.Fatalf("video: %d images, %v", len(images), err)
 		}
 		return images[0].Width, images[0].Height
 	case typ == "image/gif":
-		images, _, err := p.AnimationFrames(ctx, path, enc, 4, t.TempDir())
+		images, _, err := p.encodeEven(ctx, path, enc, 4, t.TempDir())
 		if err != nil || len(images) != 4 {
-			t.Fatalf("AnimationFrames: %d images, %v", len(images), err)
+			t.Fatalf("animation: %d images, %v", len(images), err)
 		}
 		return images[0].Width, images[0].Height
 	}
@@ -261,24 +261,11 @@ func TestUnnameableTypesAreRefusedWithoutTheirName(t *testing.T) {
 	for _, typ := range []string{"image/x-tga", "image/vnd.microsoft.icon", "image/g3fax"} {
 		t.Run(typ, func(t *testing.T) {
 			t.Parallel()
-			_, _, err := p.Still(context.Background(), typeFixtures[typ].build(t), Encoding{}, t.TempDir())
+			_, _, err := p.encodeFirst(context.Background(), typeFixtures[typ].build(t), Encoding{}, t.TempDir())
 			if !isUnsupported(err) {
 				t.Errorf("err = %v, want ErrUnsupportedType", err)
 			}
 		})
-	}
-}
-
-func TestAnimatedWebPIsReadOnlyByTheAnimationOperations(t *testing.T) {
-	t.Parallel()
-	p := requireProcessor(t)
-	path := buildWebP(t, webpCase{codec: "lossless", frames: 3})
-	images, _, err := p.AnimationFrames(context.Background(), path, Encoding{Format: PNG}, 3, t.TempDir())
-	if err != nil || len(images) != 3 {
-		t.Fatalf("AnimationFrames: %d images, %v", len(images), err)
-	}
-	if _, _, err := p.Still(context.Background(), path, Encoding{Format: PNG}, t.TempDir()); !isUnsupported(err) {
-		t.Errorf("Still of an animated WebP: err = %v, want ErrUnsupportedType", err)
 	}
 }
 

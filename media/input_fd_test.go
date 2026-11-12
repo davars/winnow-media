@@ -73,13 +73,13 @@ func (h *swapHook) trip() {
 
 func (h *swapHook) install(p *Processor) {
 	run, compose := p.run, p.compose
-	p.run = func(ctx context.Context, name string, args ...string) (Result, error) {
+	p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 		h.trip()
-		return run(ctx, name, args...)
+		return run(ctx, in, name, args...)
 	}
-	p.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+	p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
 		h.trip()
-		return compose(ctx, req, onFrame)
+		return compose(ctx, in, req, onFrame)
 	}
 }
 
@@ -269,11 +269,11 @@ func TestNoToolArgvNamesTheInputPath(t *testing.T) {
 			var mu sync.Mutex
 			var composed [][]string
 			compose := p.compose
-			p.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+			p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
 				mu.Lock()
 				composed = append(composed, req.args())
 				mu.Unlock()
-				return compose(ctx, req, onFrame)
+				return compose(ctx, in, req, onFrame)
 			}
 			src := openSourceOn(t, p, path, OpenOptions{})
 			if _, err := encodeTo(t, src, k.sel); err != nil {
@@ -487,19 +487,19 @@ func TestInputIsStatedBeforeItIsOpened(t *testing.T) {
 }
 
 // A tool run with no input attached is refused when its arguments name the
-// input descriptor, and so is a Go read of it.
+// input descriptor, and so is a Go read of an input that is not attached.
 func TestInputDescriptorNeedsAnInput(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
-	if _, err := p.run(context.Background(), "magick", "identify", inputFDPath); err == nil || !strings.Contains(err.Error(), "no input") {
+	if _, err := p.run(context.Background(), nil, "magick", "identify", inputFDPath); err == nil || !strings.Contains(err.Error(), "no input") {
 		t.Errorf("run: err = %v, want a refusal", err)
 	}
-	if _, err := p.composeFrames(context.Background(), composeRequest{path: inputFDPath, dir: t.TempDir()}, nil); err == nil || !strings.Contains(err.Error(), "no input") {
+	if _, err := p.composeFrames(context.Background(), nil, composeRequest{path: inputFDPath, dir: t.TempDir()}, nil); err == nil || !strings.Contains(err.Error(), "no input") {
 		t.Errorf("compose: err = %v, want a refusal", err)
 	}
-	if _, _, err := (input{path: inputFDPath}).open(); err == nil {
-		t.Error("Go opened /dev/fd/3 of its own process")
+	if _, _, err := (input{}).open(); err == nil {
+		t.Error("Go read an input that is not attached")
 	}
 	if rec.count() != 1 {
 		t.Errorf("%d runs recorded, want the one refused run", rec.count())

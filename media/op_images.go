@@ -61,7 +61,7 @@ type sceneHeader struct {
 // JXL is always decoded, as libjxl gives every JXL a profile. The decode is
 // bounded only by whatever caps the caller applied to the headers first. A
 // file of more than one scene is left as read.
-func completeProfile(ctx context.Context, env Env, ref string, in input, scenes []sceneHeader) error {
+func completeProfile(ctx context.Context, env toolEnv, ref string, in input, scenes []sceneHeader) error {
 	if len(scenes) != 1 {
 		return nil
 	}
@@ -91,7 +91,7 @@ func completeProfile(ctx context.Context, env Env, ref string, in input, scenes 
 var fullReadFormats = map[string]bool{"TIFF": true, "JP2": true, "EXR": true, "PCX": true}
 
 // fullSoftAt is fullSoft for scene i of the file.
-func fullSoftAt(ctx context.Context, env Env, ref string, i int) (bool, error) {
+func fullSoftAt(ctx context.Context, env toolEnv, ref string, i int) (bool, error) {
 	full, err := identifyHeaders(ctx, env, ref+"["+strconv.Itoa(i)+"]", false)
 	if err != nil {
 		return false, err
@@ -108,13 +108,13 @@ func fullSoftAt(ctx context.Context, env Env, ref string, i int) (bool, error) {
 // length ceiling is refused with an error wrapping ErrTooLarge,
 // before any frame is held, and a read that reaches the time limit with one
 // wrapping ErrTimeLimit.
-func identifyHeaders(ctx context.Context, env Env, inputRef string, ping bool) ([]sceneHeader, error) {
+func identifyHeaders(ctx context.Context, env toolEnv, inputRef string, ping bool) ([]sceneHeader, error) {
 	return identifyHeadersAs(ctx, env, inputRef, ping, sceneHeaderFormat)
 }
 
 // identifyHeadersAs is identifyHeaders reading format, which must be
 // sceneHeaderFormat or gateHeaderFormat.
-func identifyHeadersAs(ctx context.Context, env Env, inputRef string, ping bool, format string) ([]sceneHeader, error) {
+func identifyHeadersAs(ctx context.Context, env toolEnv, inputRef string, ping bool, format string) ([]sceneHeader, error) {
 	args := []string{"identify"}
 	if ping {
 		args = append(args, "-ping")
@@ -259,7 +259,7 @@ func placeSRGB(dir string) (string, error) {
 // A run that failed, hit ImageMagick's time limit (ErrTimeLimit) or reported
 // a frame count or size outside chk is an error, and removes the outputs chk
 // names.
-func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]encodedFrame, error) {
+func (e toolEnv) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]encodedFrame, error) {
 	res, err := e.runMagick(ctx, args...)
 	var frames []encodedFrame
 	if err == nil {
@@ -286,10 +286,18 @@ func (e Env) runEncode(ctx context.Context, args []string, chk encodeCheck) ([]e
 	return frames, nil
 }
 
+// frameInfo is what a scene's header says of one frame before any pixel is
+// decoded. The ICC presence is per scene, so an animation never assigns the
+// sRGB destination profile to an unprofiled frame because another was tagged.
+type frameInfo struct {
+	delayCS int
+	hasICC  bool
+}
+
 // animationLayout is what the header read of an animation decided: the
 // frames, the canvas and the upright size of the canvas.
 type animationLayout struct {
-	infos       []FrameInfo
+	infos       []frameInfo
 	cw, ch      int // canvas as stored, before any rotation
 	uw, uh      int // canvas after rotation
 	orientation string
@@ -297,9 +305,9 @@ type animationLayout struct {
 
 // layoutOf is the layout of the scenes a header read found.
 func layoutOf(scenes []sceneHeader) (animationLayout, error) {
-	l := animationLayout{infos: make([]FrameInfo, len(scenes)), orientation: scenes[0].orientation}
+	l := animationLayout{infos: make([]frameInfo, len(scenes)), orientation: scenes[0].orientation}
 	for i, s := range scenes {
-		l.infos[i] = FrameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
+		l.infos[i] = frameInfo{delayCS: s.delayCS, hasICC: s.hasICC}
 		w, h := s.canvas()
 		l.cw, l.ch = max(l.cw, w), max(l.ch, h)
 	}

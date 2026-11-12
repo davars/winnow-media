@@ -8,8 +8,8 @@ import (
 )
 
 // ErrUnsupportedType is returned, wrapped with the media type found in the
-// input's bytes, when an operation does not accept that type or the bytes are
-// of no type the package recognizes. Test for it with errors.Is.
+// input's bytes, when that type is not in Config.Types or the bytes are of no
+// type the package recognizes. Test for it with errors.Is.
 var ErrUnsupportedType = errors.New("unsupported media type")
 
 // Format is the encoding of an output image.
@@ -83,11 +83,10 @@ type Region struct{ X, Y, Width, Height int }
 func (r Region) internal() region { return region{r.X, r.Y, r.Width, r.Height} }
 
 const (
-	defaultQuality   = 90
-	defaultMaxEdge   = 2576
-	defaultMaxArea   = 3_750_000
-	defaultMaxFrames = 16
-	maxMaxFrames     = 64
+	defaultQuality = 90
+	defaultMaxEdge = 2576
+	defaultMaxArea = 3_750_000
+	maxMaxFrames   = 64
 )
 
 // outputFormats maps each Format to the extension of its files.
@@ -170,12 +169,6 @@ func (e Encoding) resolve() (encoding, error) {
 		return encoding{}, err
 	}
 	return out, nil
-}
-
-// resolveFrames returns maxFrames with the default applied, or an error when
-// it is outside 1..64.
-func resolveFrames(maxFrames int) (int, error) {
-	return resolveInt("max frames", maxFrames, defaultMaxFrames, 1, maxMaxFrames)
 }
 
 // resolveInt returns def for zero and v when it lies within lo..hi.

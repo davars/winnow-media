@@ -1,25 +1,16 @@
-// Package media builds and runs the media tools' command lines: bounded WebP
-// encodes of still images and animations (a fallback ladder of dimension
-// ceilings and frame caps, with the frame mapping each encode holds), and
-// animated WebPs of a video's samples. It also turns one input file into
-// upright, sized, sRGB images in an output directory.
+// Package media turns an untrusted image, animation or video file into
+// upright, sized, sRGB images in an output directory: stills, the frames of an
+// animation or video, and WebP animations of them, in the formats and sizes a
+// caller asks for.
 //
-// The package has two layers. A Processor runs the tools themselves, for
-// untrusted input: Processor.Open checks the file's size and type before
-// pixels are read, pins the decoder to the type found, and returns a Source;
-// Source.Info describes the file, and Source.Encode writes the frames and
-// region a Select names, in the formats and sizes of its Encodings. The tools
-// run with a fixed environment under a generated ImageMagick policy that the
-// Processor has read back from the tool. Processor.Still, AnimationFrames,
-// VideoFrames and their AnimationFramesAt, VideoFramesAt and VideoFrameRun
-// variants, and the probes ProbeVideo and ProbeAnimation, are deprecated
-// wrappers over Open, Info and Encode. The rest of the
-// package, reached through an Env, decides arguments and interprets tool
-// output without running programs: a caller supplies a Runner, a Stager and a
-// Scratcher, so it controls how tools are resolved, how long they run and
-// where scratch files live. The same inputs, arguments and tool binaries
-// produce the same arguments, and so the same output bytes; callers pass
-// policy values (quality, sizes, ceilings) in explicitly.
+// A Processor runs the tools themselves, under limits. Processor.Open checks
+// the file's size and type before pixels are read, pins the decoder to the
+// type found, and returns a Source; Source.Info describes the file, and
+// Source.Encode writes the frames and region a Select names, in the formats and
+// sizes of its Encodings. The tools run with a fixed environment under a
+// generated ImageMagick policy that the Processor has read back from the tool.
+// The same input, selection, encodings and tool binaries produce the same
+// output bytes.
 //
 // # Sources
 //
@@ -60,45 +51,38 @@
 //
 // # Decode once, encode many
 //
-// Env.Open reads a file's headers, applies the caps and selects its frames;
-// EnvSource.Encode then writes one WebP, PNG or JPEG per Encoding from that one
-// decode. The decoder is chosen by the file's type and structure, never by
-// its frame count:
+// A Source decodes a file once for all the Encodings of an Encode call. The
+// decoder is chosen by the file's type and structure, never by its frame
+// count:
 //
-//   - GIF, any number of frames: the Go compositor, in this process (as a
-//     sandbox tool, in a Processor).
+//   - GIF, any number of frames: the Go compositor, which runs as a sandbox
+//     tool.
 //   - WebP with the VP8X animation flag, any number of frames: webp-frames,
-//     which Env.Run must be able to run.
+//     which is its compositor.
 //   - WebP without the animation flag: webp-frames still, then ImageMagick.
 //   - Video: ffprobe, ffmpeg and ImageMagick.
 //   - Any other image: ImageMagick, in the same run as the encode.
 //
-// A GIF or animated WebP is composited by Open onto a full canvas in
-// Env.Scratch, where every Encode reads the selected frames; a Processor's
-// Source composites the frames of each Encode when it is called instead (see
-// Sources).
-// Each frame is assigned the ICC profile it carries (a GIF may carry several)
-// and converted to sRGB. ImageMagick's own decode of an animated WebP ignores
-// the profile, as it ignores the EXIF orientation, so an oriented animation
-// would be output as stored; this is why a WebP with the animation flag always
-// goes through webp-frames, even with one frame.
+// Each frame of an animation is assigned the ICC profile it carries (a GIF may
+// carry several) and converted to sRGB. ImageMagick's own decode of an animated
+// WebP ignores the profile, as it ignores the EXIF orientation, so an oriented
+// animation would be output as stored; this is why a WebP with the animation
+// flag always goes through webp-frames, even with one frame.
 //
 // # The gate
 //
 // Before pixels are read, Open checks that the input is a regular file of at
 // most Config.Caps.MaxInputBytes and takes its type from its bytes alone. A
 // GIF, WebP, ISO base media file (HEIC, HEIF, AVIF, MP4, QuickTime) or EBML
-// file (WebM, Matroska) is typed by its leading bytes before any tool runs, and
-// so is every animation and video type that has a signature: the operations
-// that read only those refuse other content without a tool run, except that a
-// file opening an AVI, ASF, FLV, MPEG program, elementary or transport
-// stream, a QuickTime file without ftyp, or an ISO base media file of a brand
-// that is no still image's is named by ffprobe first, in the sandbox, under a
-// format whitelist of the demuxers of the video types in Config.Types that
-// have none of their own signature. If that probe refuses it, the header read
-// below follows. Other content is named by the one header read that the
-// decode needs, under the generated policy, and the coder it reports is
-// looked up in the table of Types. No tool is given the file's name: on Linux
+// file (WebM, Matroska) is typed by its leading bytes before any tool runs, as
+// is every type that has a signature. A file opening an AVI, ASF, FLV, MPEG
+// program, elementary or transport stream, a QuickTime file without ftyp, or an
+// ISO base media file of a brand that is no still image's is named by ffprobe
+// first, in the sandbox, under a format whitelist of the demuxers of the video
+// types in Config.Types that have none of their own signature. If that probe
+// refuses it, the header read below follows. Other content is named by the one
+// header read that the decode needs, under the generated policy, and the coder
+// it reports is looked up in the table of Types. No tool is given the file's name: on Linux
 // a tool is given /dev/fd/3, the descriptor Open holds, and elsewhere an
 // extensionless link in the Source's private directory. No tool lets the
 // content choose a coder or a demuxer outside Config.Types; only the
@@ -108,9 +92,8 @@
 // OpenOptions.Type replaces all of this with a type the caller names, which
 // must be in Config.Types.
 //
-// The type must be in Config.Types and be read by the operation, else the
-// call gives an error wrapping ErrUnsupportedType, which names the type
-// found. SVG, MVG, MSL, PostScript, EPS, PDF and text are never in Types:
+// The type must be in Config.Types, else Open gives an error wrapping
+// ErrUnsupportedType, which names the type found. SVG, MVG, MSL, PostScript, EPS, PDF and text are never in Types:
 // ImageMagick reads them through delegates or with external-reference or
 // scripting semantics. Some types in Types are not identified from content
 // and are decoded only when OpenOptions.Type names them (see Types), and a
@@ -119,14 +102,12 @@
 //
 // # The caps
 //
-// Image headers are read without decoding pixels (-ping), by Open and by
-// Env.Open, and an input is refused with an error wrapping ErrTooLarge, naming
-// the cap and the values, when it is over a limit of Config.Caps, whose doc
-// comment states each limit and its ceiling. The frame caps apply to a still
-// as it is decoded, not as it is stored (see Env.Open); a refusal names both
-// sizes. The Env methods take no Config and hold to fixed caps (25 MiB, 52
-// million pixels per frame, 64 million returned, 900 million decoded, 2000
-// frames). Where the numbers come from is recorded in docs/measurements.md.
+// Image headers are read without decoding pixels (-ping), by Open, and an input
+// is refused with an error wrapping ErrTooLarge, naming the cap and the values,
+// when it is over a limit of Config.Caps, whose doc comment states each limit
+// and its ceiling. The frame caps apply to a still as it is decoded, not as it
+// is stored; a refusal names both sizes. The measurements behind the ceilings
+// and the values a deployment chose are recorded in docs/measurements.md.
 //
 // # The sandbox
 //
@@ -161,11 +142,11 @@
 // once in a probe mode that tries socket under the filter and reads the limits
 // back; it requires the call denied and every limit set. The sandbox needs
 // Linux 5.11 or later on amd64 or arm64; elsewhere, and on an older kernel,
-// NewProcessor returns an error (the Env functions still work) unless
-// Config.Unsandboxed is set. That runs each tool directly, in a process group
-// that is killed with the call and when the tool exits, with no seccomp
-// filter, rlimits or subreaper; the gate, caps, environment, policy and the
-// Resources values that reach the policy and the tool flags still apply.
+// NewProcessor returns an error unless Config.Unsandboxed is set. That runs each
+// tool directly, in a process group that is killed with the call and when the
+// tool exits, with no seccomp filter, rlimits or subreaper; the gate, caps,
+// environment, policy and the Resources values that reach the policy and the
+// tool flags still apply.
 //
 // Landlock is not used, so file confinement rests on the container. A
 // deployment for hostile input must supply it: its own Deployment with no
@@ -183,7 +164,7 @@
 // leave it). There is no PATH, HOME or XDG_CONFIG_HOME, so no configuration
 // file of the caller's can widen the policy. The generated policy.xml is
 // derived from Config.Types: it denies every delegate and every coder, then
-// allows the coders of those types and those the operations use themselves
+// allows the coders of those types and those the library uses itself
 // (the profile and intermediate formats, the output formats) for reading,
 // writing or both, so that content can name no other coder. It also denies
 // @ indirect reads and sets ceilings on memory, map, disk, area, width,
@@ -191,13 +172,13 @@
 // ceilings are those of the Processor's Resources.
 //
 // Every ffprobe and ffmpeg run opens its input with -protocol_whitelist file,
-// so a nested input cannot reach the network. A Processor's runs also pin the
-// -f demuxer to the type found (for mov with -enable_drefs 0, so a track's
-// reference to an external data file is not followed); through an Env, an
-// input whose bytes name no video type is limited to the container formats
-// ffmpeg may detect, which exclude playlist and list formats that would open
-// other files. Each run also bounds ffmpeg's allocation, and its threads
-// (Resources.Threads, at most two for a source above 4096x2160).
+// so a nested input cannot reach the network. Every run but the detection probe
+// of the gate also pins the -f demuxer to the type found (for mov with
+// -enable_drefs 0, so a track's reference to an external data file is not
+// followed); the probe is limited to the whitelisted demuxers, which exclude
+// playlist and list formats that would open other files. Each run also bounds
+// ffmpeg's allocation, and its threads (Resources.Threads, at most two for a
+// source above 4096x2160).
 package media
 
 import (
@@ -207,19 +188,13 @@ import (
 	"time"
 )
 
-// Result is one completed tool run.
-//
-// Deprecated: use Processor, which runs every tool itself.
-type Result struct {
+// runResult is one completed tool run.
+type runResult struct {
 	Stdout []byte
-	// Stderr is the start and end of the tool's standard error (a Processor
-	// keeps the first 512 bytes and the last 4 KiB, with a note of the bytes
-	// dropped), or nil when the runner does not capture it. ImageMagick exits
-	// 0 when it hits its time limit and reports it there and nowhere else, so
-	// a runner that fills it lets every magick run fail with ErrTimeLimit, and
-	// one that leaves it nil leaves only the size check of the encodes to
-	// notice (an encode whose output is larger than its encoding allows, or
-	// not the size it was asked for, fails and leaves no output).
+	// Stderr is the start and end of the tool's standard error (the first 512
+	// bytes and the last 4 KiB, with a note of the bytes dropped). ImageMagick
+	// exits 0 when it hits its time limit and reports it there and nowhere
+	// else, so every magick run is checked against it for ErrTimeLimit.
 	Stderr []byte
 	// Usage is nil when the runner cannot measure it; it is never zero-filled.
 	Usage *Usage
@@ -234,11 +209,9 @@ type Usage struct {
 	MaxRSS int64         // largest resident set of the tool or any descendant, in bytes
 }
 
-// UsageOf reports the resources an exited process consumed. It returns nil
+// usageOf reports the resources an exited process consumed. It returns nil
 // when state is nil or carries no rusage.
-//
-// Deprecated: use Processor, which meters every tool itself.
-func UsageOf(state *os.ProcessState) *Usage {
+func usageOf(state *os.ProcessState) *Usage {
 	if state == nil {
 		return nil
 	}
@@ -252,89 +225,30 @@ func UsageOf(state *os.ProcessState) *Usage {
 	}
 }
 
-// Runner runs one tool to completion and returns its standard output and,
-// when it can measure it, its resource usage.
-//
-// The package passes bare tool names ("magick", "ffmpeg"); resolving them to
-// executables is the Runner's business. A non-nil error means the tool failed.
-//
-// Deprecated: use Processor, which runs every tool itself.
-type Runner func(ctx context.Context, tool string, args ...string) (Result, error)
-
-// Stager creates an empty scratch file whose name ends in ext (for example
-// ".webp"); the tools choose the output format from the extension. cleanup
-// removes the file and is safe to call once; the caller owns it. The tools
-// write their output to the returned path.
-type Stager func(ext string) (path string, cleanup func(), err error)
-
-// Scratcher creates a new empty directory for intermediate files. cleanup
-// removes it and what is in it and is safe to call once; the caller owns it.
-//
-// Deprecated: use Processor, which keeps each Source's scratch itself.
-type Scratcher func() (dir string, cleanup func(), err error)
-
-// Env is what the package needs from its caller to run tools. Run is
-// required by every method, and receives bare tool names ("magick",
-// "ffmpeg"); it must also be able to run "webp-frames" for a WebP. Stage is
-// required by the methods that produce an output file (EncodeRung,
-// EnvSource.Encode); Scratch is required by Open and EncodeRung, which keep
-// decoded frames in it until the source is closed. An Env's Runner receives
-// only arguments, so its methods name the input by its path, which the tools
-// open for themselves.
-//
-// Deprecated: use Processor, which runs every tool itself.
-type Env struct {
-	Run     Runner
-	Stage   Stager
-	Scratch Scratcher
-	// Memory selects ImageMagick's memory limits; the zero value is
-	// HighMemory. A Processor's Env ignores it.
-	Memory MemoryProfile
-
-	// resources, when set, replaces Memory: a Processor's resolved Resources.
-	resources *Resources
-	// caps, when set, replaces the Env methods' caps: a Processor's.
-	caps *caps
-
-	// compose runs the frame compositor; it is set only by a Processor.
+// toolEnv is what the decoding and encoding code needs to run tools: run
+// receives bare tool names ("magick", "ffmpeg", "webp-frames") and compose runs
+// the frame compositor. Both give the tool, as its input descriptor, the file
+// the Processor opened the input as.
+type toolEnv struct {
+	run     func(ctx context.Context, name string, args ...string) (runResult, error)
 	compose composer
+
+	// resources are the limits the runs are held to and caps those of the
+	// gate.
+	resources Resources
+	caps      caps
 }
 
-// limits returns the resource limits the Env's runs are held to.
-func (e Env) limits() (Resources, error) {
-	if e.resources != nil {
-		return *e.resources, nil
-	}
-	return e.Memory.resources()
-}
+// threads is the thread count of the ffmpeg and ffprobe runs.
+func (e toolEnv) threads() int { return e.resources.Threads }
 
-// capValues returns the caps the Env's opens are held to.
-func (e Env) capValues() caps {
-	if e.caps != nil {
-		return *e.caps
-	}
-	return envCaps
-}
-
-// threads is the thread count of the Env's ffmpeg and ffprobe runs; an
-// undefined Memory leaves the default, and runMagick reports it.
-func (e Env) threads() int {
-	if r, err := e.limits(); err == nil {
-		return r.Threads
-	}
-	return defaultThreads
-}
-
-// consumeTimeout is how long the Env's compositor waits for a written frame
-// to be consumed.
-func (e Env) consumeTimeout() time.Duration {
+// consumeTimeout is how long the compositor waits for a written frame to be
+// consumed.
+func (e toolEnv) consumeTimeout() time.Duration {
 	if composeTimeout != 0 {
 		return composeTimeout
 	}
-	if r, err := e.limits(); err == nil {
-		return r.TimeLimit
-	}
-	return defaultTimeLimit
+	return e.resources.TimeLimit
 }
 
 // composer composites the selected frames of a GIF or animated WebP in the

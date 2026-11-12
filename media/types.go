@@ -6,18 +6,10 @@ import (
 	"strings"
 )
 
-// mediaKind is how an operation reads a type; a type may have several.
-type mediaKind uint8
-
-const (
-	kindStill mediaKind = 1 << iota
-	kindAnimation
-	kindVideo
-)
-
 // typeEntry says how the library reads one media type.
 type typeEntry struct {
-	kind mediaKind
+	// video is set for a type read by ffmpeg.
+	video bool
 	// coders are the ImageMagick format names an image of the type reports as
 	// %m, in upper case; the first is the coder a caller's naming of the type
 	// pins. Empty for a video.
@@ -48,41 +40,41 @@ type typeEntry struct {
 // here: SVG, MVG, MSL, PostScript, EPS, PDF and text, and anything
 // ImageMagick reads through a delegate.
 var typeTable = map[string]typeEntry{
-	typeGIF:  {kind: kindAnimation, coders: []string{"GIF"}, sniffed: true},
-	typeWebP: {kind: kindStill | kindAnimation, coders: []string{"WEBP"}, sniffed: true, keptExact: true},
-	typeHEIC: {kind: kindStill, coders: []string{"HEIC"}, sniffed: true, keptExact: true},
-	typeHEIF: {kind: kindStill, coders: []string{"HEIC"}, sniffed: true, keptExact: true},
-	typeAVIF: {kind: kindStill, coders: []string{"AVIF"}, sniffed: true, keptExact: true},
+	typeGIF:  {coders: []string{"GIF"}, sniffed: true},
+	typeWebP: {coders: []string{"WEBP"}, sniffed: true, keptExact: true},
+	typeHEIC: {coders: []string{"HEIC"}, sniffed: true, keptExact: true},
+	typeHEIF: {coders: []string{"HEIC"}, sniffed: true, keptExact: true},
+	typeAVIF: {coders: []string{"AVIF"}, sniffed: true, keptExact: true},
 
-	"image/jpeg":                    {kind: kindStill, coders: []string{"JPEG"}, keptExact: true},
-	"image/png":                     {kind: kindStill, coders: []string{"PNG"}, keptExact: true},
-	"image/tiff":                    {kind: kindStill, coders: []string{"TIFF", "TIFF64"}, keptExact: true},
-	"image/bmp":                     {kind: kindStill, coders: []string{"BMP"}},
-	"image/x-tga":                   {kind: kindStill, coders: []string{"TGA"}},
-	"image/vnd.microsoft.icon":      {kind: kindStill, coders: []string{"ICO"}},
-	"image/x-pcx":                   {kind: kindStill, coders: []string{"PCX"}},
-	"image/x-portable-bitmap":       {kind: kindStill, coders: []string{"PBM"}},
-	"image/x-portable-greymap":      {kind: kindStill, coders: []string{"PGM"}},
-	"image/x-portable-pixmap":       {kind: kindStill, coders: []string{"PPM"}},
-	"image/x-portable-arbitrarymap": {kind: kindStill, coders: []string{"PAM"}},
-	"image/g3fax":                   {kind: kindStill, coders: []string{"G3"}},
-	"image/vnd.adobe.photoshop":     {kind: kindStill, coders: []string{"PSD"}},
-	"image/jxl":                     {kind: kindStill, coders: []string{"JXL"}, keptExact: true},
-	"image/jp2":                     {kind: kindStill, coders: []string{"JP2"}},
-	"image/x-exr":                   {kind: kindStill, coders: []string{"EXR"}},
-	"image/x-xcf":                   {kind: kindStill, coders: []string{"XCF"}},
-	"image/vnd.djvu":                {kind: kindStill, coders: []string{"DJVU"}},
-	"image/x-adobe-dng":             {kind: kindStill, coders: []string{"DNG"}},
+	"image/jpeg":                    {coders: []string{"JPEG"}, keptExact: true},
+	"image/png":                     {coders: []string{"PNG"}, keptExact: true},
+	"image/tiff":                    {coders: []string{"TIFF", "TIFF64"}, keptExact: true},
+	"image/bmp":                     {coders: []string{"BMP"}},
+	"image/x-tga":                   {coders: []string{"TGA"}},
+	"image/vnd.microsoft.icon":      {coders: []string{"ICO"}},
+	"image/x-pcx":                   {coders: []string{"PCX"}},
+	"image/x-portable-bitmap":       {coders: []string{"PBM"}},
+	"image/x-portable-greymap":      {coders: []string{"PGM"}},
+	"image/x-portable-pixmap":       {coders: []string{"PPM"}},
+	"image/x-portable-arbitrarymap": {coders: []string{"PAM"}},
+	"image/g3fax":                   {coders: []string{"G3"}},
+	"image/vnd.adobe.photoshop":     {coders: []string{"PSD"}},
+	"image/jxl":                     {coders: []string{"JXL"}, keptExact: true},
+	"image/jp2":                     {coders: []string{"JP2"}},
+	"image/x-exr":                   {coders: []string{"EXR"}},
+	"image/x-xcf":                   {coders: []string{"XCF"}},
+	"image/vnd.djvu":                {coders: []string{"DJVU"}},
+	"image/x-adobe-dng":             {coders: []string{"DNG"}},
 
-	typeMP4:    {kind: kindVideo, demuxer: "mov", sniffed: true, detected: true},
-	typeMOV:    {kind: kindVideo, demuxer: "mov", sniffed: true, detected: true},
-	typeWebM:   {kind: kindVideo, demuxer: "matroska", sniffed: true},
-	typeMKV:    {kind: kindVideo, demuxer: "matroska", sniffed: true},
-	typeAVI:    {kind: kindVideo, demuxer: "avi", detected: true},
-	typeASF:    {kind: kindVideo, demuxer: "asf", detected: true},
-	typeMPEG:   {kind: kindVideo, demuxer: "mpeg", alsoDemuxers: []string{"mpegvideo"}, detected: true},
-	typeMPEGTS: {kind: kindVideo, demuxer: "mpegts", detected: true},
-	typeFLV:    {kind: kindVideo, demuxer: "flv", detected: true},
+	typeMP4:    {video: true, demuxer: "mov", sniffed: true, detected: true},
+	typeMOV:    {video: true, demuxer: "mov", sniffed: true, detected: true},
+	typeWebM:   {video: true, demuxer: "matroska", sniffed: true},
+	typeMKV:    {video: true, demuxer: "matroska", sniffed: true},
+	typeAVI:    {video: true, demuxer: "avi", detected: true},
+	typeASF:    {video: true, demuxer: "asf", detected: true},
+	typeMPEG:   {video: true, demuxer: "mpeg", alsoDemuxers: []string{"mpegvideo"}, detected: true},
+	typeMPEGTS: {video: true, demuxer: "mpegts", detected: true},
+	typeFLV:    {video: true, demuxer: "flv", detected: true},
 }
 
 // The video types that no leading-bytes sniff names. WMV is ASF.
@@ -216,7 +208,7 @@ func resolveTypes(requested []string) ([]string, error) {
 // demuxer of a video, else the ImageMagick coder, which is coder when the
 // content named one and the type's own otherwise.
 func (e typeEntry) decoderFor(coder string) decoder {
-	if e.kind == kindVideo {
+	if e.video {
 		return decoder{"ffmpeg", e.demuxer}
 	}
 	if coder == "" {

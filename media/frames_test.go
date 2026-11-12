@@ -24,16 +24,16 @@ type animationImageEntry struct {
 // run all of them, so that no path to the compositors skips it.
 func animationImageEntries(p *Processor) []animationImageEntry {
 	return []animationImageEntry{
-		{"AnimationFrames", func(ctx context.Context, path, dir string) ([]Image, Usage, error) {
-			return p.AnimationFrames(ctx, path, Encoding{}, 0, dir)
+		{"Even", func(ctx context.Context, path, dir string) ([]Image, Usage, error) {
+			return p.encodeEven(ctx, path, Encoding{}, 16, dir)
 		}},
-		{"AnimationFramesAt", func(ctx context.Context, path, dir string) ([]Image, Usage, error) {
-			return p.AnimationFramesAt(ctx, path, Encoding{}, []int{0, 1, 2}, dir)
+		{"Indices", func(ctx context.Context, path, dir string) ([]Image, Usage, error) {
+			return p.encodeIndices(ctx, path, Encoding{}, []int{0, 1, 2}, dir)
 		}},
 	}
 }
 
-var animationFrameOpNames = []string{"AnimationFrames", "AnimationFramesAt"}
+var animationFrameOpNames = []string{"Even", "Indices"}
 
 // animationFrameOps is animationImageEntries by name, without the images.
 func animationFrameOps(p *Processor) map[string]func(path, dir string) (Usage, error) {
@@ -47,19 +47,19 @@ func animationFrameOps(p *Processor) map[string]func(path, dir string) (Usage, e
 	return ops
 }
 
-// animationOps adds ProbeAnimation, which reads the same headers and writes
-// nothing, to animationFrameOps.
+// animationOps adds Info, which reads the same headers and writes nothing, to
+// animationFrameOps.
 func animationOps(p *Processor) map[string]func(path, dir string) (Usage, error) {
 	ops := animationFrameOps(p)
-	ops["ProbeAnimation"] = func(path, _ string) (Usage, error) {
-		_, u, err := p.ProbeAnimation(context.Background(), path)
+	ops["Info"] = func(path, _ string) (Usage, error) {
+		_, u, err := p.infoOf(context.Background(), path)
 		return u, err
 	}
 	return ops
 }
 
 // videoEntry is an entry point that samples a video. call is given the
-// arguments the refusal tests vary: n stands for VideoFrames' maxFrames and
+// arguments the refusal tests vary: n stands for the Even count and
 // is mapped onto the entry point's own count; gateOnly reports an entry point
 // that takes no encoding or directory, which applies to type and size
 // refusals alone.
@@ -74,11 +74,11 @@ type videoEntry struct {
 func videoEntries() []videoEntry {
 	ctx := context.Background()
 	return []videoEntry{
-		{"VideoFrames", false, func(p *Processor, path string, enc Encoding, n int, dir string) error {
-			_, _, err := p.VideoFrames(ctx, path, enc, n, dir)
+		{"Even", false, func(p *Processor, path string, enc Encoding, n int, dir string) error {
+			_, _, err := p.encodeEven(ctx, path, enc, n, dir)
 			return err
 		}},
-		{"VideoFramesAt", false, func(p *Processor, path string, enc Encoding, n int, dir string) error {
+		{"Times", false, func(p *Processor, path string, enc Encoding, n int, dir string) error {
 			times := []int64{0}
 			switch {
 			case n < 0:
@@ -89,19 +89,19 @@ func videoEntries() []videoEntry {
 					times[i] = int64(i)
 				}
 			}
-			_, _, err := p.VideoFramesAt(ctx, path, enc, times, dir)
+			_, _, err := p.encodeTimes(ctx, path, enc, times, dir)
 			return err
 		}},
-		{"VideoFrameRun", false, func(p *Processor, path string, enc Encoding, n int, dir string) error {
+		{"Run", false, func(p *Processor, path string, enc Encoding, n int, dir string) error {
 			count := n
 			if n == 0 {
 				count = 1
 			}
-			_, _, err := p.VideoFrameRun(ctx, path, enc, 0, count, dir)
+			_, _, err := p.encodeRun(ctx, path, enc, 0, count, dir)
 			return err
 		}},
-		{"ProbeVideo", true, func(p *Processor, path string, _ Encoding, _ int, _ string) error {
-			_, _, err := p.ProbeVideo(ctx, path)
+		{"Info", true, func(p *Processor, path string, _ Encoding, _ int, _ string) error {
+			_, _, err := p.infoOf(ctx, path)
 			return err
 		}},
 	}
@@ -120,7 +120,7 @@ func readFrames(t *testing.T, dir string, images []Image) [][]byte {
 	return out
 }
 
-func TestProbeVideo(t *testing.T) {
+func TestInfoOfAVideo(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -130,7 +130,7 @@ func TestProbeVideo(t *testing.T) {
 		"-f", "lavfi", "-i", "testsrc2=size=160x120:rate=10:duration=4",
 		"-f", "lavfi", "-i", "sine=duration=4",
 		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest")
-	info, usage, err := p.ProbeVideo(ctx, withAudio)
+	info, usage, err := p.infoOf(ctx, withAudio)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,27 +144,27 @@ func TestProbeVideo(t *testing.T) {
 	}
 
 	silent := sdrClip(t, env, "160x120", 10, 4)
-	if info, _, err = p.ProbeVideo(ctx, silent); err != nil || info.HasAudio {
+	if info, _, err = p.infoOf(ctx, silent); err != nil || info.HasAudio {
 		t.Errorf("silent clip: %+v, %v", info, err)
 	}
 
-	info, _, err = p.ProbeVideo(ctx, rotatedClip(t, env))
+	info, _, err = p.infoOf(ctx, rotatedClip(t, env))
 	if err != nil || info.Rotation != 90 || info.Width != 120 || info.Height != 160 {
 		t.Errorf("rotated clip: %+v, %v", info, err)
 	}
 
-	info, _, err = p.ProbeVideo(ctx, hlgClip(t, env, testsrc("160x120", 10, 2)))
+	info, _, err = p.infoOf(ctx, hlgClip(t, env, testsrc("160x120", 10, 2)))
 	if err != nil || !info.HDR || info.Codec != "hevc" {
 		t.Errorf("HLG clip: %+v, %v", info, err)
 	}
 
 	noVideo := writeClip(t, env, ".mp4", "-f", "lavfi", "-i", "sine=duration=1", "-c:a", "aac")
-	if _, _, err := p.ProbeVideo(ctx, noVideo); err == nil {
+	if _, _, err := p.infoOf(ctx, noVideo); err == nil {
 		t.Error("a file with no video stream was probed")
 	}
 }
 
-func TestProbeAnimation(t *testing.T) {
+func TestInfoOfAnAnimation(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	ctx := context.Background()
@@ -176,7 +176,7 @@ func TestProbeAnimation(t *testing.T) {
 		{rect: full, delay: 1, palette: paletteA, shift: 2},
 		{rect: full, delay: 30, palette: paletteA, shift: 3},
 	}))
-	info, _, err := p.ProbeAnimation(ctx, gifPath)
+	info, _, err := p.infoOf(ctx, gifPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,21 +184,21 @@ func TestProbeAnimation(t *testing.T) {
 		t.Errorf("gif: %+v", info)
 	}
 
-	info, _, err = p.ProbeAnimation(ctx, writeGIF(t, solid, 7))
+	info, _, err = p.infoOf(ctx, writeGIF(t, solid, 7))
 	if err != nil || info.Frames != 7 || info.Width != 64 || info.Height != 48 || len(info.DelaysMS) != 7 {
 		t.Errorf("magick gif: %+v, %v", info, err)
 	}
 
 	t.Run("webp", func(t *testing.T) {
 		requireWebPBuilders(t)
-		info, _, err := p.ProbeAnimation(ctx, buildWebP(t, webpCase{codec: "lossless", frames: 6}))
+		info, _, err := p.infoOf(ctx, buildWebP(t, webpCase{codec: "lossless", frames: 6}))
 		if err != nil || info.Frames != 6 || info.Width != webpCanvasW || info.Height != webpCanvasH || len(info.DelaysMS) != 6 {
 			t.Errorf("webp: %+v, %v", info, err)
 		}
 	})
 }
 
-func TestVideoFramesAt(t *testing.T) {
+func TestEncodeTimes(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -207,7 +207,7 @@ func TestVideoFramesAt(t *testing.T) {
 
 	t.Run("sorted, de-duplicated and equal to the evenly spaced samples", func(t *testing.T) {
 		out := t.TempDir()
-		images, _, err := p.VideoFramesAt(ctx, src, Encoding{}, []int64{9500, 500, 4500, 500}, out)
+		images, _, err := p.encodeTimes(ctx, src, Encoding{}, []int64{9500, 500, 4500, 500}, out)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,27 +229,27 @@ func TestVideoFramesAt(t *testing.T) {
 		for i, img := range images {
 			j := int(img.Frames[0].TimeMS / 1000)
 			if !bytes.Equal(readFrames(t, out, images[i:i+1])[0], readFrames(t, evenDir, even[j:j+1])[0]) {
-				t.Errorf("frame at %d ms differs from VideoFrames' sample", img.Frames[0].TimeMS)
+				t.Errorf("frame at %d ms differs from the evenly spaced sample", img.Frames[0].TimeMS)
 			}
 		}
 	})
 
 	t.Run("start of the video", func(t *testing.T) {
-		images, _, err := p.VideoFramesAt(ctx, src, Encoding{}, []int64{0}, t.TempDir())
+		images, _, err := p.encodeTimes(ctx, src, Encoding{}, []int64{0}, t.TempDir())
 		if err != nil || len(images) != 1 || images[0].Frames[0].TimeMS != 0 {
 			t.Errorf("images = %+v, err %v", images, err)
 		}
 	})
 
-	// An argument is refused before any tool runs; a time outside the video
-	// is refused after the one probe run.
+	// A bad argument, or a time outside the video, is refused after the one
+	// probe run of Open and runs nothing else.
 	refusals := map[string]struct {
 		times []int64
 		runs  int
 		want  string
 	}{
-		"empty":             {[]int64{}, 0, "times"},
-		"negative":          {[]int64{1000, -1}, 0, "is negative"},
+		"empty":             {[]int64{}, 1, "times"},
+		"negative":          {[]int64{1000, -1}, 1, "is negative"},
 		"at the duration":   {[]int64{16000}, 1, "is not inside the video"},
 		"past the duration": {[]int64{1000, 99_000}, 1, "is not inside the video"},
 	}
@@ -258,7 +258,7 @@ func TestVideoFramesAt(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
 			out := t.TempDir()
-			_, _, err := p.VideoFramesAt(ctx, src, Encoding{}, c.times, out)
+			_, _, err := p.encodeTimes(ctx, src, Encoding{}, c.times, out)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want it to say %q", err, c.want)
 			}
@@ -271,29 +271,31 @@ func TestVideoFramesAt(t *testing.T) {
 		})
 	}
 
-	t.Run("refuses more than the maximum before any tool runs", func(t *testing.T) {
+	t.Run("refuses more than the maximum after the probe", func(t *testing.T) {
 		rec := record(p)
 		defer func() { p.run = rec.inner }()
 		times := make([]int64, maxMaxFrames+1)
 		for i := range times {
 			times[i] = int64(i)
 		}
-		if _, _, err := p.VideoFramesAt(ctx, src, Encoding{}, times, t.TempDir()); err == nil {
+		if _, _, err := p.encodeTimes(ctx, src, Encoding{}, times, t.TempDir()); err == nil {
 			t.Fatal("succeeded")
 		}
-		if n := rec.count(); n != 0 {
+		if n := rec.count(); n != 1 {
 			t.Errorf("%d tool runs", n)
 		}
 	})
 
 	t.Run("accepts the maximum", func(t *testing.T) {
 		p := requireProcessor(t)
-		p.run = func(context.Context, string, ...string) (Result, error) { return Result{}, errors.New("tool run") }
+		p.run = func(context.Context, *os.File, string, ...string) (runResult, error) {
+			return runResult{}, errors.New("tool run")
+		}
 		times := make([]int64, maxMaxFrames)
 		for i := range times {
 			times[i] = int64(i)
 		}
-		_, _, err := p.VideoFramesAt(ctx, src, Encoding{}, times, t.TempDir())
+		_, _, err := p.encodeTimes(ctx, src, Encoding{}, times, t.TempDir())
 		if err == nil || !strings.Contains(err.Error(), "tool run") {
 			t.Errorf("err = %v, want the stubbed tool failure", err)
 		}
@@ -301,7 +303,7 @@ func TestVideoFramesAt(t *testing.T) {
 
 	t.Run("does not change the caller's slice", func(t *testing.T) {
 		times := []int64{9500, 500, 500}
-		if _, _, err := p.VideoFramesAt(ctx, src, Encoding{}, times, t.TempDir()); err != nil {
+		if _, _, err := p.encodeTimes(ctx, src, Encoding{}, times, t.TempDir()); err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Equal(times, []int64{9500, 500, 500}) {
@@ -310,7 +312,7 @@ func TestVideoFramesAt(t *testing.T) {
 	})
 }
 
-func TestVideoFrameRun(t *testing.T) {
+func TestEncodeRun(t *testing.T) {
 	forceSeek(t)
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -321,7 +323,7 @@ func TestVideoFrameRun(t *testing.T) {
 		rec := record(p)
 		defer func() { p.run = rec.inner }()
 		out := t.TempDir()
-		images, _, err := p.VideoFrameRun(ctx, src, Encoding{}, 1500, 5, out)
+		images, _, err := p.encodeRun(ctx, src, Encoding{}, 1500, 5, out)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -362,12 +364,12 @@ func TestVideoFrameRun(t *testing.T) {
 
 	t.Run("agrees with a single seek", func(t *testing.T) {
 		out := t.TempDir()
-		run, _, err := p.VideoFrameRun(ctx, src, Encoding{}, 2000, 3, out)
+		run, _, err := p.encodeRun(ctx, src, Encoding{}, 2000, 3, out)
 		if err != nil || len(run) != 3 {
 			t.Fatalf("run = %+v, err %v", run, err)
 		}
 		at := t.TempDir()
-		one, _, err := p.VideoFramesAt(ctx, src, Encoding{}, []int64{2000, 2200}, at)
+		one, _, err := p.encodeTimes(ctx, src, Encoding{}, []int64{2000, 2200}, at)
 		if err != nil || len(one) != 2 {
 			t.Fatalf("seeks = %+v, err %v", one, err)
 		}
@@ -378,7 +380,7 @@ func TestVideoFrameRun(t *testing.T) {
 	})
 
 	t.Run("stops at the end of the video", func(t *testing.T) {
-		images, _, err := p.VideoFrameRun(ctx, src, Encoding{}, 3700, 10, t.TempDir())
+		images, _, err := p.encodeRun(ctx, src, Encoding{}, 3700, 10, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -394,7 +396,7 @@ func TestVideoFrameRun(t *testing.T) {
 	t.Run("tone-maps HDR", func(t *testing.T) {
 		green := hlgClip(t, env, []string{"-f", "lavfi", "-i", "color=c=0x00c000:size=160x120:rate=10:duration=2"})
 		out := t.TempDir()
-		images, _, err := p.VideoFrameRun(ctx, green, Encoding{}, 0, 3, out)
+		images, _, err := p.encodeRun(ctx, green, Encoding{}, 0, 3, out)
 		if err != nil || len(images) == 0 {
 			t.Fatalf("images = %+v, err %v", images, err)
 		}
@@ -408,7 +410,7 @@ func TestVideoFrameRun(t *testing.T) {
 		if err := os.Mkdir(out, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		images, _, err := p.VideoFrameRun(ctx, src, Encoding{}, 0, 2, out)
+		images, _, err := p.encodeRun(ctx, src, Encoding{}, 0, 2, out)
 		if err != nil || len(images) != 2 {
 			t.Errorf("images = %+v, err %v", images, err)
 		}
@@ -417,18 +419,18 @@ func TestVideoFrameRun(t *testing.T) {
 		}
 	})
 
-	// An argument is refused before any tool runs; a start outside the video
-	// is refused after the one probe run.
+	// A bad argument, or a start outside the video, is refused after the one
+	// probe run of Open and runs nothing else.
 	refusals := map[string]struct {
 		start int64
 		count int
 		runs  int
 		want  string
 	}{
-		"zero count":         {0, 0, 0, "count"},
-		"negative count":     {0, -1, 0, "count"},
-		"over the maximum":   {0, maxMaxFrames + 1, 0, "count"},
-		"negative start":     {-1, 1, 0, "is negative"},
+		"zero count":         {0, 0, 1, "is outside"},
+		"negative count":     {0, -1, 1, "is outside"},
+		"over the maximum":   {0, maxMaxFrames + 1, 1, "is outside"},
+		"negative start":     {-1, 1, 1, "is negative"},
 		"start at the end":   {4000, 1, 1, "is not inside the video"},
 		"start past the end": {99_000, 1, 1, "is not inside the video"},
 	}
@@ -437,7 +439,7 @@ func TestVideoFrameRun(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
 			out := t.TempDir()
-			_, _, err := p.VideoFrameRun(ctx, src, Encoding{}, c.start, c.count, out)
+			_, _, err := p.encodeRun(ctx, src, Encoding{}, c.start, c.count, out)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want it to say %q", err, c.want)
 			}
@@ -457,7 +459,7 @@ func TestVideoFrameRun(t *testing.T) {
 			rec := record(p)
 			rec.failAfter = failAfter
 			out := t.TempDir()
-			if _, _, err := p.VideoFrameRun(ctx, src, Encoding{}, 0, 4, out); err == nil {
+			if _, _, err := p.encodeRun(ctx, src, Encoding{}, 0, 4, out); err == nil {
 				t.Fatalf("failAfter=%d: succeeded", failAfter)
 			}
 			if got := dirNames(t, out); len(got) != 0 {
@@ -467,19 +469,19 @@ func TestVideoFrameRun(t *testing.T) {
 	})
 }
 
-func TestAnimationFramesAt(t *testing.T) {
+func TestEncodeIndices(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	ctx := context.Background()
 
 	check := func(t *testing.T, src string, frames int) {
 		all := t.TempDir()
-		every, _, err := p.AnimationFrames(ctx, src, Encoding{Format: PNG}, frames, all)
+		every, _, err := p.encodeEven(ctx, src, Encoding{Format: PNG}, frames, all)
 		if err != nil || len(every) != frames {
 			t.Fatalf("every frame: %d images, err %v", len(every), err)
 		}
 		out := t.TempDir()
-		images, _, err := p.AnimationFramesAt(ctx, src, Encoding{Format: PNG}, []int{frames - 1, 2, 2, 0}, out)
+		images, _, err := p.encodeIndices(ctx, src, Encoding{Format: PNG}, []int{frames - 1, 2, 2, 0}, out)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -490,30 +492,30 @@ func TestAnimationFramesAt(t *testing.T) {
 				t.Errorf("image %d is named %s", i, img.Name)
 			}
 			if !bytes.Equal(readFrames(t, out, images[i:i+1])[0], readFrames(t, all, every[img.Frames[0].Index:img.Frames[0].Index+1])[0]) {
-				t.Errorf("frame %d differs from AnimationFrames' output", img.Frames[0].Index)
+				t.Errorf("frame %d differs from the evenly spaced output", img.Frames[0].Index)
 			}
 		}
 		if !slices.Equal(got, []int{0, 2, frames - 1}) {
 			t.Errorf("frames = %v, want 0, 2, %d", got, frames-1)
 		}
 
-		// An argument is refused before any tool runs; an index outside the
-		// animation is refused after the one header read, by the gate and
-		// not by a compositor that fails later.
+		// A bad argument, or an index outside the animation, is refused after
+		// the one header read of Open, by Encode and not by a compositor that
+		// fails later.
 		forbidCompositor(t, p)
 		for name, c := range map[string]struct {
 			indices []int
 			runs    int
 			want    string
 		}{
-			"empty":                {[]int{}, 0, "indices"},
-			"negative":             {[]int{1, -1}, 0, "is negative"},
+			"empty":                {[]int{}, 1, "indices"},
+			"negative":             {[]int{1, -1}, 1, "is negative"},
 			"at the frame count":   {[]int{frames}, 1, "is outside the animation's"},
 			"past the frame count": {[]int{0, frames + 40}, 1, "is outside the animation's"},
 		} {
 			rec := record(p)
 			dir := t.TempDir()
-			_, _, err := p.AnimationFramesAt(ctx, src, Encoding{}, c.indices, dir)
+			_, _, err := p.encodeIndices(ctx, src, Encoding{}, c.indices, dir)
 			p.run = rec.inner
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("%s: err = %v, want it to say %q", name, err, c.want)
@@ -533,34 +535,19 @@ func TestAnimationFramesAt(t *testing.T) {
 		check(t, buildWebP(t, webpCase{codec: "lossless", frames: 6}), 6)
 	})
 
-	t.Run("refuses more than the maximum before any tool runs", func(t *testing.T) {
-		rec := record(p)
-		defer func() { p.run = rec.inner }()
-		indices := make([]int, maxMaxFrames+1)
-		for i := range indices {
-			indices[i] = i
-		}
-		if _, _, err := p.AnimationFramesAt(ctx, writeGIF(t, solid, 3), Encoding{}, indices, t.TempDir()); err == nil {
-			t.Fatal("succeeded")
-		}
-		if n := rec.count(); n != 0 {
-			t.Errorf("%d tool runs", n)
-		}
-	})
-
-	t.Run("accepts the maximum", func(t *testing.T) {
+	t.Run("accepts an index for every frame of a long animation", func(t *testing.T) {
 		indices := make([]int, maxMaxFrames)
 		for i := range indices {
 			indices[i] = i
 		}
-		images, _, err := p.AnimationFramesAt(ctx, writeGIF(t, solid, maxMaxFrames), Encoding{}, indices, t.TempDir())
+		images, _, err := p.encodeIndices(ctx, writeGIF(t, solid, maxMaxFrames), Encoding{}, indices, t.TempDir())
 		if err != nil || len(images) != maxMaxFrames {
 			t.Errorf("%d images, err %v", len(images), err)
 		}
 	})
 
 	t.Run("picks the frames asked for, not evenly spaced ones", func(t *testing.T) {
-		images, _, err := p.AnimationFramesAt(ctx, writeGIF(t, solid, 12), Encoding{}, []int{1, 2, 3}, t.TempDir())
+		images, _, err := p.encodeIndices(ctx, writeGIF(t, solid, 12), Encoding{}, []int{1, 2, 3}, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -576,7 +563,7 @@ func TestAnimationFramesAt(t *testing.T) {
 
 // The TimeMS of an animation frame is when it starts in the source: the sum
 // of the display delays before it, a stored delay below 20 ms counting as
-// 100 ms. An Image reports the same time as EnvSource.Frames.
+// 100 ms. An Image reports the same time as the delays Info gives.
 func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 	t.Parallel()
 	env := requireMagick(t)
@@ -585,7 +572,7 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 
 	check := func(t *testing.T, src string, indices []int, want []int64) {
 		t.Helper()
-		images, _, err := p.AnimationFramesAt(ctx, src, Encoding{Format: PNG}, indices, t.TempDir())
+		images, _, err := p.encodeIndices(ctx, src, Encoding{Format: PNG}, indices, t.TempDir())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -594,19 +581,23 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 			got = append(got, img.Frames[0].TimeMS)
 		}
 		if !slices.Equal(got, want) {
-			t.Errorf("AnimationFramesAt%v times = %v, want %v", indices, got, want)
+			t.Errorf("Indices%v times = %v, want %v", indices, got, want)
 		}
 
-		staged := stagedEnv(env, t.TempDir())
-		source := openSource(t, staged, src, Hints{})
-		encoded, err := source.EncodeFrames(ctx, Encoding{Format: PNG}, t.TempDir())
+		// Every frame's image reports the time the Info's delays give it.
+		source := openSourceOn(t, p, src, OpenOptions{})
+		encoded, _, err := source.Encode(ctx, t.TempDir(), Select{Frames: All()}, Encoding{Format: PNG})
 		if err != nil {
 			t.Fatal(err)
 		}
-		frames := source.Frames()
+		var start int64
+		starts := make([]int64, len(source.Info().DelaysMS))
+		for i, d := range source.Info().DelaysMS {
+			starts[i], start = start, start+int64(d)
+		}
 		for _, img := range encoded {
-			if f := frames[img.Frames[0].Index]; img.Frames[0].TimeMS != f.TimeMS {
-				t.Errorf("EncodeFrames: frame %d at %d ms, Frames says %d ms", img.Frames[0].Index, img.Frames[0].TimeMS, f.TimeMS)
+			if img.Frames[0].TimeMS != starts[img.Frames[0].Index] {
+				t.Errorf("All: frame %d at %d ms, Info says %d ms", img.Frames[0].Index, img.Frames[0].TimeMS, starts[img.Frames[0].Index])
 			}
 		}
 	}
@@ -635,7 +626,7 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 
 // An index at or past the frame count is refused by the gate after the header
 // read, not by the compositor: the error is the gate's and no compositor runs.
-func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *testing.T) {
+func TestEncodeIndicesRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		src    func(t *testing.T) string
@@ -653,7 +644,7 @@ func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *
 			forbidCompositor(t, p)
 			for _, indices := range [][]int{{c.frames}, {0, c.frames + 40}} {
 				dir := t.TempDir()
-				_, _, err := p.AnimationFramesAt(context.Background(), src, Encoding{}, indices, dir)
+				_, _, err := p.encodeIndices(context.Background(), src, Encoding{}, indices, dir)
 				if err == nil || !strings.Contains(err.Error(), "is outside the animation's") {
 					t.Errorf("%v: err = %v, want the gate's refusal", indices, err)
 				}
@@ -665,10 +656,9 @@ func TestAnimationFramesAtRefusesAnIndexOutsideTheAnimationBeforeCompositing(t *
 	}
 }
 
-// ProbeAnimation reads the headers without decoding pixels, for a one-frame
-// WebP too, and the header read of the animation operations reports the
-// still's profile.
-func TestProbeAnimationDoesNotDecodeAStillWebP(t *testing.T) {
+// Open reads the headers without decoding pixels, for a one-frame WebP too,
+// profiled or not.
+func TestOpenDoesNotDecodeAStillWebP(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
 	env := requireMagick(t)
@@ -683,15 +673,9 @@ func TestProbeAnimationDoesNotDecodeAStillWebP(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
-			info, _, err := p.ProbeAnimation(context.Background(), path)
+			info, _, err := p.infoOf(context.Background(), path)
 			if err != nil || info.Frames != 1 {
 				t.Fatalf("info %+v, err %v", info, err)
-			}
-			var m meter
-			hdr, err := p.env(&m, nil).readSource(context.Background(), openRequest{path: path, dec: decoder{"magick", "webp"}, pinned: true, caps: true})
-			layout := hdr.layout
-			if err != nil || len(layout.infos) != 1 || layout.infos[0].hasICC != (name == "profiled") {
-				t.Fatalf("layout %+v, err %v; want hasICC %t", layout, err, name == "profiled")
 			}
 			for _, call := range rec.calls {
 				if !slices.Contains(call, "-ping") {

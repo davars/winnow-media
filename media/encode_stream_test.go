@@ -14,59 +14,65 @@ import (
 	"testing"
 )
 
-// stagedEnv is real with a Stage that creates files in dir.
-func stagedEnv(real Env, dir string) Env {
-	real.Scratch = testScratch
-	real.Stage = stagerIn(dir)
-	return real
+// animatedWebPAt is an Encoding of one animated WebP that fits 64 pixels.
+func animatedWebPAt(edge int) Encoding {
+	enc := webpAtEdge(edge)
+	enc.Animate = true
+	return enc
 }
 
-func rungArgs(t *testing.T, env Env, path, mime string, maxFrames int) (string, []Frame, error) {
+// rungArgs opens path through p and encodes up to maxFrames of its frames,
+// evenly spaced, as one animated WebP of at most 64 pixels on a side. It
+// returns the path of the file and its frame mapping.
+func rungArgs(t *testing.T, p *Processor, path string, maxFrames int) (string, []Frame, error) {
 	t.Helper()
-	frames, err := env.ProbeFrames(context.Background(), path, mime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), path, mime,
-		true, Rung{CeilingPx: 64, MaxFrames: maxFrames}, frames, "", "", testQuality)
+	src, _, err := p.Open(context.Background(), path, OpenOptions{})
 	if err != nil {
 		return "", nil, err
 	}
-	t.Cleanup(cleanup)
-	return out, mapping, nil
+	t.Cleanup(func() { _ = src.Close() })
+	dir := t.TempDir()
+	images, _, err := src.Encode(context.Background(), dir, Select{Frames: Even(maxFrames)}, animatedWebPAt(64))
+	if err != nil {
+		return "", nil, err
+	}
+	return filepath.Join(dir, images[0].Name), images[0].Frames, nil
 }
 
 // ImageMagick is handed the selected frames of a many-frame animation, one
 // full canvas each, and never the file or an instruction to composite it whole.
-func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
+func TestEncodeGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
-	real := requireMagick(t)
 	levels, delays := make([]int, 40), make([]int, 40)
 	for i := range levels {
 		levels[i], delays[i] = 5*i, 4
 	}
-	gifPath := writeGrayAnimGIF(t, real, levels, delays)
+	gifPath := writeGrayAnimGIF(t, requireMagick(t), levels, delays)
 	webpPath := buildWebP(t, webpCase{codec: "lossless", frames: 20})
 	for _, c := range []struct {
-		name, path, mime string
-	}{{"GIF", gifPath, "image/gif"}, {"WebP", webpPath, "image/webp"}} {
+		name, path string
+	}{{"GIF", gifPath}, {"WebP", webpPath}} {
 		t.Run(c.name, func(t *testing.T) {
-			env, calls := countingEnv(stagedEnv(real, t.TempDir()))
-			const maxFrames = 4
-			_, mapping, err := rungArgs(t, env, c.path, c.mime, maxFrames)
+			p := requireProcessor(t)
+			src, _, err := p.Open(context.Background(), c.path, OpenOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(mapping) != maxFrames {
-				t.Fatalf("mapping %v, want %d frames", mapping, maxFrames)
+			defer func() { _ = src.Close() }()
+			rec := record(p)
+			defer func() { p.run = rec.inner }()
+			const maxFrames = 4
+			images, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Even(maxFrames)}, animatedWebPAt(64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(images[0].Frames) != maxFrames {
+				t.Fatalf("mapping %v, want %d frames", images[0].Frames, maxFrames)
 			}
 			var pixelRuns int
-			for _, call := range calls() {
-				if slices.Contains(call, "identify") {
-					continue
-				}
-				if call[0] != "magick" {
+			for _, call := range rec.calls {
+				if slices.Contains(call, "identify") || call[0] != "magick" {
 					continue
 				}
 				pixelRuns++
@@ -94,42 +100,30 @@ func TestEncodeRungGivesImageMagickOnlyTheSelectedFrames(t *testing.T) {
 
 // A compositor that reports other frames than were selected, or reports them
 // out of order, is an error whose message names the check, so a check that is
-// gone cannot be hidden by the one after it. The tool is a real webp-frames
-// whose report is rewritten.
-func TestOpenRefusesACompositorReportOfTheWrongFrames(t *testing.T) {
+// gone cannot be hidden by the one after it.
+func TestFrameLinesRefuseAWrongReport(t *testing.T) {
 	t.Parallel()
-	requireWebPBuilders(t)
-	real := requireMagick(t)
-	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
-	report := "0 0 0\n1 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n"
 	for _, c := range []struct {
 		name, report, want string
 	}{
-		{"one frame fewer", report[:len(report)-6], "composited 5 of 6 frames"},
-		{"no frames", "", "composited 0 of 6 frames"},
-		{"one frame more", report + "6 0 0\n", "the compositor wrote more frames than selected"},
-		{"out of order", "1 0 0\n0 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n", `compositor reported "1 0 0", expected frame 0`},
-		{"a repeated ordinal", "0 0 0\n0 0 0\n2 0 0\n3 0 0\n4 0 0\n5 0 0\n", `compositor reported "0 0 0", expected frame 1`},
+		{"out of order", "1 0 0\n0 0 0\n", `compositor reported "1 0 0", expected frame 0`},
+		{"a repeated ordinal", "0 0 0\n0 0 0\n", `compositor reported "0 0 0", expected frame 1`},
 		{"a line of two fields", "0 0 0\n1 0\n", `compositor reported "1 0", expected frame 1`},
+		{"a line of four fields", "0 0 0 0\n", `compositor reported "0 0 0 0", expected frame 0`},
+		{"a profile that is no number", "0 x 0\n", `compositor reported "0 x 0", expected frame 0`},
+		{"a soft flag above one", "0 0 2\n", `compositor reported "0 0 2", expected frame 0`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			env := stagedEnv(real, t.TempDir())
-			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-				res, err := real.Run(ctx, name, args...)
-				if err == nil && name == webpFramesTool {
-					res.Stdout = []byte(c.report)
-				}
-				return res, err
-			}
-			src, err := env.Open(context.Background(), path, Hints{})
-			if err == nil {
-				src.Close()
-				t.Fatal("Open succeeded")
-			}
-			if !strings.Contains(err.Error(), c.want) {
+			lines := &frameLines{dir: t.TempDir(), onFrame: func(composedFrame) error { return nil }}
+			_, err := lines.Write([]byte(c.report))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("err = %v, want it to say %q", err, c.want)
 			}
 		})
+	}
+	lines := &frameLines{dir: t.TempDir(), onFrame: func(composedFrame) error { return nil }}
+	if _, err := lines.Write([]byte("0 0 0\n1 0 1\n2 3 0\n")); err != nil || lines.next != 3 {
+		t.Errorf("a good report: %d frames, %v", lines.next, err)
 	}
 }
 
@@ -137,37 +131,41 @@ func TestOpenRefusesACompositorReportOfTheWrongFrames(t *testing.T) {
 func TestEncodeRefusesAStillWebPDecodeThatWritesTheWrongImages(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
-	real := requireMagick(t)
-	path := stillWebP(t, photoPNG(t, real, 300, 200, false), "-q", "80")
+	path := stillWebP(t, photoPNG(t, requireMagick(t), 300, 200, false), "-q", "80")
 	for _, c := range []struct {
-		name, report, want string
+		name   string
+		images int
+		want   string
 	}{
-		{"no image", "", "webp-frames wrote 0 images, want 1"},
-		{"two images", "0 0 0\n1 0 0\n", "webp-frames wrote more than one image"},
+		{"no image", 0, "webp-frames wrote 0 images, want 1"},
+		{"two images", 2, "webp-frames wrote more than one image"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			env := stagedEnv(real, t.TempDir())
-			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-				res, err := real.Run(ctx, name, args...)
-				if err == nil && name == webpFramesTool {
-					res.Stdout = []byte(c.report)
-				}
-				return res, err
+			p := requireProcessor(t)
+			inner := p.compose
+			p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+				return inner(ctx, in, req, func(f composedFrame) error {
+					for range c.images {
+						if err := onFrame(f); err != nil {
+							return err
+						}
+					}
+					return nil
+				})
 			}
-			src, err := env.Open(context.Background(), path, Hints{})
+			src, _, err := p.Open(context.Background(), path, OpenOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer src.Close()
-			out, err := src.Encode(context.Background(), 0, Encoding{Format: WebP})
-			if err == nil {
-				if len(out) > 0 {
-					out[0].Cleanup()
-				}
+			defer func() { _ = src.Close() }()
+			dir := t.TempDir()
+			if _, _, err = src.Encode(context.Background(), dir, Select{}, Encoding{Format: WebP}); err == nil {
 				t.Fatal("Encode succeeded")
-			}
-			if !strings.Contains(err.Error(), c.want) {
+			} else if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("err = %v, want it to say %q", err, c.want)
+			}
+			if got := dirNames(t, dir); len(got) != 0 {
+				t.Errorf("output dir holds %v", got)
 			}
 		})
 	}
@@ -192,10 +190,10 @@ func TestAnimationFramesRefuseACompositorThatWritesTheWrongFrames(t *testing.T) 
 			p := requireProcessor(t)
 			inner := p.compose
 			t.Cleanup(func() { p.compose = inner })
-			p.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+			p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
 				var last composedFrame
 				seen := 0
-				usage, err := inner(ctx, req, func(f composedFrame) error {
+				usage, err := inner(ctx, in, req, func(f composedFrame) error {
 					last = f
 					if seen++; !c.more && seen == len(req.selected) {
 						return nil
@@ -208,7 +206,7 @@ func TestAnimationFramesRefuseACompositorThatWritesTheWrongFrames(t *testing.T) 
 				return usage, err
 			}
 			out := t.TempDir()
-			if _, _, err := p.AnimationFrames(context.Background(), path, Encoding{}, 0, out); err == nil || !strings.Contains(err.Error(), c.want) {
+			if _, _, err := p.encodeEven(context.Background(), path, Encoding{}, 16, out); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want it to say %q", err, c.want)
 			}
 			if got := dirNames(t, out); len(got) != 0 {
@@ -220,64 +218,54 @@ func TestAnimationFramesRefuseACompositorThatWritesTheWrongFrames(t *testing.T) 
 
 // A one-frame GIF is composited like any other: the type decides the decoder,
 // not the frame count.
-func TestEncodeRungCompositesAOneFrameGIF(t *testing.T) {
+func TestEncodeCompositesAOneFrameGIF(t *testing.T) {
 	t.Parallel()
-	real := requireMagick(t)
-	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
+	p := requireProcessor(t)
+	rec := record(p)
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
-	if _, mapping, err := rungArgs(t, env, path, "image/gif", 16); err != nil || len(mapping) != 1 {
+	composed := false
+	inner := p.compose
+	p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+		composed = true
+		return inner(ctx, in, req, onFrame)
+	}
+	if _, mapping, err := rungArgs(t, p, path, 16); err != nil || len(mapping) != 1 {
 		t.Fatalf("mapping %v, err %v", mapping, err)
 	}
-	composited := false
-	for _, call := range calls() {
+	for _, call := range rec.calls {
 		if slices.Contains(call, "-coalesce") {
 			t.Errorf("a one-frame GIF was read whole: %q", call)
 		}
-		for _, a := range call {
-			composited = composited || strings.HasPrefix(a, "pam:")
-		}
 	}
-	if !composited {
+	if !composed {
 		t.Error("the one-frame GIF was not composited")
 	}
 }
 
-// A still WebP carrying an ICC profile, passed to EncodeRung as an
-// animation, encodes as one frame with the profile ProbeFrames reports from
-// its chunk list.
-func TestEncodeRungEncodesAProfiledStillWebPAsAnAnimation(t *testing.T) {
+// A still WebP carrying an ICC profile, encoded as an animation, encodes as
+// one frame.
+func TestEncodeAProfiledStillWebPAsAnAnimation(t *testing.T) {
 	t.Parallel()
-	real := requireMagick(t)
-	env := stagedEnv(real, t.TempDir())
+	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "content")
-	if _, err := real.Run(context.Background(), "magick", "-size", "16x12", "gradient:red-blue",
+	if _, err := testEnv(t).run(context.Background(), "magick", "-size", "16x12", "gradient:red-blue",
 		"-profile", writeSRGBProfile(t), "webp:"+path); err != nil {
 		t.Fatal(err)
 	}
-	frames, err := env.ProbeFrames(context.Background(), path, "image/webp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !AnyProfiled(frames) {
-		t.Fatalf("ProbeFrames found no profile in %v", frames)
-	}
-	_, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), path, "image/webp",
-		true, Rung{CeilingPx: 64, MaxFrames: 16}, frames, writeSRGBProfile(t), "", testQuality)
-	if err != nil || len(mapping) != 1 {
+	if _, mapping, err := rungArgs(t, p, path, 16); err != nil || len(mapping) != 1 {
 		t.Fatalf("mapping %v, err %v", mapping, err)
 	}
-	cleanup()
 }
 
 // The artifact is what ImageMagick makes of the whole animation when it can
 // hold it: the same bytes, delays included, for opaque frames.
-func TestEncodeRungMatchesTheWholeFileEncode(t *testing.T) {
+func TestEncodeMatchesTheWholeFileEncode(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
-	env := stagedEnv(real, t.TempDir())
+	p := requireProcessor(t)
 	levels, delays := []int{10, 70, 130, 190, 250}, []int{0, 20, 7, 33, 20}
 	path := writeGrayAnimGIF(t, real, levels, delays)
-	out, mapping, err := rungArgs(t, env, path, "image/gif", 3)
+	out, mapping, err := rungArgs(t, p, path, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,10 +291,10 @@ func TestEncodeRungMatchesTheWholeFileEncode(t *testing.T) {
 
 // Frames tagged with a profile are converted from it, and untagged frames are
 // not.
-func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
+func TestEncodeConvertsProfiledGIFFrames(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
-	env := stagedEnv(real, t.TempDir())
+	p := requireProcessor(t)
 	adobe := writeAdobeProfile(t, t.TempDir())
 	adobeBytes, err := os.ReadFile(adobe)
 	if err != nil {
@@ -318,17 +306,10 @@ func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
 	base := buildGIF(t, 24, 20, paletteA, []gifFrameSpec{spec(0), spec(1), spec(2)})
 	destination := writeSRGBProfile(t)
 	encode := func(data []byte) string {
-		path := writeFile(t, "content", data)
-		frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
+		out, _, err := rungArgs(t, p, writeFile(t, "content", data), 3)
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/gif",
-			true, Rung{CeilingPx: 64, MaxFrames: 3}, frames, destination, "", testQuality)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(cleanup)
 		return out
 	}
 	tagged := withICC(t, base, adobeBytes, 0, 1, 2)
@@ -353,12 +334,12 @@ func TestEncodeRungConvertsProfiledGIFFrames(t *testing.T) {
 
 // Consecutive frames that are the same after the resize are encoded once and
 // the mapping says so.
-func TestEncodeRungDropsConsecutiveDuplicateFrames(t *testing.T) {
+func TestEncodeDropsConsecutiveDuplicateFrames(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
-	env := stagedEnv(real, t.TempDir())
+	p := requireProcessor(t)
 	path := writeGrayAnimGIF(t, real, []int{50, 50, 50, 200, 200, 90}, []int{5, 5, 5, 5, 5, 5})
-	out, mapping, err := rungArgs(t, env, path, "image/gif", 6)
+	out, mapping, err := rungArgs(t, p, path, 6)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,90 +350,46 @@ func TestEncodeRungDropsConsecutiveDuplicateFrames(t *testing.T) {
 	if want := []int{0, 3, 5}; !slices.Equal(sources, want) {
 		t.Errorf("mapping holds source frames %v, want %v", sources, want)
 	}
-	if scenes, _, _, err := real.IdentifyArtifact(context.Background(), out); err != nil || scenes != len(mapping) {
-		t.Errorf("artifact holds %d scenes (%v), mapping %d", scenes, err, len(mapping))
+	if delays, _, _, err := testEnv(t).identifyScenes(context.Background(), out); err != nil || len(delays) != len(mapping) {
+		t.Errorf("artifact holds %d scenes (%v), mapping %d", len(delays), err, len(mapping))
 	}
 }
 
 // A request cancelled after the header read stops the compositing before
 // ImageMagick runs.
-func TestEncodeRungStopsCompositingWhenCancelled(t *testing.T) {
+func TestEncodeStopsCompositingWhenCancelled(t *testing.T) {
 	t.Parallel()
-	real := requireMagick(t)
+	p := requireProcessor(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cancelling := real
-	cancelling.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		res, err := real.Run(ctx, name, args...)
+	inner := p.run
+	var calls [][]string
+	p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		calls = append(calls, append([]string{name}, args...))
+		res, err := inner(ctx, in, name, args...)
 		if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
 			cancel()
 		}
 		return res, err
 	}
-	env, calls := countingEnv(stagedEnv(cancelling, t.TempDir()))
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 6))
-	frames, err := real.ProbeFrames(context.Background(), path, "image/gif")
+	src, _, err := p.Open(ctx, path, OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, cleanup, _, _, _, err := env.EncodeRung(ctx, path, "image/gif", true, Rung{CeilingPx: 64, MaxFrames: 4}, frames, "", "", testQuality)
-	if err == nil {
-		cleanup()
-		t.Fatal("a cancelled encode succeeded")
-	}
-	if !errors.Is(err, context.Canceled) {
+	defer func() { _ = src.Close() }()
+	if _, _, err := src.Encode(ctx, t.TempDir(), Select{Frames: Even(4)}, animatedWebPAt(64)); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
-	if got := calls(); len(got) != 1 {
-		t.Errorf("runs = %q, want only the header read", got)
+	if len(calls) != 1 {
+		t.Errorf("runs = %q, want only the header read", calls)
 	}
 }
 
-// The staging directory holds the artifact and nothing else, whether the
-// encode succeeds or fails.
-func TestEncodeRungLeavesNoScratchFiles(t *testing.T) {
+// A Source refuses an animation over a cap before decoding anything: the only
+// tool run is the -ping header read. A file at a cap is not refused.
+func TestOpenRefusesAnimationsOverTheCapsBeforeDecoding(t *testing.T) {
 	t.Parallel()
-	real := requireMagick(t)
-	staging := t.TempDir()
-	env := stagedEnv(real, staging)
-	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 4))
-	frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/gif",
-		true, Rung{CeilingPx: 64, MaxFrames: 4}, frames, "", "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := dirNames(t, staging); len(got) != 1 || filepath.Join(staging, got[0]) != out {
-		t.Errorf("staging holds %v after success, want only the artifact", got)
-	}
-	cleanup()
-
-	// ImageMagick failing after the frames are composited.
-	failing := env
-	failing.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-		if !slices.Contains(args, "identify") {
-			return Result{}, errors.New("magick failed")
-		}
-		return env.Run(ctx, name, args...)
-	}
-	if _, _, _, _, _, err := failing.EncodeRung(context.Background(), path, "image/gif",
-		true, Rung{CeilingPx: 64, MaxFrames: 4}, frames, "", "", testQuality); err == nil {
-		t.Fatal("an encode with a failing magick succeeded")
-	}
-	if got := dirNames(t, staging); len(got) != 0 {
-		t.Errorf("staging holds %v after failure, want nothing", got)
-	}
-}
-
-// EncodeRung reads an animation's headers and refuses one over a cap before
-// decoding anything: the only tool run is the -ping header read. A file at a
-// cap is not refused.
-func TestEncodeRungRefusesAnimationsOverTheCapsBeforeDecoding(t *testing.T) {
-	t.Parallel()
-	real := requireMagick(t)
 	const side = maxFramePixels / 6500
 	if side*6500 != maxFramePixels {
 		t.Fatalf("the frame cap %d is not a multiple of 6500", int64(maxFramePixels))
@@ -473,50 +410,26 @@ func TestEncodeRungRefusesAnimationsOverTheCapsBeforeDecoding(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := writeFile(t, "content", c.data(t))
-			frames, err := real.ProbeFrames(context.Background(), path, "image/gif")
-			if err != nil {
-				t.Fatal(err)
-			}
-			// An input at a cap proceeds to the decode, which is cancelled as
-			// it starts: the cost of decoding a file at a cap is not the
-			// subject, and it would inflate this process for the tests after.
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			cancelling := real
-			cancelling.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-				res, err := real.Run(ctx, name, args...)
-				if slices.Contains(args, "identify") && slices.Contains(args, "-ping") {
-					cancel()
-				}
-				return res, err
-			}
-			env, calls := countingEnv(stagedEnv(cancelling, t.TempDir()))
-			_, cleanup, _, _, _, err := env.EncodeRung(ctx, path, "image/gif",
-				true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
-			if err == nil {
-				cleanup()
+			p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
+			rec := record(p)
+			src, _, err := p.Open(context.Background(), path, OpenOptions{})
+			if src != nil {
+				defer func() { _ = src.Close() }()
 			}
 			if got := errors.Is(err, ErrTooLarge); got != c.refused {
 				t.Fatalf("err = %v, want ErrTooLarge = %v", err, c.refused)
 			}
-			if !c.refused && !errors.Is(err, context.Canceled) {
-				t.Fatalf("err = %v, want the decode to start and be cancelled", err)
-			}
-			if c.refused {
-				got := calls()
-				if len(got) != 1 || !slices.Contains(got[0], "identify") || !slices.Contains(got[0], "-ping") {
-					t.Errorf("runs = %q, want only the -ping header read", got)
-				}
+			if got := rec.calls; len(got) != 1 || !slices.Contains(got[0], "identify") || !slices.Contains(got[0], "-ping") {
+				t.Errorf("runs = %q, want only the -ping header read", got)
 			}
 		})
 	}
 }
 
 // A WebP animation is read and capped as a GIF is.
-func TestEncodeRungRefusesOversizeWebPAnimationsBeforeDecoding(t *testing.T) {
+func TestOpenRefusesOversizeWebPAnimationsBeforeDecoding(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
-	real := requireMagick(t)
 	const height = 6500
 	width := maxFramePixels / height
 	oneFrame := func(w, h int) string {
@@ -527,101 +440,39 @@ func TestEncodeRungRefusesOversizeWebPAnimationsBeforeDecoding(t *testing.T) {
 		return out
 	}
 	path := oneFrame(width+1, height)
-	frames, err := real.ProbeFrames(context.Background(), path, "image/webp")
-	if err != nil || len(frames) != 2 {
-		t.Fatalf("%d frames, err %v", len(frames), err)
-	}
-	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
-	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/webp",
-		true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
-	if err == nil {
-		cleanup()
-	}
+	p := requireProcessorWith(t, Config{Caps: measuredCapsConfig})
+	rec := record(p)
+	_, _, err := p.Open(context.Background(), path, OpenOptions{})
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
-	if got := calls(); len(got) != 1 || !slices.Contains(got[0], "-ping") {
+	if got := rec.calls; len(got) != 1 || !slices.Contains(got[0], "-ping") {
 		t.Errorf("runs = %q, want only the -ping header read", got)
 	}
 }
 
-// Frames that are not the file's own headers are an error, before any decode.
-func TestEncodeRungRefusesFramesThatDifferFromTheHeaders(t *testing.T) {
-	t.Parallel()
-	real := requireMagick(t)
-	path := writeFile(t, "content", oneColourGIF(t, 8, 8, 4))
-	other, err := real.ProbeFrames(context.Background(), writeFile(t, "content", oneColourGIF(t, 8, 8, 3)), "image/gif")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, frames := range map[string][]FrameInfo{
-		"too few":    other,
-		"fabricated": make([]FrameInfo, maxAnimationFrames+1),
-		"none":       nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			env, calls := countingEnv(stagedEnv(real, t.TempDir()))
-			_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/gif",
-				true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
-			if err == nil {
-				cleanup()
-				t.Fatal("encode succeeded")
-			}
-			if errors.Is(err, ErrTooLarge) {
-				t.Errorf("err = %v, want a mismatch error", err)
-			}
-			if got := calls(); len(got) != 1 {
-				t.Errorf("runs = %q, want only the header read", got)
-			}
-		})
-	}
-}
-
-// A compositor that reports fewer frames than were selected, or an encode that
-// reports fewer rows, is an error and not a short mapping.
-func TestEncodeRungRefusesShortToolOutput(t *testing.T) {
+// An encode that reports fewer rows than it was given frames is an error and
+// not a short mapping.
+func TestEncodeRefusesAShortEncodeReport(t *testing.T) {
 	t.Parallel()
 	requireWebPBuilders(t)
-	real := requireMagick(t)
+	p := requireProcessor(t)
 	path := buildWebP(t, webpCase{codec: "lossless", frames: 6})
-	frames, err := real.ProbeFrames(context.Background(), path, "image/webp")
-	if err != nil {
-		t.Fatal(err)
+	inner := p.run
+	p.run = func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
+		res, err := inner(ctx, in, name, args...)
+		if err == nil && name == "magick" && slices.Contains(args, "info:") && slices.Contains(args, "-format") && !slices.Contains(args, "identify") {
+			lines := strings.SplitAfter(string(res.Stdout), "\n")
+			res.Stdout = []byte(lines[0])
+		}
+		return res, err
 	}
-	firstLines := func(out []byte, n int) []byte {
-		lines := strings.SplitAfter(string(out), "\n")
-		return []byte(strings.Join(lines[:n], ""))
+	_, _, err := rungArgs(t, p, path, 4)
+	if err == nil {
+		t.Fatal("encode succeeded")
 	}
-	for _, c := range []struct {
-		name string
-		hit  func(name string, args []string) bool
-		want string
-	}{
-		{"compositor", func(name string, _ []string) bool { return name == webpFramesTool }, "composited 1 of 4"},
-		{"encode", func(name string, args []string) bool {
-			return name == "magick" && slices.Contains(args, "info:") && slices.Contains(args, "-format") && !slices.Contains(args, "identify")
-		}, "encode reported 1 frames, want 4"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			env := real
-			env.Run = func(ctx context.Context, name string, args ...string) (Result, error) {
-				res, err := real.Run(ctx, name, args...)
-				if err == nil && c.hit(name, args) {
-					res.Stdout = firstLines(res.Stdout, 1)
-				}
-				return res, err
-			}
-			env = stagedEnv(env, t.TempDir())
-			_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "image/webp",
-				true, Rung{CeilingPx: 64, MaxFrames: 4}, frames, "", "", testQuality)
-			if err == nil {
-				cleanup()
-				t.Fatal("encode succeeded")
-			}
-			if !strings.Contains(err.Error(), c.want) {
-				t.Errorf("err = %v, want it to say %q", err, c.want)
-			}
-		})
+	if !strings.Contains(err.Error(), "encode reported 1 frames, want 4") {
+		t.Errorf("err = %v, want it to say the encode reported 1 frames, want 4", err)
 	}
 }
 
@@ -670,10 +521,10 @@ func TestGIFJobStopsBetweenFramesWhenCancelled(t *testing.T) {
 
 // Each frame is converted by the profile it carries, and a frame that gets
 // another profile than the first is not given the first's.
-func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
+func TestEncodeConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
-	env := stagedEnv(real, t.TempDir())
+	p := requireProcessor(t)
 	adobe := mustAdobeProfile(t)
 	destination := writeSRGBProfile(t)
 	var specs []gifFrameSpec
@@ -684,16 +535,10 @@ func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
 	// then each again.
 	data := withProfiles(t, buildGIF(t, 24, 20, paletteA, specs), []int{1, 2, 1, 2, 0}, adobe, swappedProfile(t, adobe))
 	path := writeFile(t, "content", data)
-	frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
+	out, mapping, err := rungArgs(t, p, path, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), path, "image/gif",
-		true, Rung{CeilingPx: 64, MaxFrames: 4}, frames, destination, "", testQuality)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
 	if len(mapping) != 4 {
 		t.Fatalf("%d frames, want 4", len(mapping))
 	}
@@ -714,9 +559,9 @@ func TestEncodeRungConvertsEachGIFFrameByItsOwnProfile(t *testing.T) {
 }
 
 // A GIF whose ICC extension precedes only its first frame is profiled on
-// every coalesced frame, which the compositors handle per frame. The
-// operation accepts it; EncodeRung, which composites the same way, must too.
-func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
+// every coalesced frame, which the compositors handle per frame; an encode of
+// every frame accepts it.
+func TestEncodeAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
 	t.Parallel()
 	real := requireMagick(t)
 	p := requireProcessor(t)
@@ -727,24 +572,13 @@ func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
 	magick(t, real, "-delay", "7", profiled, "-size", "8x8", "xc:blue", "-size", "8x8", "xc:green", gifPath)
 	path := stage(t, gifPath)
 
-	if _, _, err := p.AnimationFrames(context.Background(), path, Encoding{}, 3, t.TempDir()); err != nil {
-		t.Fatalf("AnimationFrames refused the file: %v", err)
+	if _, _, err := p.encodeEven(context.Background(), path, Encoding{}, 3, t.TempDir()); err != nil {
+		t.Fatalf("an encode of the frames refused the file: %v", err)
 	}
-
-	env := stagedEnv(real, t.TempDir())
-	frames, err := env.ProbeFrames(context.Background(), path, "image/gif")
+	_, mapping, err := rungArgs(t, p, path, 3)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("an animated encode refused the file: %v", err)
 	}
-	if len(frames) != 3 || !frames[0].hasICC || frames[1].hasICC {
-		t.Fatalf("ProbeFrames = %+v, want a profile on the first frame only", frames)
-	}
-	_, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), path, "image/gif",
-		true, Rung{CeilingPx: 64, MaxFrames: 3}, frames, writeSRGBProfile(t), "", testQuality)
-	if err != nil {
-		t.Fatalf("EncodeRung refused the file the operation accepts: %v", err)
-	}
-	defer cleanup()
 	if len(mapping) != 3 {
 		t.Errorf("mapping %v, want 3 frames", mapping)
 	}
@@ -752,16 +586,23 @@ func TestEncodeRungAcceptsGIFProfiledOnTheFirstFrameOnly(t *testing.T) {
 
 // A one-frame animation is decoded once, by the encode, and maps to its one
 // frame.
-func TestEncodeRungDecodesAOneFrameAnimationOnce(t *testing.T) {
+func TestEncodeDecodesAOneFrameAnimationOnce(t *testing.T) {
 	t.Parallel()
-	real := requireMagick(t)
-	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
+	p := requireProcessor(t)
 	path := writeFile(t, "content", oneColourGIF(t, 16, 16, 1))
-	if _, mapping, err := rungArgs(t, env, path, "image/gif", 16); err != nil || len(mapping) != 1 {
-		t.Fatalf("mapping %v, err %v", mapping, err)
+	src, _, err := p.Open(context.Background(), path, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	rec := record(p)
+	defer func() { p.run = rec.inner }()
+	images, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Even(16)}, animatedWebPAt(64))
+	if err != nil || len(images[0].Frames) != 1 {
+		t.Fatalf("mapping %v, err %v", images, err)
 	}
 	var pixelRuns [][]string
-	for _, call := range calls() {
+	for _, call := range rec.calls {
 		if call[0] == "magick" && !slices.Contains(call, "identify") {
 			pixelRuns = append(pixelRuns, call)
 		}
@@ -771,83 +612,51 @@ func TestEncodeRungDecodesAOneFrameAnimationOnce(t *testing.T) {
 	}
 }
 
-// A multi-frame file the pipeline cannot composite is refused, as
-// AnimationFrames refuses it, with ErrUnsupportedType naming the type found
-// and before any pixel is decoded.
-func TestEncodeRungRefusesOtherFormatsAsAnimationFramesDoes(t *testing.T) {
-	t.Parallel()
-	real := requireMagick(t)
-	env, calls := countingEnv(stagedEnv(real, t.TempDir()))
-	tiff := filepath.Join(t.TempDir(), "multi.tif")
-	magick(t, real, "-size", "8x8", "xc:red", "-size", "8x8", "xc:blue", tiff)
-	frames, err := env.ProbeFrames(context.Background(), tiff, "image/tiff")
-	if err != nil || len(frames) != 2 {
-		t.Fatalf("%d frames, err %v", len(frames), err)
-	}
-	before := len(calls())
-	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), tiff, "image/tiff",
-		true, Rung{CeilingPx: 64, MaxFrames: 2}, frames, "", "", testQuality)
-	if err == nil {
-		cleanup()
-		t.Fatal("a TIFF was encoded as an animation")
-	}
-	if !errors.Is(err, ErrUnsupportedType) {
-		t.Errorf("err = %v, want ErrUnsupportedType", err)
-	}
-	if strings.Contains(err.Error(), `""`) {
-		t.Errorf("err = %v, names no type", err)
-	}
-	for _, call := range calls()[before:] {
-		if !slices.Contains(call, "identify") {
-			t.Errorf("a pixel run before the refusal: %q", call)
-		}
-	}
-	// The same file as a still is its first page.
-	_, cleanup, _, _, mapping, err := env.EncodeRung(context.Background(), tiff, "image/tiff",
-		false, Rung{CeilingPx: 64, MaxFrames: 1}, frames, "", "", testQuality)
-	if err != nil || len(mapping) != 1 {
-		t.Fatalf("still of a multi-page TIFF: mapping %v, err %v", mapping, err)
-	}
-	cleanup()
-}
-
 // A still whose orientation the header read leaves open is refused when its
 // encode reports no upright size.
 func TestEncodeRefusesAnUnsettledStillWhoseRunReportsNoUprightSize(t *testing.T) {
 	t.Parallel()
-	env := stagedEnv(Env{Run: func(_ context.Context, _ string, args ...string) (Result, error) {
-		if slices.Contains(args, "identify") {
-			return Result{Stdout: []byte("0||64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
-		}
-		return Result{Stdout: []byte("64|64\n")}, nil
-	}}, t.TempDir())
+	p := requireProcessor(t)
 	path := writeFile(t, "content", []byte("not a recognised type"))
-	_, _, _, _, _, err := env.EncodeRung(context.Background(), path, "", false,
-		Rung{CeilingPx: 64, MaxFrames: 1}, []FrameInfo{{}}, "", "", testQuality)
+	p.run = func(_ context.Context, _ *os.File, _ string, args ...string) (runResult, error) {
+		if slices.Contains(args, "identify") {
+			return runResult{Stdout: []byte("0||64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
+		}
+		return runResult{Stdout: []byte("64|64\n")}, nil
+	}
+	src, _, err := p.Open(context.Background(), path, OpenOptions{Type: "image/png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = src.Close() }()
+	_, _, err = src.Encode(context.Background(), t.TempDir(), Select{}, webpAtEdge(64))
 	if err == nil || !strings.Contains(err.Error(), "upright") {
 		t.Errorf("err = %v, want a refusal for the missing upright size", err)
 	}
 }
 
 // A profiled still gets its sRGB destination from the profile the package
-// embeds when the caller supplies no file, as a composited animation does.
-func TestEncodeRungStillWithoutProfilePathUsesTheEmbeddedProfile(t *testing.T) {
+// embeds, as a composited animation does.
+func TestEncodeAProfiledStillConvertsToTheEmbeddedProfile(t *testing.T) {
 	t.Parallel()
+	p := requireProcessor(t)
+	path := writeFile(t, "content", []byte("not a recognised type"))
 	var encodes [][]string
-	env := stagedEnv(Env{Run: func(_ context.Context, _ string, args ...string) (Result, error) {
+	p.run = func(_ context.Context, _ *os.File, _ string, args ...string) (runResult, error) {
 		if slices.Contains(args, "identify") {
-			return Result{Stdout: []byte("0|icc|64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
+			return runResult{Stdout: []byte("0|icc|64|64|64|64|PNG|Undefined|DirectClass sRGB|Undefined|END\n")}, nil
 		}
 		encodes = append(encodes, args)
-		return Result{Stdout: []byte("upright|64|64\n64|64\n")}, nil
-	}}, t.TempDir())
-	path := writeFile(t, "content", []byte("not a recognised type"))
-	_, cleanup, _, _, _, err := env.EncodeRung(context.Background(), path, "", false,
-		Rung{CeilingPx: 64, MaxFrames: 1}, []FrameInfo{{hasICC: true}}, "", "", testQuality)
+		return runResult{Stdout: []byte("upright|64|64\n64|64\n")}, nil
+	}
+	src, _, err := p.Open(context.Background(), path, OpenOptions{Type: "image/png"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanup()
+	defer func() { _ = src.Close() }()
+	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{}, webpAtEdge(64)); err != nil {
+		t.Fatal(err)
+	}
 	if len(encodes) != 1 {
 		t.Fatalf("encodes = %q, want one", encodes)
 	}

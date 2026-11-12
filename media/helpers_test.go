@@ -9,58 +9,44 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/davars/winnow-media/tool"
 )
 
-// stagerIn is a Stage that creates files in dir.
-func stagerIn(dir string) func(string) (string, func(), error) {
-	return func(ext string) (string, func(), error) {
-		f, err := os.CreateTemp(dir, "*"+ext)
-		if err != nil {
-			return "", nil, err
-		}
-		path := f.Name()
-		if err := f.Close(); err != nil {
-			return "", nil, err
-		}
-		return path, func() { _ = os.Remove(path) }, nil
-	}
-}
-
-// testEnv runs the real tools, resolved through the tool package, and stages
-// outputs under a per-test directory. A test that needs a tool skips when it
-// cannot be found.
-func testEnv(t *testing.T) Env {
+// testEnv runs the real tools, resolved through the tool package, directly
+// and without the sandbox, under the default Resources and the measured caps.
+// A test that needs a tool skips when it cannot be found.
+func testEnv(t *testing.T) toolEnv {
 	t.Helper()
-	staging := t.TempDir()
-	return Env{
-		Run: func(ctx context.Context, name string, args ...string) (Result, error) {
+	return toolEnv{
+		run: func(ctx context.Context, name string, args ...string) (runResult, error) {
 			path, err := tool.Resolve(name)
 			if err != nil {
-				return Result{}, err
+				return runResult{}, err
 			}
 			cmd := exec.CommandContext(ctx, path, args...)
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			out, err := cmd.Output()
-			res := Result{Stdout: out, Stderr: stderr.Bytes(), Usage: UsageOf(cmd.ProcessState)}
+			res := runResult{Stdout: out, Stderr: stderr.Bytes(), Usage: usageOf(cmd.ProcessState)}
 			if err != nil {
 				return res, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(stderr.String()))
 			}
 			return res, nil
 		},
-		Scratch: testScratch,
-		Stage:   stagerIn(staging),
+		resources: defaultResources(),
+		caps:      measuredCaps,
 	}
 }
 
 // requireTools skips the test unless every named tool resolves, and returns
 // testEnv.
-func requireTools(t *testing.T, names ...string) Env {
+func requireTools(t *testing.T, names ...string) toolEnv {
 	t.Helper()
 	for _, name := range names {
 		if _, err := tool.Resolve(name); err != nil {
@@ -70,7 +56,7 @@ func requireTools(t *testing.T, names ...string) Env {
 	return testEnv(t)
 }
 
-func requireMagick(t *testing.T) Env { return requireTools(t, "magick") }
+func requireMagick(t *testing.T) toolEnv { return requireTools(t, "magick") }
 
 // requireProcessor returns a Processor over the real tools, closed when the
 // test ends, and skips the test when a tool cannot be found.
@@ -91,16 +77,16 @@ func requireProcessorWith(t *testing.T, cfg Config) *Processor {
 	return p
 }
 
-func magick(t *testing.T, env Env, args ...string) []byte {
+func magick(t *testing.T, env toolEnv, args ...string) []byte {
 	t.Helper()
-	res, err := env.Run(context.Background(), "magick", args...)
+	res, err := env.run(context.Background(), "magick", args...)
 	if err != nil {
 		t.Fatalf("magick %q: %v", args, err)
 	}
 	return res.Stdout
 }
 
-func meanAbsoluteDifference(t *testing.T, env Env, first, second string) float64 {
+func meanAbsoluteDifference(t *testing.T, env toolEnv, first, second string) float64 {
 	t.Helper()
 	out := magick(t, env, first, second, "-compose", "difference", "-composite", "-format", "%[fx:mean]", "info:")
 	value, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
@@ -112,10 +98,10 @@ func meanAbsoluteDifference(t *testing.T, env Env, first, second string) float64
 
 // animationFrameDifference is the mean absolute difference between frame
 // number frame of two animations of n frames each.
-func animationFrameDifference(t *testing.T, env Env, first, second string, frame, n int) float64 {
+func animationFrameDifference(t *testing.T, env toolEnv, first, second string, frame, n int) float64 {
 	t.Helper()
 	pick := func(path string) []string {
-		return []string{"(", path, "-coalesce", "-delete", DeleteExpr([]int{frame}, n), ")"}
+		return []string{"(", path, "-coalesce", "-delete", deleteExpr([]int{frame}, n), ")"}
 	}
 	out := magick(t, env, append(append(pick(first), pick(second)...),
 		"-compose", "difference", "-composite", "-format", "%[fx:mean]", "info:")...)
@@ -170,36 +156,6 @@ func withProfile(outDir string, profiled bool, fn func(profilePath string) error
 	return fn(path)
 }
 
-// still encodes the first image of path, read with dec, to dir as the
-// Processor's Still does.
-func (e Env) still(ctx context.Context, dec decoder, path string, enc encoding, dir string) (Image, error) {
-	return e.stillRegion(ctx, region{}, dec, path, enc, dir)
-}
-
-// stillRegion is still showing the region r of the picture.
-func (e Env) stillRegion(ctx context.Context, r region, dec decoder, path string, enc encoding, dir string) (Image, error) {
-	src, err := e.open(ctx, openRequest{path: path, dec: dec, pinned: true, caps: true, hints: Hints{Still: true}, scratch: dir})
-	if err != nil {
-		return Image{}, err
-	}
-	defer src.Close()
-	images, err := src.encodeFiles(ctx, r, enc, dir, func(int) string { return "still" + enc.ext })
-	if err != nil {
-		return Image{}, err
-	}
-	return images[0], nil
-}
-
-// testScratch is an Env.Scratch that makes directories under the system
-// temporary directory.
-func testScratch() (string, func(), error) {
-	dir, err := os.MkdirTemp("", "media-test-scratch-")
-	if err != nil {
-		return "", nil, err
-	}
-	return dir, func() { _ = os.RemoveAll(dir) }, nil
-}
-
 // headerWithOrientation returns the output of a header read with the
 // orientation of every scene replaced by name.
 func headerWithOrientation(out []byte, name string) []byte {
@@ -213,14 +169,134 @@ func headerWithOrientation(out []byte, name string) []byte {
 	return []byte(strings.Join(lines, "\n"))
 }
 
-// envTestCaps are the caps of the Env methods, for tests of the cap checks at
-// those values; a zero Config has only the library ceilings.
-var envTestCaps = Caps{
+// The caps below are the values docs/measurements.md records, which owns them
+// and their rationale; the tests of the cap checks hold the gate to them. A zero
+// Config has only the library ceilings.
+const (
+	maxInputBytes     = 25 << 20
+	maxFramePixels    = 52_000_000
+	maxReturnedPixels = 64_000_000
+	maxDecodedPixels  = 900_000_000
+)
+
+// measuredCaps are the measured caps, resolved.
+var measuredCaps = caps{
+	inputBytes:     maxInputBytes,
+	framePixels:    maxFramePixels,
+	returnedPixels: maxReturnedPixels,
+	decodedPixels:  maxDecodedPixels,
+	frames:         maxAnimationFrames,
+}
+
+// measuredCapsConfig are the measured caps, as a Config takes them.
+var measuredCapsConfig = Caps{
 	MaxInputBytes:     maxInputBytes,
 	MaxFramePixels:    maxFramePixels,
 	MaxReturnedPixels: maxReturnedPixels,
 	MaxDecodedPixels:  maxDecodedPixels,
 	MaxFrames:         maxAnimationFrames,
+}
+
+func defaultResources() Resources { return Resources{}.withDefaults() }
+
+// deleteExpr renders the magick -delete argument dropping every one of
+// sourceFrames frames that keep does not name.
+func deleteExpr(keep []int, sourceFrames int) string {
+	kept := make(map[int]bool, len(keep))
+	for _, idx := range keep {
+		kept[idx] = true
+	}
+	var drop []string
+	for i := range sourceFrames {
+		if !kept[i] {
+			drop = append(drop, strconv.Itoa(i))
+		}
+	}
+	return strings.Join(drop, ",")
+}
+
+// inputAt returns the input that reads the file at path, which is closed when
+// the test ends.
+func inputAt(t testing.TB, path string) input {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return input{f: f}
+}
+
+// sniffPath returns the media type the leading bytes of the file at path name.
+func sniffPath(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	buf, err := readHead(input{f: f})
+	if err != nil {
+		return "", err
+	}
+	return sniff(buf)
+}
+
+// countingEnv wraps env so the argv of every magick run is recorded.
+func countingEnv(env toolEnv) (toolEnv, func() [][]string) {
+	var mu sync.Mutex
+	var calls [][]string
+	inner := env.run
+	env.run = func(ctx context.Context, name string, args ...string) (runResult, error) {
+		mu.Lock()
+		calls = append(calls, append([]string{name}, args...))
+		mu.Unlock()
+		return inner(ctx, name, args...)
+	}
+	return env, func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(calls)
+	}
+}
+
+// stillRegion encodes the region r of the first image of the file at path
+// through p into dir, opened under opts.
+func stillRegion(ctx context.Context, p *Processor, r region, path string, opts OpenOptions, enc Encoding, dir string) (Image, error) {
+	src, _, err := p.Open(ctx, path, opts)
+	if err != nil {
+		return Image{}, err
+	}
+	defer func() { _ = src.Close() }()
+	images, _, err := src.Encode(ctx, dir, Select{Region: r.exported()}, enc)
+	if err != nil {
+		return Image{}, err
+	}
+	return images[0], nil
+}
+
+// sourceProcessor returns a Processor over the real tools, closed when the test
+// ends, and a recorder of its tool runs, including those of an external frame
+// compositor such as webp-frames.
+func sourceProcessor(t *testing.T) (*Processor, *recorder) {
+	t.Helper()
+	return sourceProcessorWith(t, Config{})
+}
+
+// sourceProcessorWith is sourceProcessor under cfg.
+func sourceProcessorWith(t *testing.T, cfg Config) (*Processor, *recorder) {
+	t.Helper()
+	p := requireProcessorWith(t, cfg)
+	rec := record(p)
+	inner := p.compose
+	p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
+		if req.external != "" {
+			rec.mu.Lock()
+			rec.calls = append(rec.calls, append([]string{req.external}, req.args()...))
+			rec.mu.Unlock()
+		}
+		return inner(ctx, in, req, onFrame)
+	}
+	return p, rec
 }
 
 // sameImages reports whether a and b describe the same files.
@@ -257,3 +333,7 @@ func requireStreamingProcessor(t *testing.T) *Processor {
 
 // exported is r as the Region of a Select.
 func (r region) exported() Region { return Region{X: r.x, Y: r.y, Width: r.width, Height: r.height} }
+
+// defaultFrames is the number of evenly spaced frames the tests that do not
+// care take of an animation or video.
+const defaultFrames = 16
