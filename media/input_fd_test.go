@@ -206,7 +206,7 @@ func TestReplacedInputIsNeverRead(t *testing.T) {
 							// time makes Open itself refuse; the others leave
 							// nothing to refuse, so Open must have read the
 							// original.
-							if phase == "encode" || keepsStatusChange[swapName] || !strings.Contains(err.Error(), "changed") {
+							if phase == "encode" || keepsStatusChange[swapName] || !errors.Is(err, ErrInputChanged) {
 								t.Fatal(err)
 							}
 							return
@@ -220,7 +220,7 @@ func TestReplacedInputIsNeverRead(t *testing.T) {
 							t.Fatal("no tool ran after the swap")
 						}
 						switch {
-						case err != nil && !keepsStatusChange[swapName] && strings.Contains(err.Error(), "changed"):
+						case err != nil && !keepsStatusChange[swapName] && errors.Is(err, ErrInputChanged):
 						case err != nil:
 							t.Fatal(err)
 						case !sameFiles(got, baseline):
@@ -297,11 +297,16 @@ func TestNoToolArgvNamesTheInputPath(t *testing.T) {
 }
 
 // swapAfterOpen is an input opener that, once it has opened the file at path,
-// puts the file at next in its place.
+// puts the file at next in its place. The original stays linked under another
+// name, so the opened file is not unlinked.
 func swapAfterOpen(p *Processor, next string) {
 	p.openInput = func(path string) (*os.File, error) {
 		f, err := openInputFile(path)
 		if err != nil {
+			return nil, err
+		}
+		if err := os.Rename(path, path+".original"); err != nil {
+			_ = f.Close()
 			return nil, err
 		}
 		if err := os.Rename(next, path); err != nil {
@@ -309,6 +314,43 @@ func swapAfterOpen(p *Processor, next string) {
 			return nil, err
 		}
 		return f, nil
+	}
+}
+
+// An input whose path is renamed over after the open is unlinked: the
+// descriptor still reads the original, but no tool can be handed it by path.
+// Open reports ErrInputChanged whether the type is named by sniff or by
+// ImageMagick's detection.
+func TestUnlinkedInputIsAChangedInput(t *testing.T) {
+	t.Parallel()
+	for name, build := range map[string]func(*testing.T) string{
+		"sniffed type":  func(t *testing.T) string { return writeGIF(t, solid, 3) },
+		"detected type": typeFixtures["image/x-adobe-dng"].build,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := requireProcessor(t)
+			path := build(t)
+			other := writePadding(t, 1<<10)
+			p.openInput = func(path string) (*os.File, error) {
+				f, err := openInputFile(path)
+				if err != nil {
+					return nil, err
+				}
+				if err := os.Rename(other, path); err != nil {
+					_ = f.Close()
+					return nil, err
+				}
+				return f, nil
+			}
+			src, _, err := p.Open(context.Background(), path, OpenOptions{})
+			if err == nil {
+				_ = src.Close()
+			}
+			if !errors.Is(err, ErrInputChanged) {
+				t.Fatalf("err = %v, want ErrInputChanged", err)
+			}
+		})
 	}
 }
 

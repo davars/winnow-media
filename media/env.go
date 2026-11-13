@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"syscall"
 	"time"
@@ -56,6 +57,33 @@ type toolEnv struct {
 	// gate.
 	resources Resources
 	caps      caps
+}
+
+// pinnedTo returns e with every failed run checked against the descriptor f,
+// which holds the input as id described it. A run that failed while f no
+// longer matches id, or has no links left, returns an error wrapping
+// ErrInputChanged in place of the tool's, because a tool cannot always say
+// that its input was replaced. when ends the message: "while it was opened" or
+// "since it was opened".
+func (e toolEnv) pinnedTo(f *os.File, id fileID, when string) toolEnv {
+	changed := func(ctx context.Context, err error) error {
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		if info, serr := f.Stat(); serr == nil && (idOf(info) != id || unlinked(info)) {
+			return fmt.Errorf("source: %w %s", ErrInputChanged, when)
+		}
+		return err
+	}
+	run, compose := e.run, e.compose
+	e.run = func(ctx context.Context, name string, args ...string) (runResult, error) {
+		res, err := run(ctx, name, args...)
+		return res, changed(ctx, err)
+	}
+	e.compose = func(ctx context.Context, req composeRequest, onFrame func(composedFrame) error) error {
+		return changed(ctx, compose(ctx, req, onFrame))
+	}
+	return e
 }
 
 // threads is the thread count of the ffmpeg and ffprobe runs.

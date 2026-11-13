@@ -16,3 +16,10 @@ func idOf(info os.FileInfo) fileID {
 	dev, ino, ctime := platformID(info.Sys())
 	return fileID{dev: dev, ino: ino, size: info.Size(), mtimeNS: info.ModTime().UnixNano(), ctimeNS: ctime}
 }
+
+// unlinked reports whether the file info describes has no directory entry
+// left, as when its path was renamed over after it was opened.
+func unlinked(info os.FileInfo) bool {
+	n, ok := linkCount(info.Sys())
+	return ok && n == 0
+}

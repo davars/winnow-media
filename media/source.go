@@ -240,7 +240,7 @@ func (p *Processor) open(ctx context.Context, path string, opts OpenOptions) (*S
 	}
 	src.probed = in.probe
 	src.reuse = opts.KeepDecode
-	env := p.env(&m, src.file)
+	env := p.env(&m, src.file).pinnedTo(src.file, src.id, "while it was opened")
 	if in.decoder.tool == "ffmpeg" {
 		err = src.openVideo(ctx, env, opts)
 	} else {
@@ -532,7 +532,7 @@ func (s *Source) encode(ctx context.Context, dir string, sel Select, encodings [
 			return nil, m.usage, err
 		}
 	}
-	env := s.p.env(&m, s.file)
+	env := s.p.env(&m, s.file).pinnedTo(s.file, s.id, "since it was opened")
 	images, err := inDir(dir, func() ([]Image, error) {
 		switch s.kind {
 		case Still:

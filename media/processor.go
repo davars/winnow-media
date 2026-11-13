@@ -359,7 +359,7 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string
 	if err != nil {
 		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
 	}
-	if a, b := idOf(pre), idOf(info); a.dev != b.dev || a.ino != b.ino || !info.Mode().IsRegular() {
+	if a, b := idOf(pre), idOf(info); a.dev != b.dev || a.ino != b.ino || !info.Mode().IsRegular() || unlinked(info) {
 		return admitted{}, fmt.Errorf("source: %w while it was opened", ErrInputChanged)
 	}
 	if info.Size() > p.caps.inputBytes {
@@ -423,10 +423,11 @@ type leadBytes struct {
 // reads or refuses, costs no probe. A file the probe refuses is read as an
 // image next, except an unknown ISO base media brand, which no coder reads.
 func (p *Processor) admitUnnamed(ctx context.Context, m *meter, f *os.File, ref string, lead leadBytes, in *admitted) error {
+	env := p.env(m, f).pinnedTo(f, in.id, "while it was opened")
 	otherBrand := errors.Is(lead.err, errOtherBrand)
 	var probeErr error
 	if p.detect != "" && (lead.looksVideo || otherBrand) {
-		probeErr = p.detectVideo(ctx, m, f, ref, !otherBrand, in)
+		probeErr = p.detectVideo(ctx, env, ref, !otherBrand, in)
 		if probeErr == nil || !errors.Is(probeErr, ErrUnsupportedType) {
 			return probeErr
 		}
@@ -434,7 +435,7 @@ func (p *Processor) admitUnnamed(ctx context.Context, m *meter, f *os.File, ref 
 	if otherBrand {
 		return cmp.Or(probeErr, lead.err)
 	}
-	typ, coder, scenes, err := p.detectType(ctx, m, f, ref)
+	typ, coder, scenes, err := p.detectType(ctx, env, ref)
 	if err != nil {
 		if probeErr != nil {
 			return fmt.Errorf("%w; and as a video: %v", err, probeErr)
@@ -472,8 +473,8 @@ func probeRefused(err error) bool {
 // probe may pick no demuxer outside p.detect, so what it names is one of the
 // configured types; no frame is decoded. preferMOV is set for a file with no
 // ftyp box, which the mov demuxer reads as QuickTime.
-func (p *Processor) detectVideo(ctx context.Context, m *meter, f *os.File, ref string, preferMOV bool, in *admitted) error {
-	info, err := probeDetected(ctx, p.env(m, f), p.detect, ref)
+func (p *Processor) detectVideo(ctx context.Context, env toolEnv, ref string, preferMOV bool, in *admitted) error {
+	info, err := probeDetected(ctx, env, p.detect, ref)
 	if err != nil {
 		if !probeRefused(err) {
 			return err
@@ -513,8 +514,8 @@ func (p *Processor) inputDir() (dir string, release func(), err error) {
 // and the headers, which Source then does not read again. A TIFF
 // whose first image is a reduced-resolution subfile, as the preview of a camera
 // raw file is, is refused: the file's own type is not TIFF.
-func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref string) (typ, coder string, scenes []sceneHeader, err error) {
-	scenes, err = identifyHeadersAs(ctx, p.env(m, f), ref+stillScenes, true, gateHeaderFormat)
+func (p *Processor) detectType(ctx context.Context, env toolEnv, ref string) (typ, coder string, scenes []sceneHeader, err error) {
+	scenes, err = identifyHeadersAs(ctx, env, ref+stillScenes, true, gateHeaderFormat)
 	if err != nil {
 		if stderr := string(Stderr(err)); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
 			(strings.Contains(stderr, "security policy") || strings.Contains(stderr, "no decode delegate")) {
