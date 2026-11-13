@@ -88,10 +88,11 @@ type Processor struct {
 // limits derived from cfg.Resources. It returns an error on platforms other
 // than Linux on amd64 or arm64, unless cfg.Unsandboxed is set.
 //
-// It is an error if cfg.Resources has a negative field or a TimeLimit or CPUTime
-// that is not a whole number of seconds of at least one, if cfg.Caps has a negative
-// field or one above its ceiling, if cfg.Types names a type Types does not
-// list, or if cfg.Dir is not an existing directory.
+// It is an error if cfg.Resources has a negative field or a TimeLimit or
+// CPUTime that is not a whole number of seconds of at least one, if cfg.Caps
+// has a negative field or one above its ceiling, if cfg.Types names a type
+// Types does not list, or if cfg.Dir is not an existing directory. These
+// configuration errors wrap no sentinel.
 func NewProcessor(ctx context.Context, cfg Config) (*Processor, error) {
 	return newProcessor(ctx, cfg, nil)
 }
@@ -183,8 +184,9 @@ func (p *Processor) tmpDir() string { return filepath.Join(p.dir, "tmp") }
 
 // Close closes every Source the Processor opened that is still open and
 // removes the Processor's directory. It waits for the Open calls in progress,
-// where an Open that has not yet returned its Source fails with ErrClosed, and for the calls running on the Sources; it
-// interrupts none of them, so cancel their contexts first to end them sooner.
+// each of which returns ErrClosed or a Source that Close then closes, and for
+// the calls running on the Sources; it interrupts none of them, so cancel
+// their contexts first to end them sooner.
 // Open after Close began returns ErrClosed. Close is safe to call more than
 // once.
 func (p *Processor) Close() error {

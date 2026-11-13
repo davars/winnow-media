@@ -202,9 +202,9 @@ type Source struct {
 // Elsewhere a tool reads through a link to the path, and only the per-Encode
 // identity check guards it.
 //
-// Open on a closed Processor returns ErrClosed without touching the file; an
-// Open that has not yet returned its Source when the Processor is closed also
-// returns ErrClosed. Errors wrap ErrUnsupportedType, ErrTooLarge, ErrTimeLimit,
+// Open on a closed Processor returns ErrClosed without touching the file. An
+// Open in progress when the Processor is closed returns either ErrClosed or a
+// Source that Close then closes. Errors wrap ErrUnsupportedType, ErrTooLarge, ErrTimeLimit,
 // ErrInputChanged, ErrClosed or ErrInvalidRequest (an OpenOptions.Orientation
 // out of range, or given for a video) as the cause is, or are a *ToolError for
 // a tool that failed. Retrying the same file cannot succeed after

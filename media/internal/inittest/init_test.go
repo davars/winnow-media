@@ -36,9 +36,6 @@ func TestProcessorRunsWithoutTestMain(t *testing.T) {
 // Without the sandbox the GIF compositor is still this executable started
 // again, which only the package init can run as the compositor.
 func TestUnsandboxedProcessorRunsWithoutTestMain(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("tools run directly only on Unix hosts")
-	}
 	runOperations(t, media.Config{Unsandboxed: true})
 }
 
@@ -46,7 +43,7 @@ func runOperations(t *testing.T, cfg media.Config) {
 	t.Helper()
 	for _, name := range []string{"magick", "ffmpeg", "ffprobe", "webp-frames"} {
 		if _, err := tool.Resolve(name); err != nil {
-			t.Skip(name + " not available")
+			t.Fatal(name + " is not available; run the tests under nix develop")
 		}
 	}
 	p, err := media.NewProcessor(context.Background(), withDir(cfg, t.TempDir()))

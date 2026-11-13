@@ -28,13 +28,13 @@ var (
 	// it, may.
 	ErrTooLarge = errors.New("input too large")
 
-	// ErrTimeLimit is returned, wrapped with the *ToolError of the run, when it failed, when a
-	// tool run reached a time limit: ImageMagick's per-image limit
-	// (Resources.TimeLimit), the sandbox's CPU-time limit
-	// (Resources.CPUTime), or a frame compositor waiting longer than
-	// Resources.TimeLimit for a frame to be consumed. ImageMagick often exits
-	// 0 when it reaches its limit, with the work unfinished, so such a run's
-	// output is never used. A retry can succeed with larger limits or on a
+	// ErrTimeLimit is returned when a tool run reached a time limit:
+	// ImageMagick's per-image limit (Resources.TimeLimit), the sandbox's
+	// CPU-time limit (Resources.CPUTime), or a frame compositor waiting longer
+	// than Resources.TimeLimit for a frame to be consumed. It wraps the run's
+	// *ToolError when the tool failed; ImageMagick often exits 0 when it
+	// reaches its limit, with the work unfinished, so such a run's output is
+	// never used. A retry can succeed with larger limits or on a
 	// less loaded host.
 	ErrTimeLimit = errors.New("time limit exceeded")
 
@@ -89,9 +89,8 @@ func (e *ToolError) Error() string {
 }
 
 // Stderr returns the standard error of the failed tool run err wraps (the
-// Stderr of its *ToolError), or nil when err wraps none. The bytes can quote
-// the input, so a caller that shows them to anyone but an operator should
-// leave them out.
+// Stderr of its *ToolError), or nil when err wraps none. See ToolError.Stderr
+// for what the bytes may contain.
 func Stderr(err error) []byte {
 	var te *ToolError
 	if errors.As(err, &te) {
