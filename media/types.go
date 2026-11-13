@@ -158,7 +158,8 @@ var coderTypes = func() map[string]string {
 }()
 
 // Types returns the media types the library can read, sorted. It is what a
-// nil Config.Types accepts. Later versions may add types.
+// nil Config.Types accepts. Later versions may add types; the example prints
+// the current ones.
 //
 // SVG, MVG, MSL, PostScript, EPS, PDF and text are never among them: reading
 // those can run other programs or open other files. WMV is the ASF type

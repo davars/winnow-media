@@ -198,21 +198,20 @@ type Source struct {
 // for it. It reads only what Encode needs to know: the headers of a still or
 // animation, or one probe of a video. No pixel is decoded. The package
 // documentation's Admission section says what is checked.
-// A path that is not a regular file is refused with an error wrapping
-// ErrInvalidRequest.
 //
 // The Usage covers the tool runs of the call, also when it fails. On an error
 // no Source is returned and nothing needs closing; otherwise the caller must
 // Close the Source or the Processor.
 //
 // Errors wrap ErrUnsupportedType or ErrTooLarge for a file the Processor does
-// not accept, ErrInvalidRequest for an opts.Orientation that is out of range
-// or given for a video, ErrInputChanged for a file replaced during the call,
-// ErrTimeLimit, ErrClosed for a closed Processor, or ctx's error; or they are
-// a *ToolError. A path that cannot be opened, or is not a regular file, gives
-// an error wrapping none of these; errors.Is(err, fs.ErrNotExist) holds for a
-// missing file. An Open in progress when the Processor is closed returns
-// ErrClosed or a Source that Close then closes.
+// not accept, ErrInvalidRequest for a path that is not a regular file or an
+// opts.Orientation that is out of range or given for a video, ErrInputChanged
+// for a file replaced during the call, ErrTimeLimit, ErrClosed for a closed
+// Processor, or ctx's error; or they are a *ToolError. A path that cannot be
+// opened gives the operating system's error, which wraps none of these;
+// errors.Is(err, fs.ErrNotExist) holds for a missing file. An Open in
+// progress when the Processor is closed returns ErrClosed or a Source that
+// Close then closes.
 func (p *Processor) Open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {
 	if !p.beginOpen() {
 		return nil, Usage{}, fmt.Errorf("open: processor: %w", ErrClosed)
@@ -469,21 +468,20 @@ func (s *Source) checkIdentity() error {
 // than it selected frames: a frame of an animation or video that is identical,
 // once resized, to the one before it is dropped, and a time past a video's
 // last frame gives none. Image.Frames says what each file shows.
-// A video call whose sampled frames, held together uncompressed, would
-// exceed Resources.Disk is refused with ErrTooLarge before any frame is
-// decoded.
 //
 // The Usage covers the tool runs of this call alone, also when it fails.
 //
 // Calls on one Source run one at a time. A call waiting for another returns
 // ctx's error, without running, if ctx ends first. Cancelling ctx during a
 // run kills its tools and returns an error wrapping ctx's. A call that fails
-// or is cancelled leaves dir as it was, empty, and the Source usable, though
-// the Source may have dropped what it keeps between calls.
+// or is cancelled leaves dir as it found it and the Source usable, though the
+// Source may have dropped what it keeps between calls.
 //
-// Errors wrap ErrInvalidRequest, ErrInputChanged, ErrClosed, ErrTooLarge or
-// ErrTimeLimit, or are a *ToolError. An Encoding or FrameSelection that cannot
-// be honoured is refused before any tool runs.
+// Errors wrap ErrInvalidRequest, ErrInputChanged, ErrClosed, ErrTooLarge,
+// ErrTimeLimit or ctx's error, or are a *ToolError. An Encoding or
+// FrameSelection that cannot be honoured is refused before any tool runs, and
+// a video call whose sampled frames would exceed Resources.Disk is refused,
+// with ErrTooLarge, before any frame is decoded.
 func (s *Source) Encode(ctx context.Context, dir string, sel Select, encodings ...Encoding) ([]Image, Usage, error) {
 	images, usage, err := s.encode(ctx, dir, sel, encodings, numbered)
 	if err != nil {

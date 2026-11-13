@@ -13,15 +13,17 @@ import (
 var (
 	// ErrUnsupportedType is returned by Open when the file's type, as its
 	// bytes or OpenOptions.Type name it, is not in Config.Types, or when its
-	// bytes are of no type the package recognizes. Retrying the same file on
-	// the same Processor cannot succeed.
+	// bytes are of no type the package recognizes. Retrying the same call
+	// cannot succeed; for a type its bytes do not identify (see Types),
+	// naming it in OpenOptions.Type can.
 	ErrUnsupportedType = errors.New("unsupported media type")
 
 	// ErrTooLarge is returned when an input, or the work a call asks of it,
 	// is over a limit: one of Config.Caps, a fixed limit listed at Caps, or
-	// Resources.Disk for an animation too large to write as one file.
-	// Retrying the same call on the same Processor cannot succeed; a smaller
-	// selection, or a Processor with higher limits, may.
+	// Resources.Disk, for the sampled frames of a video call and for an
+	// animation too large to write as one file. Retrying the same call on the
+	// same Processor cannot succeed; a smaller selection or Encoding, or a
+	// Processor with higher limits, may.
 	ErrTooLarge = errors.New("input too large")
 
 	// ErrTimeLimit is returned when a tool run reached a time limit:
@@ -38,22 +40,24 @@ var (
 	ErrClosed = errors.New("closed")
 
 	// ErrInputChanged is returned when the file is not the one that was
-	// opened, or has been modified since: by Source.Encode, and by
-	// Processor.Open when the file is replaced while it is being opened. It
-	// is the expected result when a file is replaced under a long-lived
-	// Source. Retrying on the same Source cannot succeed; opening the file
-	// again can.
+	// opened, or has changed since: by Source.Encode, and by Processor.Open
+	// when the file is replaced while it is being opened. A change is one of
+	// its size, modification time or status-change time, which a chmod, a
+	// new link or an unlink also moves. It is the expected result when a
+	// file is replaced under a long-lived Source. Retrying on the same Source
+	// cannot succeed; opening the file again can.
 	ErrInputChanged = errors.New("input changed")
 
-	// ErrInvalidRequest is returned when the request is wrong rather than the
+	// ErrInvalidRequest is returned when the call is wrong rather than the
 	// file's content: an input path that is not a regular file (a directory,
 	// FIFO or device), no Encoding or one with a value out of range, a Region
 	// outside the frame, a FrameSelection that does not apply to the Source's
-	// kind or
-	// names a frame or time that does not exist, an OpenOptions.Orientation
-	// out of range or given for a video, an output directory that is missing
-	// or not empty, or several images of a still written as one animation.
-	// Retrying the same call cannot succeed.
+	// kind or names a frame or time that does not exist, an
+	// OpenOptions.Orientation out of range or given for a video, an output
+	// directory that is missing or not empty, or an Animate Encoding that
+	// cannot hold the frames selected (more than one frame in a format other
+	// than WebP, or several images of a still). Retrying the same call cannot
+	// succeed.
 	ErrInvalidRequest = errors.New("invalid request")
 )
 

@@ -124,12 +124,14 @@ type Resources struct {
 	// memory up to Memory, then memory-mapped files up to Map, then disk.
 	// They do not bound a tool's other memory. Defaults 1 GiB and 2 GiB.
 	Memory, Map int64
-	// Disk bounds, in bytes, ImageMagick's pixel cache on disk, what a Source
-	// keeps between calls, and the frames one Encode call holds on disk at
-	// once: a video's sampled frames, uncompressed at the size the largest
-	// Encoding needs, and an animation's composited frames. A video call over
-	// it is refused with ErrTooLarge before any frame is decoded; an animation
-	// over it is written a batch at a time. Default 4 GiB.
+	// Disk bounds, in bytes, each of ImageMagick's pixel cache on disk in one
+	// run, what a Source keeps between calls, and the frames one Encode call
+	// holds on disk at once. Those frames are a video's samples, uncompressed
+	// at the size the largest Encoding needs (3 to 8 bytes a pixel), or an
+	// animation's composited frames (4 bytes a pixel of its canvas). A video
+	// call over it is refused with ErrTooLarge before any frame is decoded.
+	// An animation over it is written a batch at a time, unless an Encoding
+	// sets Animate, which is refused with ErrTooLarge. Default 4 GiB.
 	Disk int64
 	// Threads is the thread count of ImageMagick, ffmpeg and ffprobe; ffmpeg
 	// uses at most two for a source above 4096x2160 whatever Threads is.
@@ -142,9 +144,11 @@ type Resources struct {
 	TimeLimit time.Duration
 	// CPUTime is the CPU time one tool run may use, summed over its threads.
 	// The sandbox enforces it, so it has no effect with Config.Unsandboxed.
-	// It must be a whole number of seconds, at least one. Zero means
-	// TimeLimit times Threads, each after its default: 1200 s at the
-	// defaults.
+	// It is measured on the kernel's sampled CPU clock, which on a loaded
+	// host runs a few percent ahead of Usage.CPU, so a run can end with
+	// ErrTimeLimit just short of it. It must be a whole number of seconds, at
+	// least one. Zero means TimeLimit times Threads, each after its default:
+	// 1200 s at the defaults.
 	CPUTime time.Duration
 }
 

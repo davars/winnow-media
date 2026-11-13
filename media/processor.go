@@ -25,10 +25,6 @@ const (
 // in the sandbox unless Config.Unsandboxed is set. It is safe for concurrent
 // use, and does not limit how many calls run at once. The package
 // documentation states what it guarantees.
-//
-// A call reads its input and writes only into its output directory and the
-// Processor's scratch. The library sets no deadline on a call: a caller that
-// wants one passes a context with it.
 type Processor struct {
 	dir  string
 	res  Resources
