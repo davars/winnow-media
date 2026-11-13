@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"time"
 )
 
 // The helpers below make one Open, one Encode of a single target and Close,
@@ -33,6 +34,9 @@ func (p *Processor) encodeFirst(ctx context.Context, path string, enc Encoding, 
 	return images[0], usage, nil
 }
 
+// msec is n milliseconds.
+func msec[T ~int | ~int64](n T) time.Duration { return time.Duration(n) * time.Millisecond }
+
 // encodeEven encodes n evenly spaced frames of path.
 func (p *Processor) encodeEven(ctx context.Context, path string, enc Encoding, n int, dir string) ([]Image, Usage, error) {
 	return p.encodeSel(ctx, path, Select{Frames: Even(n)}, enc, dir, frameName)
@@ -40,12 +44,16 @@ func (p *Processor) encodeEven(ctx context.Context, path string, enc Encoding, n
 
 // encodeTimes encodes the frames of path at timesMS.
 func (p *Processor) encodeTimes(ctx context.Context, path string, enc Encoding, timesMS []int64, dir string) ([]Image, Usage, error) {
-	return p.encodeSel(ctx, path, Select{Frames: Times(timesMS...)}, enc, dir, frameName)
+	times := make([]time.Duration, len(timesMS))
+	for i, t := range timesMS {
+		times[i] = msec(t)
+	}
+	return p.encodeSel(ctx, path, Select{Frames: Times(times...)}, enc, dir, frameName)
 }
 
 // encodeRun encodes count consecutive frames of path from startMS.
 func (p *Processor) encodeRun(ctx context.Context, path string, enc Encoding, startMS int64, count int, dir string) ([]Image, Usage, error) {
-	return p.encodeSel(ctx, path, Select{Frames: Run(startMS, count)}, enc, dir, frameName)
+	return p.encodeSel(ctx, path, Select{Frames: Consecutive(msec(startMS), count)}, enc, dir, frameName)
 }
 
 // encodeIndices encodes the frames of path at indices.

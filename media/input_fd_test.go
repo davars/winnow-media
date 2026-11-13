@@ -34,7 +34,7 @@ var inputKinds = []struct {
 		alt:  func(t *testing.T) string { return writeGIF(t, solid, 5) },
 	},
 	{
-		name: "video", sel: Select{Frames: Times(100, 700)},
+		name: "video", sel: Select{Frames: Times(msec(100), msec(700))},
 		orig: func(t *testing.T) string { return sdrClip(t, requireFFmpeg(t), "160x120", 10, 2) },
 		alt:  func(t *testing.T) string { return sdrClip(t, requireFFmpeg(t), "320x240", 10, 2) },
 	},

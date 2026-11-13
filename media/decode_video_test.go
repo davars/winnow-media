@@ -52,7 +52,7 @@ func TestVideoImageFramesAreSampleTimes(t *testing.T) {
 		src := openSourceOn(t, p, clip, OpenOptions{})
 		var want []Frame
 		for _, ms := range sampleTimesMS(info, n) {
-			want = append(want, Frame{TimeMS: ms})
+			want = append(want, Frame{Time: msec(ms)})
 		}
 		images, _, err := encodeVideo(t, src, Select{Frames: Even(n)}, openTargets[1])
 		if err != nil {
@@ -83,7 +83,7 @@ func TestVideoMapsTheScenesTheWriterMerged(t *testing.T) {
 	if len(frames) < 2 || len(frames) >= samples {
 		t.Fatalf("kept %d of %d samples, want the red run collapsed to one", len(frames), samples)
 	}
-	if frames[0].TimeMS >= 2000 || frames[1].TimeMS < 2000 {
+	if frames[0].Time.Milliseconds() >= 2000 || frames[1].Time.Milliseconds() < 2000 {
 		t.Errorf("kept times %v: want the first red sample, then the first testsrc sample from 2 s", frames)
 	}
 	if scenes := sceneSizes(t, env, filepath.Join(dir, images[0].Name)); len(scenes) != len(frames) {
@@ -429,7 +429,7 @@ func TestVideoWithOneFrameBeforeALongerContainerYieldsASampleAtZero(t *testing.T
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := []Frame{{TimeMS: 0}}
+				want := []Frame{{Time: 0}}
 				if got := images[0].Frames; !slices.Equal(got, want) {
 					t.Errorf("Image.Frames = %v, want %v", got, want)
 				}

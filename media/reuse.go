@@ -261,7 +261,7 @@ func splitKeep(out []byte) (rest []byte, line string) {
 }
 
 // planKeep returns the plan for keeping the decode of image k, or nil when
-// the Source does not keep decodes of it: Reuse is not set, the type's kept
+// the Source does not keep decodes of it: KeepDecode is not set, the type's kept
 // decode is not exact, an earlier call found the image cannot be kept, the
 // kept decodes and a read-back's copy of them would exceed Resources.Disk.
 func (s *Source) planKeep(k int, es *frameSource) *keepPlan {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Kind is how a Source's frames are read.
@@ -40,20 +41,20 @@ type OpenOptions struct {
 	// animation whose header read reports none; 0 leaves the file's own. It
 	// is an error for a video.
 	Orientation int
-	// Reuse keeps a full-size decode of a still between Encode calls, in
+	// KeepDecode keeps a full-size decode of a still between Encode calls, in
 	// the Source's private scratch, up to half of Resources.Disk for each
 	// Source (the other half is room for the copy a later Encode reads). Only
 	// the images the latest Encode selected stay kept. A later Encode of a
 	// kept image reads the region it needs from the decode and writes the
 	// bytes an Encode from a full-size decode would, which are not those of
-	// an Encode without Reuse that decodes a JPEG or a still WebP reduced.
-	// The Source never decodes a Reuse still reduced, so its frame and pixel
+	// an Encode without KeepDecode that decodes a JPEG or a still WebP reduced.
+	// The Source never decodes a KeepDecode still reduced, so its frame and pixel
 	// caps judge the full decode; an image over them is encoded as without
-	// Reuse, as is a type or image whose kept decode would not be exact (more
+	// KeepDecode, as is a type or image whose kept decode would not be exact (more
 	// than 16 bits a channel, floating-point samples, a colorspace a PAM
 	// does not carry) or that does not fit. Animations and videos ignore
-	// Reuse. Source.KeptBytes reports what is held.
-	Reuse bool
+	// KeepDecode. Source.KeptBytes reports what is held.
+	KeepDecode bool
 }
 
 // Info describes a Source. It is a snapshot: a later Encode can settle a size
@@ -63,11 +64,11 @@ type Info struct {
 	Type string
 	Kind Kind
 	// Width and Height are the size of the first frame or image as shown:
-	// upright when Settled, else as stored.
+	// upright when Upright, else as stored.
 	Width, Height int
-	// Settled says Width and Height are upright; otherwise they are the size
+	// Upright says Width and Height are upright; otherwise they are the size
 	// as stored, and an Encode of that image settles them.
-	Settled bool
+	Upright bool
 	// Orientation is the EXIF orientation 1 to 8 the header read reported or
 	// OpenOptions gave; 0 when neither did.
 	Orientation int
@@ -75,29 +76,44 @@ type Info struct {
 	// the file's header having reported none; it is false when the file's own
 	// orientation applies or neither exists.
 	OrientationGiven bool
-	// Frames is the number of frames of an animation, the number of images
-	// of a still, or the frame count a video's container declares (0 when it
-	// declares none).
-	Frames int
-	// DelaysMS is the display delay of each frame of an animation, in
-	// milliseconds, a delay below 20 ms counting as 100 ms, as browsers
-	// display it.
-	DelaysMS []int
-	// DurationMS is the duration of an animation or video, 0 when unknown.
-	DurationMS int64
-	// FrameRate is a video's base frame rate, 0 when unknown.
-	FrameRate float64
-	// Rotation is a video's display rotation: 0, 90, 180 or 270 degrees.
-	Rotation int
-	// HDR is set for a video whose transfer characteristic is HLG or PQ.
-	HDR bool
-	// Codec is a video's codec name as ffprobe reports it.
-	Codec string
-	// HasAudio is set when a video's container holds an audio stream.
-	HasAudio bool
 	// Images describes each image of a Still, in the order Indices selects
-	// them.
+	// them; its length is the number of images. It is nil for an animation
+	// or a video.
 	Images []ImageInfo
+	// Animation is set when Kind is Animation, and nil otherwise.
+	Animation *AnimationInfo
+	// Video is set when Kind is Video, and nil otherwise.
+	Video *VideoInfo
+}
+
+// AnimationInfo describes an animation.
+type AnimationInfo struct {
+	// Frames is the number of frames.
+	Frames int
+	// Delays is the display delay of each frame, a delay below 20 ms counting
+	// as 100 ms, as browsers display it.
+	Delays []time.Duration
+	// Duration is the sum of Delays.
+	Duration time.Duration
+}
+
+// VideoInfo describes a video.
+type VideoInfo struct {
+	// Duration is the video's duration, 0 when unknown.
+	Duration time.Duration
+	// FrameRate is the base frame rate, 0 when unknown.
+	FrameRate float64
+	// DeclaredFrames is the frame count the container declares, 0 when it
+	// declares none.
+	DeclaredFrames int
+	// Rotation is the display rotation: 0, 90, 180 or 270 degrees.
+	Rotation int
+	// HDR is set when the transfer characteristic is HLG or PQ.
+	HDR bool
+	// Codec is the codec name as ffprobe reports it.
+	Codec string
+	// HasAudio is set when the container holds an audio stream.
+	HasAudio bool
 }
 
 // ImageInfo describes one image of a still. Width and Height are as for
@@ -110,8 +126,16 @@ type ImageInfo struct {
 }
 
 func (i Info) clone() Info {
-	i.DelaysMS = slices.Clone(i.DelaysMS)
 	i.Images = slices.Clone(i.Images)
+	if i.Animation != nil {
+		a := *i.Animation
+		a.Delays = slices.Clone(a.Delays)
+		i.Animation = &a
+	}
+	if i.Video != nil {
+		v := *i.Video
+		i.Video = &v
+	}
 	return i
 }
 
@@ -141,7 +165,7 @@ type Source struct {
 	hdr    headerRead
 	req    openRequest
 	stills map[int]*frameSource
-	// reuse is OpenOptions.Reuse; kept holds the decodes it keeps, by image.
+	// reuse is OpenOptions.KeepDecode; kept holds the decodes it keeps, by image.
 	reuse bool
 	kept  map[int]*keptDecode
 	// keptTotal is keptBytes, stored at each change to kept for KeptBytes to
@@ -208,7 +232,7 @@ func (p *Processor) open(ctx context.Context, path string, opts OpenOptions) (*S
 		typ: in.typ, override: override, dec: in.decoder,
 	}
 	src.probed = in.probe
-	src.reuse = opts.Reuse
+	src.reuse = opts.KeepDecode
 	env := p.env(&m, src.file)
 	if in.decoder.tool == "ffmpeg" {
 		err = src.openVideo(ctx, env, opts)
@@ -262,7 +286,7 @@ func (s *Source) openStill() error {
 	s.kept = map[int]*keptDecode{}
 	s.noKeep = map[int]bool{}
 	s.profiled = map[int]bool{0: true}
-	info := Info{Type: s.typ, Kind: Still, Frames: len(s.hdr.scenes)}
+	info := Info{Type: s.typ, Kind: Still}
 	for i, sc := range s.hdr.scenes {
 		ov := s.applied(sc.orientation)
 		es := &frameSource{route: routeStill, orientation: ov, dir: s.dir}
@@ -274,7 +298,7 @@ func (s *Source) openStill() error {
 			Width: es.shownSize()[0], Height: es.shownSize()[1], Auxiliary: auxiliarySubfile(sc.subfile),
 		})
 		if i == 0 {
-			info.Width, info.Height, info.Settled = es.shownSize()[0], es.shownSize()[1], !es.unsettled
+			info.Width, info.Height, info.Upright = es.shownSize()[0], es.shownSize()[1], !es.unsettled
 			info.Orientation, _ = orientationNumber(cmp.Or(ov, sc.orientation))
 			info.OrientationGiven = ov != ""
 		}
@@ -320,17 +344,18 @@ func (s *Source) openAnimation(env toolEnv) error {
 			s.compose.own[i] = f.hasICC
 		}
 	}
-	delays := make([]int, count)
-	var total int64
+	delays := make([]time.Duration, count)
+	var total time.Duration
 	for i, f := range hdr.layout.infos {
-		delays[i] = displayDelayCS(f.delayCS) * 10
-		total += int64(delays[i])
+		delays[i] = time.Duration(displayDelayCS(f.delayCS)) * 10 * time.Millisecond
+		total += delays[i]
 	}
 	orientation, _ := orientationNumber(s.orientation)
 	given := s.applied(first.orientation) != ""
 	s.info = Info{
-		Type: s.typ, Kind: Animation, Width: s.upright[0], Height: s.upright[1], Settled: true,
-		Orientation: orientation, OrientationGiven: given, Frames: count, DelaysMS: delays, DurationMS: total,
+		Type: s.typ, Kind: Animation, Width: s.upright[0], Height: s.upright[1], Upright: true,
+		Orientation: orientation, OrientationGiven: given,
+		Animation: &AnimationInfo{Frames: count, Delays: delays, Duration: total},
 	}
 	return nil
 }
@@ -351,9 +376,12 @@ func (s *Source) openVideo(ctx context.Context, env toolEnv, opts OpenOptions) e
 	s.kind, s.probe = Video, info
 	w, h := info.upright()
 	s.info = Info{
-		Type: s.typ, Kind: Video, Width: w, Height: h, Settled: true, Frames: info.declared,
-		DurationMS: info.durationMS, FrameRate: info.rate, Rotation: info.rotation,
-		HDR: isHDRTransfer(info.transfer), Codec: info.codec, HasAudio: info.hasAudio,
+		Type: s.typ, Kind: Video, Width: w, Height: h, Upright: true,
+		Video: &VideoInfo{
+			Duration: time.Duration(info.durationMS) * time.Millisecond, FrameRate: info.rate,
+			DeclaredFrames: info.declared, Rotation: info.rotation,
+			HDR: isHDRTransfer(info.transfer), Codec: info.codec, HasAudio: info.hasAudio,
+		},
 	}
 	return nil
 }
@@ -367,8 +395,8 @@ func (s *Source) Info() Info {
 }
 
 // KeptBytes returns the bytes on disk the Source holds in the decodes
-// OpenOptions.Reuse keeps: their PAM files and ICC profile files, the figure
-// the disk budget counts. It is 0 for a Source opened without Reuse, before
+// OpenOptions.KeepDecode keeps: their PAM files and ICC profile files, the figure
+// the disk budget counts. It is 0 for a Source opened without KeepDecode, before
 // the first Encode, once a kept decode is dropped and after Close. It is safe
 // to call at any time and does not wait for an Encode that is running: it
 // reports the total as of the last completed change to what is kept.
@@ -408,10 +436,10 @@ func (s *Source) checkIdentity() error {
 }
 
 // Encode reads the frames and region sel selects and writes one file per
-// frame into dir for each of targets, or with an Animate target one animated
-// file; a frame identical to the one before it after resizing is dropped from
-// a target's files. The files are named NNN.<ext>, numbered across the call in
-// target order, then frame order; the Images are returned in the same order.
+// frame into dir for each of encodings, or with an Animate encoding one
+// animated file; a frame identical to the one before it after resizing is
+// dropped from an encoding's files. The files are named NNN.<ext>, numbered
+// across the call in encoding order, then frame order; the Images are returned in the same order.
 // Each output is upright, converted to sRGB when its source carries a profile,
 // and carries no metadata, as Encoding says.
 //
@@ -421,8 +449,8 @@ func (s *Source) checkIdentity() error {
 // file's status-change time, so it counts as a change. A Select that does not apply to the Source's kind, or a
 // region outside a frame whose size is settled, is refused before any tool
 // runs. The Usage covers the tool runs of this call alone, also when it fails.
-func (s *Source) Encode(ctx context.Context, dir string, sel Select, targets ...Encoding) ([]Image, Usage, error) {
-	images, usage, err := s.encode(ctx, dir, sel, targets, numbered)
+func (s *Source) Encode(ctx context.Context, dir string, sel Select, encodings ...Encoding) ([]Image, Usage, error) {
+	images, usage, err := s.encode(ctx, dir, sel, encodings, numbered)
 	if err != nil {
 		return nil, usage, fmt.Errorf("encode: %w", err)
 	}
@@ -433,13 +461,13 @@ func (s *Source) Encode(ctx context.Context, dir string, sel Select, targets ...
 func numbered(n int, ext string) string { return fmt.Sprintf("%03d%s", n, ext) }
 
 // encode is Encode naming its files name(n, ext).
-func (s *Source) encode(ctx context.Context, dir string, sel Select, targets []Encoding, name func(n int, ext string) string) ([]Image, Usage, error) {
+func (s *Source) encode(ctx context.Context, dir string, sel Select, encodings []Encoding, name func(n int, ext string) string) ([]Image, Usage, error) {
 	var m meter
-	if len(targets) == 0 {
-		return nil, m.usage, errors.New("no targets")
+	if len(encodings) == 0 {
+		return nil, m.usage, errors.New("no encodings")
 	}
-	encs := make([]encoding, len(targets))
-	for i, t := range targets {
+	encs := make([]encoding, len(encodings))
+	for i, t := range encodings {
 		var err error
 		if encs[i], err = t.resolve(); err != nil {
 			return nil, m.usage, err
@@ -498,7 +526,7 @@ func (s *Source) refreshInfo() {
 		size := es.shownSize()
 		info.Images[i].Width, info.Images[i].Height = size[0], size[1]
 		if i == 0 {
-			info.Width, info.Height, info.Settled = size[0], size[1], !es.unsettled
+			info.Width, info.Height, info.Upright = size[0], size[1], !es.unsettled
 		}
 	}
 	s.info = info
@@ -522,7 +550,7 @@ func (s *Source) stillAt(ctx context.Context, env toolEnv, i int) (*frameSource,
 	return es, nil
 }
 
-func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr FrameSelection, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	idx, err := fr.images(len(s.hdr.scenes))
 	if err != nil {
 		return nil, err
@@ -563,7 +591,7 @@ func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr F
 		}
 		for t, enc := range encs {
 			images[t*n+f] = Image{
-				Name: name(t*n+f, enc.ext), Target: t, Width: res[t].width, Height: res[t].height,
+				Name: name(t*n+f, enc.ext), Encoding: t, Width: res[t].width, Height: res[t].height,
 				Frames: []Frame{{Index: idx[f]}}, Region: es.shown(r),
 			}
 		}
@@ -603,9 +631,9 @@ func (s *Source) animationSource(env toolEnv, idx []int) *frameSource {
 	}
 }
 
-func (s *Source) encodeAnimation(ctx context.Context, env toolEnv, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) encodeAnimation(ctx context.Context, env toolEnv, dir string, fr FrameSelection, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	starts := timestamps(frameDelays(s.layout.infos))
-	idx, err := fr.animation(starts, s.info.DurationMS)
+	idx, err := fr.animation(starts, s.info.Animation.Duration.Milliseconds())
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +663,7 @@ func (s *Source) encodeAnimation(ctx context.Context, env toolEnv, dir string, f
 // streamAnimation encodes the frames idx of an animation whose composited
 // frames would not fit in Resources.Disk, which is need bytes of scratch: the
 // compositor waits for each batch to be encoded, so about one batch is on disk
-// at a time and nothing is kept. Each target composites afresh, and a target
+// at a time and nothing is kept. Each encoding composites afresh, and an encoding
 // that holds all the frames in one file cannot be written.
 func (s *Source) streamAnimation(ctx context.Context, env toolEnv, src *frameSource, dir string, idx []int, need int64, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	for _, enc := range encs {
@@ -652,7 +680,7 @@ func (s *Source) streamAnimation(ctx context.Context, env toolEnv, src *frameSou
 	return encodeSamples(ctx, src, dir, r, encs, name)
 }
 
-// checkAnimate refuses an Animate target that is not WebP when n frames,
+// checkAnimate refuses an Animate encoding that is not WebP when n frames,
 // more than one, go into it.
 func checkAnimate(encs []encoding, n int) error {
 	for _, enc := range encs {
@@ -721,7 +749,7 @@ func (s *Source) keepOnly(idx []int) {
 	}
 }
 
-func (s *Source) encodeVideo(ctx context.Context, env toolEnv, dir string, fr Frames, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
+func (s *Source) encodeVideo(ctx context.Context, env toolEnv, dir string, fr FrameSelection, r region, encs []encoding, name func(int, string) string) ([]Image, error) {
 	times, run, err := fr.video(s.probe)
 	if err != nil {
 		return nil, err
@@ -769,7 +797,7 @@ func encodeSamples(ctx context.Context, src *frameSource, dir string, r region, 
 				indices[j] = src.frames[p].sourceFrame
 			}
 			images = append(images, Image{
-				Name: file, Target: t, Width: w, Height: h, Frames: src.mapping(indices), Region: src.shown(r),
+				Name: file, Encoding: t, Width: w, Height: h, Frames: src.mapping(indices), Region: src.shown(r),
 			})
 			continue
 		}
@@ -778,7 +806,7 @@ func encodeSamples(ctx context.Context, src *frameSource, dir string, r region, 
 			return nil, err
 		}
 		for _, img := range files {
-			img.Target = t
+			img.Encoding = t
 			images = append(images, img)
 		}
 	}

@@ -323,7 +323,7 @@ func TestVideoRegionOutsideAFrameThatShrankIsRefused(t *testing.T) {
 	src := openSourceOn(t, requireProcessor(t), remuxToMatroska(t, env, path), OpenOptions{})
 	enc := Encoding{Format: PNG, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400}
 	dir := t.TempDir()
-	images, _, err := src.Encode(context.Background(), dir, Select{Frames: Times(3000), Region: Region{X: 100, Width: 100, Height: 50}}, enc)
+	images, _, err := src.Encode(context.Background(), dir, Select{Frames: Times(msec(3000)), Region: Region{X: 100, Width: 100, Height: 50}}, enc)
 	if err == nil {
 		var got [3]int
 		if len(images) > 0 {
@@ -362,7 +362,7 @@ func TestVideoRegionShrinkBetweenSamplesLeavesNothing(t *testing.T) {
 			forceSelectLimit(t, limit)
 			enc := Encoding{Format: PNG, Quality: 80, MaxEdge: 400, MaxArea: 400 * 400}
 			dir := t.TempDir()
-			images, _, err := src.Encode(context.Background(), dir, Select{Frames: Times(1000, 3000), Region: Region{X: 100, Width: 100, Height: 50}}, enc)
+			images, _, err := src.Encode(context.Background(), dir, Select{Frames: Times(msec(1000), msec(3000)), Region: Region{X: 100, Width: 100, Height: 50}}, enc)
 			if err == nil {
 				t.Errorf("a region past the 160-pixel frame gave %d images", len(images))
 			}

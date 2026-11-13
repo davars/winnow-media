@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"time"
 )
 
 // exifOrientations are the ImageMagick names of the EXIF orientations 1 to 8.
@@ -257,7 +258,7 @@ func (s *frameSource) mapping(indices []int) []Frame {
 	}
 	frames := make([]Frame, len(indices))
 	for i, idx := range indices {
-		frames[i].TimeMS = s.video.times[idx]
+		frames[i].Time = time.Duration(s.video.times[idx]) * time.Millisecond
 	}
 	return frames
 }
@@ -270,7 +271,7 @@ func mappingOf(indices []int, infos []frameInfo) []Frame {
 	for i, idx := range indices {
 		frames[i] = Frame{Index: idx}
 		if idx < len(at) {
-			frames[i].TimeMS = at[idx]
+			frames[i].Time = time.Duration(at[idx]) * time.Millisecond
 		}
 	}
 	return frames

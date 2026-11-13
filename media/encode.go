@@ -2,6 +2,7 @@ package media
 
 import (
 	"strings"
+	"time"
 )
 
 // Frame is one frame of an encoded output and the frame of the ORIGINAL media
@@ -11,11 +12,11 @@ type Frame struct {
 	// Index is the frame's index in the original media: 0 for a still and
 	// for a video, whose samples have no frame index.
 	Index int
-	// TimeMS is the time the frame is shown in the original, in
-	// milliseconds: the sum of the display delays of the frames before it in
+	// Time is the time the frame is shown in the original, to the
+	// millisecond: the sum of the display delays of the frames before it in
 	// an animation (a stored delay below 20 ms counts as 100 ms, as browsers
 	// display it), or the time a video was sampled at; 0 for a still.
-	TimeMS int64
+	Time time.Duration
 }
 
 // selectFrames returns n evenly spaced indices of sourceFrames frames:

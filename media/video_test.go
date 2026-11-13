@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const stubVideoProbe = `{"streams":[{"index":0,"codec_type":"video","width":64,"height":48,` +
@@ -108,8 +109,8 @@ func TestEveryFFmpegRunCarriesTheInputBounds(t *testing.T) {
 			small.MaxEdge, small.MaxArea, large.MaxEdge, large.MaxArea = 64, 64*64, 200, 200*200
 			return s.encode(t, Select{Frames: Even(5)}, small, large)
 		},
-		"Even": func(s *videoStub, t *testing.T) error { return s.encode(t, Select{Frames: Even(5)}, webp) },
-		"Run":  func(s *videoStub, t *testing.T) error { return s.encode(t, Select{Frames: Run(0, 3)}, webp) },
+		"Even":        func(s *videoStub, t *testing.T) error { return s.encode(t, Select{Frames: Even(5)}, webp) },
+		"Consecutive": func(s *videoStub, t *testing.T) error { return s.encode(t, Select{Frames: Consecutive(0, 3)}, webp) },
 	}
 	for _, path := range []struct {
 		name  string
@@ -535,11 +536,11 @@ func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
 		out := t.TempDir()
 		images, _, err := p.encodeTimes(context.Background(), src, enc, []int64{1000, 2000}, out)
 		if err != nil || len(images) != 2 {
-			t.Fatalf("images = %v, %v (duration %d ms)", images, err, info.DurationMS)
+			t.Fatalf("images = %v, %v (duration %d ms)", images, err, info.Video.Duration.Milliseconds())
 		}
 		for i, want := range []int{10, 20} {
 			if got := frameNumber(t, env, filepath.Join(out, images[i].Name)); got < want-1 || got > want+1 {
-				t.Errorf("frame at %d ms is %d, want %d", images[i].Frames[0].TimeMS, got, want)
+				t.Errorf("frame at %d ms is %d, want %d", images[i].Frames[0].Time.Milliseconds(), got, want)
 			}
 		}
 	})
@@ -553,8 +554,8 @@ func TestVideoSeeksAreRelativeToTheStreamStart(t *testing.T) {
 			if got := frameNumber(t, env, filepath.Join(out, images[i].Name)); got < want-1 || got > want+1 {
 				t.Errorf("run frame %d is %d, want %d", i, got, want)
 			}
-			if wantMS := int64(1000 + 100*i); images[i].Frames[0].TimeMS < wantMS-50 || images[i].Frames[0].TimeMS > wantMS+50 {
-				t.Errorf("run frame %d TimeMS = %d, want about %d: the stream's offset must not shift it", i, images[i].Frames[0].TimeMS, wantMS)
+			if wantMS := int64(1000 + 100*i); images[i].Frames[0].Time.Milliseconds() < wantMS-50 || images[i].Frames[0].Time.Milliseconds() > wantMS+50 {
+				t.Errorf("run frame %d Time = %d ms, want about %d: the stream's offset must not shift it", i, images[i].Frames[0].Time.Milliseconds(), wantMS)
 			}
 		}
 	})
@@ -743,8 +744,8 @@ func TestVideoWithoutStreamDurationUsesTheContainersFromTheStreamStart(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.DurationMS != 5004 {
-		t.Errorf("duration = %d ms, want the container's 6632 less the stream's 1628", info.DurationMS)
+	if info.Video.Duration != 5004*time.Millisecond {
+		t.Errorf("duration = %v, want the container's 6632 ms less the stream's 1628 ms", info.Video.Duration)
 	}
 	images, _, err := p.encodeEven(context.Background(), src, Encoding{Format: PNG}, 15, t.TempDir())
 	if err != nil {
@@ -911,7 +912,7 @@ func TestSelectAndSeekGiveTheSameFrames(t *testing.T) {
 			images, _, err := p.encodeTimes(context.Background(), src, enc, times, dir)
 			return sampled{images, readDir(t, dir)}, err
 		},
-		"Run": func(t *testing.T, src string) (sampled, error) {
+		"Consecutive": func(t *testing.T, src string) (sampled, error) {
 			dir := t.TempDir()
 			if !processable(src) {
 				return sampled{}, errNotProcessable
@@ -1041,8 +1042,8 @@ func TestSelectIsChosenByDecodedPixelsOnly(t *testing.T) {
 					small.MaxEdge, small.MaxArea, large.MaxEdge, large.MaxArea = 32, 32*32, 64, 64*64
 					_ = s.encode(t, Select{Frames: Even(5)}, small, large)
 				},
-				"Even": func(s *videoStub) { _ = s.encode(t, Select{Frames: Even(5)}, webp) },
-				"Run":  func(s *videoStub) { _ = s.encode(t, Select{Frames: Run(0, 3)}, webp) },
+				"Even":        func(s *videoStub) { _ = s.encode(t, Select{Frames: Even(5)}, webp) },
+				"Consecutive": func(s *videoStub) { _ = s.encode(t, Select{Frames: Consecutive(0, 3)}, webp) },
 			}
 			for name, run := range entries {
 				stub := &videoStub{probe: probe(c.frames)}

@@ -109,7 +109,7 @@ func TestAnimationMapsSampledFrames(t *testing.T) {
 	enc := webpAtEdge(64)
 	enc.Animate = true
 	out, images := encodeFile(t, p, content, OpenOptions{}, Select{Frames: Even(2)}, enc)
-	want := []Frame{{Index: 0, TimeMS: 0}, {Index: 2, TimeMS: 300}}
+	want := []Frame{{Index: 0, Time: msec(0)}, {Index: 2, Time: msec(300)}}
 	if !slices.Equal(images[0].Frames, want) {
 		t.Errorf("mapping = %v, want %v", images[0].Frames, want)
 	}
@@ -118,7 +118,7 @@ func TestAnimationMapsSampledFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = src.Close() }()
-	if got := src.Info().Frames; got != 2 {
+	if got := src.Info().Animation.Frames; got != 2 {
 		t.Errorf("the animation holds %d frames, want 2", got)
 	}
 }

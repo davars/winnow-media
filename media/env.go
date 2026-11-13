@@ -31,9 +31,9 @@
 // that check and a tool's read is not excluded.
 //
 //   - A still is decoded and encoded in one ImageMagick run per Encode (a JPEG
-//     at a reduced size when its targets are small, a still WebP at a reduced
+//     at a reduced size when its encodings are small, a still WebP at a reduced
 //     size too). Nothing is kept between calls, unless the Source was opened
-//     with OpenOptions.Reuse, which keeps a full-size decode in the private
+//     with OpenOptions.KeepDecode, which keeps a full-size decode in the private
 //     directory for later Encodes. Where the header read does not say how the
 //     picture is oriented, the first Encode learns it, and Info and
 //     Image.Region then report the upright size.

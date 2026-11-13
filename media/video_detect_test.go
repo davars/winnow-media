@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ffClip writes a one-second 160x120 clip at 10 fps with the given ffmpeg
@@ -89,7 +90,7 @@ func TestOpenNamesAContainerTheBytesDoNot(t *testing.T) {
 			if info.Kind != Video || info.Type != f.typ {
 				t.Errorf("Kind %v Type %q, want Video %q", info.Kind, info.Type, f.typ)
 			}
-			if info.Width != 160 || info.Height != 120 || (info.DurationMS > 1300 || (info.DurationMS < 800 && !strings.HasSuffix(f.name, "-es"))) || info.Codec == "" {
+			if info.Width != 160 || info.Height != 120 || (info.Video.Duration > 1300*time.Millisecond || (info.Video.Duration < 800*time.Millisecond && !strings.HasSuffix(f.name, "-es"))) || info.Video.Codec == "" {
 				t.Errorf("Info = %+v, want 160x120, about a second (an elementary stream has no duration), with a codec", info)
 			}
 			imgs, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Even(1)}, Encoding{Format: PNG, MaxEdge: 4096, MaxArea: 20_000_000})

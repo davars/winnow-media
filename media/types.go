@@ -26,7 +26,7 @@ type typeEntry struct {
 	// demuxers of the configured detected types, for a file whose leading
 	// bytes name no type (see Processor.detectVideo).
 	detected bool
-	// keptExact marks a type whose kept decode (see OpenOptions.Reuse) gives
+	// keptExact marks a type whose kept decode (see OpenOptions.KeepDecode) gives
 	// the bytes of a fresh decode. TestEveryTypeMarkedExactHasAFixture fails
 	// for a marked type without a fixture whose kept decode gives them.
 	keptExact bool

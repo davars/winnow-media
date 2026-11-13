@@ -488,7 +488,7 @@ func TestStillOutput(t *testing.T) {
 				wantType, wantName = "image/png", "still.png"
 			}
 			img, out := stillInto(t, p, src, Encoding{Format: format, MaxEdge: 400})
-			if img.Name != wantName || img.Width != 300 || img.Height != 400 || img.Frames[0].Index != 0 || img.Frames[0].TimeMS != 0 {
+			if img.Name != wantName || img.Width != 300 || img.Height != 400 || img.Frames[0].Index != 0 || img.Frames[0].Time.Milliseconds() != 0 {
 				t.Errorf("image = %+v, want %s 300x400 frame 0 at 0ms", img, wantName)
 			}
 			if got := dirNames(t, out); !slices.Equal(got, []string{wantName}) {
@@ -636,8 +636,8 @@ func TestFramesSelection(t *testing.T) {
 	for i, f := range images {
 		wantIdx := i * 20 / 16
 		wantMS := int64(wantIdx) * 50
-		if f.Frames[0].Index != wantIdx || f.Frames[0].TimeMS != wantMS {
-			t.Errorf("image %d: source frame %d at %d ms, want frame %d at %d ms", i, f.Frames[0].Index, f.Frames[0].TimeMS, wantIdx, wantMS)
+		if f.Frames[0].Index != wantIdx || f.Frames[0].Time.Milliseconds() != wantMS {
+			t.Errorf("image %d: source frame %d at %d ms, want frame %d at %d ms", i, f.Frames[0].Index, f.Frames[0].Time.Milliseconds(), wantIdx, wantMS)
 		}
 		if f.Name != fmt.Sprintf("frame-%03d.jpg", i) || f.Width != 64 || f.Height != 48 {
 			t.Errorf("image %d = %+v", i, f)

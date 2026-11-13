@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func requireFFmpeg(t *testing.T) toolEnv { return requireTools(t, "magick", "ffmpeg", "ffprobe") }
@@ -124,8 +125,8 @@ func TestVideoRefusals(t *testing.T) {
 	}{
 		{"even count too large", Select{Frames: Even(65)}, Encoding{}, t.TempDir()},
 		{"even count negative", Select{Frames: Even(-1)}, Encoding{}, t.TempDir()},
-		{"a negative time", Select{Frames: Times(-1)}, Encoding{}, t.TempDir()},
-		{"a run of no frames", Select{Frames: Run(0, 0)}, Encoding{}, t.TempDir()},
+		{"a negative time", Select{Frames: Times(-time.Millisecond)}, Encoding{}, t.TempDir()},
+		{"a run of no frames", Select{Frames: Consecutive(0, 0)}, Encoding{}, t.TempDir()},
 		{"unknown format", Select{Frames: Even(3)}, Encoding{Format: "gif"}, t.TempDir()},
 		{"quality too large", Select{Frames: Even(3)}, Encoding{Quality: 101}, t.TempDir()},
 		{"max edge too small", Select{Frames: Even(3)}, Encoding{MaxEdge: 15}, t.TempDir()},
@@ -207,8 +208,8 @@ func TestVideoEncodeSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 	}
 	var names []string
 	for i, f := range images {
-		if want := int64(i)*1000 + 500; f.Frames[0].TimeMS != want {
-			t.Errorf("image %d at %d ms, want %d", i, f.Frames[0].TimeMS, want)
+		if want := int64(i)*1000 + 500; f.Frames[0].Time.Milliseconds() != want {
+			t.Errorf("image %d at %d ms, want %d", i, f.Frames[0].Time.Milliseconds(), want)
 		}
 		if f.Name != fmt.Sprintf("frame-%03d.jpg", i) || f.Frames[0].Index != 0 || f.Width != 160 || f.Height != 120 {
 			t.Errorf("image %d = %+v", i, f)
@@ -223,8 +224,8 @@ func TestVideoEncodeSamplesEvenlyAndHonoursMaxFrames(t *testing.T) {
 	if len(images) != 5 || images[0].Name != "frame-000.webp" {
 		t.Fatalf("max frames 5: %+v", images)
 	}
-	if images[0].Frames[0].TimeMS != 1600 || images[4].Frames[0].TimeMS != 14400 {
-		t.Errorf("max frames 5 times: %d .. %d", images[0].Frames[0].TimeMS, images[4].Frames[0].TimeMS)
+	if images[0].Frames[0].Time.Milliseconds() != 1600 || images[4].Frames[0].Time.Milliseconds() != 14400 {
+		t.Errorf("max frames 5 times: %d .. %d", images[0].Frames[0].Time.Milliseconds(), images[4].Frames[0].Time.Milliseconds())
 	}
 }
 
@@ -236,7 +237,7 @@ func TestVideoEncodeShortClips(t *testing.T) {
 	t.Run("one frame mp4", func(t *testing.T) {
 		src := sdrClip(t, env, "160x120", 10, 1, "-frames:v", "1")
 		images, out := videoInto(t, p, src, Encoding{}, defaultFrames)
-		if len(images) != 1 || images[0].Frames[0].TimeMS != 0 || len(dirNames(t, out)) != 1 {
+		if len(images) != 1 || images[0].Frames[0].Time.Milliseconds() != 0 || len(dirNames(t, out)) != 1 {
 			t.Errorf("images = %+v", images)
 		}
 	})
@@ -375,7 +376,7 @@ func TestPQVideoIsHDR(t *testing.T) {
 		"-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc")...)
 	p := requireProcessor(t)
 	info, _, err := p.infoOf(context.Background(), clip)
-	if err != nil || !info.HDR {
+	if err != nil || !info.Video.HDR {
 		t.Fatalf("PQ clip: %+v, %v", info, err)
 	}
 	rec := record(p)

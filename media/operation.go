@@ -63,8 +63,8 @@ type Encoding struct {
 type Image struct {
 	// Name is the file's name relative to the output directory.
 	Name string
-	// Target is the index of the Encoding that produced the file.
-	Target        int
+	// Encoding is the index of the Encoding that produced the file.
+	Encoding      int
 	Width, Height int
 	// Frames are the frames of the source the file shows, in order: one for
 	// a plain image, one per scene for an animated file.

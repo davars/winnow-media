@@ -270,7 +270,7 @@ func TestEncodeMatchesTheWholeFileEncode(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The stored 0 delay of frame 0 is shown as 10 centiseconds.
-	want := []Frame{{Index: 0, TimeMS: 0}, {Index: 1, TimeMS: 100}, {Index: 3, TimeMS: 370}}
+	want := []Frame{{Index: 0, Time: msec(0)}, {Index: 1, Time: msec(100)}, {Index: 3, Time: msec(370)}}
 	if !slices.Equal(mapping, want) {
 		t.Errorf("mapping %v, want %v", mapping, want)
 	}

@@ -45,18 +45,18 @@ func sameBytes(t *testing.T, what string, got, want map[string][]byte) {
 	}
 }
 
-// reuseInput is a file Reuse is checked on and a region of it.
+// reuseInput is a file KeepDecode is checked on and a region of it.
 type reuseInput struct {
 	name   string
 	path   func(t *testing.T) string
 	region Region
 	// edges are the MaxEdge values to encode at; a JPEG's are above the
-	// sizes at which an Encode without Reuse decodes it reduced, whose bytes
+	// sizes at which an Encode without KeepDecode decodes it reduced, whose bytes
 	// a full-size decode does not give.
 	edges []int
 }
 
-// reuseDeclined are the inputs a Reuse Source cannot keep exactly: a Lab
+// reuseDeclined are the inputs a KeepDecode Source cannot keep exactly: a Lab
 // colorspace, a type not marked exact, and a float decode.
 var reuseDeclined = map[string]bool{
 	"tiff lab": true, "jp2 12-bit": true, "exr above 1": true, "tiff float32": true,
@@ -183,7 +183,7 @@ func TestReuseKeptDecodeGivesTheFusedBytes(t *testing.T) {
 					path := in.path(t)
 					enc := Encoding{Format: format, MaxEdge: edge}
 					plain := openSourceOn(t, p, path, OpenOptions{})
-					reuse := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+					reuse := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 					whole := encodeAll(t, plain, Select{}, enc)
 					sameBytes(t, "first encode", encodeAll(t, reuse, Select{}, enc), whole)
 					if _, ok := reuse.kept[0]; ok == reuseDeclined[in.name] {
@@ -222,7 +222,7 @@ func TestReuseKeptDecodeOnEveryFusedFixture(t *testing.T) {
 				for _, edge := range edges {
 					enc := Encoding{Format: format, MaxEdge: edge}
 					plain := openSourceOn(t, p, path, OpenOptions{})
-					reuse := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+					reuse := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 					want := encodeAll(t, plain, Select{}, enc)
 					sameBytes(t, fmt.Sprintf("%s %d first", format, edge), encodeAll(t, reuse, Select{}, enc), want)
 					if kd := reuse.kept[0]; kd != nil && wantProfile[fx.name] && kd.icc == "" {
@@ -240,11 +240,11 @@ func TestReuseKeptDecodeOnEveryFusedFixture(t *testing.T) {
 	}
 }
 
-// reusedAfterFirst opens path with Reuse, encodes it once at enc, and returns
+// reusedAfterFirst opens path with KeepDecode, encodes it once at enc, and returns
 // the Source.
 func reusedAfterFirst(t *testing.T, p *Processor, path string, enc Encoding) *Source {
 	t.Helper()
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	encodeAll(t, src, Select{}, enc)
 	if src.kept[0] == nil {
 		t.Fatal("the decode was not kept")
@@ -253,7 +253,7 @@ func reusedAfterFirst(t *testing.T, p *Processor, path string, enc Encoding) *So
 	return src
 }
 
-// fusedWant is what an Encode without Reuse writes for sel at enc.
+// fusedWant is what an Encode without KeepDecode writes for sel at enc.
 func fusedWant(t *testing.T, p *Processor, path string, sel Select, enc Encoding) map[string][]byte {
 	t.Helper()
 	return encodeAll(t, openSourceOn(t, p, path, OpenOptions{}), sel, enc)
@@ -416,7 +416,7 @@ func TestReuseNoRunNamesTheKeptFileExceptTheOneThatWritesIt(t *testing.T) {
 	p := requireProcessor(t)
 	rec := record(p)
 	path := heicFixtureFile(t, "adobe-256x96")
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	enc := Encoding{Format: WebP, MaxEdge: 64}
 	encodeAll(t, src, Select{}, enc)
 	kd := src.kept[0]
@@ -445,7 +445,7 @@ func TestReuseSecondEncodeDecodesNoOriginal(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	rec := record(p)
-	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{KeepDecode: true})
 	link := src.ref
 	encodeAll(t, src, Select{}, Encoding{Format: PNG, MaxEdge: 64})
 	before := rec.count()
@@ -477,7 +477,7 @@ func TestReuseKeepsNothingThatExceedsDisk(t *testing.T) {
 	sel := Select{Region: Region{X: 20, Y: 10, Width: 100, Height: 50}}
 	want := fusedWant(t, large, path, sel, enc)
 	rec := record(small)
-	src := openSourceOn(t, small, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, small, path, OpenOptions{KeepDecode: true})
 	for range 2 {
 		sameBytes(t, "over budget", encodeAll(t, src, sel, enc), want)
 	}
@@ -499,7 +499,7 @@ func TestReuseKeepsTheImagesOfTheLatestCall(t *testing.T) {
 	p := requireProcessor(t)
 	path := writeFile(t, "pages.tif", tiffPages(0, 0, 0))
 	enc := Encoding{Format: PNG, MaxEdge: 16}
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	keys := func() []int {
 		var ks []int
 		for k := range src.kept {
@@ -527,15 +527,15 @@ func TestReuseFirstEncodeSettlesTheSize(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	path := writeFile(t, "content", mustRead(t, filepath.Join("testdata", "orient", "exif-after-idat.png")))
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
-	if src.Info().Settled {
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
+	if src.Info().Upright {
 		t.Skip("the fixture's size is settled at Open")
 	}
 	encodeAll(t, src, Select{}, Encoding{Format: PNG, MaxEdge: 16})
 	info := src.Info()
 	env := requireMagick(t)
 	uw, uh := uprightOf(t, env, path)
-	if !info.Settled || info.Width != uw || info.Height != uh {
+	if !info.Upright || info.Width != uw || info.Height != uh {
 		t.Errorf("Info = %+v, want settled %dx%d", info, uw, uh)
 	}
 	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Region: Region{X: 0, Y: 0, Width: uw + 1, Height: 1}}, Encoding{Format: PNG, MaxEdge: 16}); err == nil {
@@ -548,7 +548,7 @@ func TestReuseSourceIsSafeForConcurrentEncodes(t *testing.T) {
 	p := requireProcessor(t)
 	path := heicFixtureFile(t, "adobe-256x96")
 	enc := Encoding{Format: WebP, MaxEdge: 48}
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	var wg sync.WaitGroup
 	for i := range 6 {
 		wg.Add(1)
@@ -570,7 +570,7 @@ func TestReuseIsIgnoredByAnAnimation(t *testing.T) {
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "a.gif")
 	magick(t, requireMagick(t), "-size", "16x16", "xc:red", "xc:blue", "-loop", "0", path)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	if src.Info().Kind != Animation {
 		t.Fatalf("Kind = %s", src.Info().Kind)
 	}
@@ -580,19 +580,19 @@ func TestReuseIsIgnoredByAnAnimation(t *testing.T) {
 	}
 }
 
-// A JPEG that an Encode without Reuse decodes reduced is decoded at full size
-// by a Reuse Source, which keeps that decode.
+// A JPEG that an Encode without KeepDecode decodes reduced is decoded at full size
+// by a KeepDecode Source, which keeps that decode.
 func TestReuseDecodesAJPEGAtFullSize(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "big.jpg")
 	magick(t, requireMagick(t), "-size", "2000x1500", "gradient:#0020ff-#ffb000", "-quality", "90", path)
 	rec := record(p)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	encodeAll(t, src, Select{}, Encoding{Format: JPEG, MaxEdge: 100})
 	for _, call := range rec.ran("magick") {
 		if slices.ContainsFunc(call, func(a string) bool { return strings.HasPrefix(a, "jpeg:size=") || strings.Contains(a, "jpeg:size") }) {
-			t.Errorf("a Reuse Source reduced the decode: %q", call)
+			t.Errorf("a KeepDecode Source reduced the decode: %q", call)
 		}
 	}
 	kd := src.kept[0]
@@ -604,7 +604,7 @@ func TestReuseDecodesAJPEGAtFullSize(t *testing.T) {
 		encodeAll(t, openSourceOn(t, p, path, OpenOptions{}), sel, Encoding{Format: JPEG, MaxEdge: 100}))
 }
 
-// Decodes that cannot be kept exactly are encoded as without Reuse, and the
+// Decodes that cannot be kept exactly are encoded as without KeepDecode, and the
 // Source remembers it: no later call writes a decode that is then thrown away.
 func TestReuseDeclinesWhatItCannotKeepExactly(t *testing.T) {
 	t.Parallel()
@@ -617,7 +617,7 @@ func TestReuseDeclinesWhatItCannotKeepExactly(t *testing.T) {
 			p := requireProcessor(t)
 			rec := record(p)
 			path := in.path(t)
-			src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+			src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 			enc := Encoding{Format: JPEG, MaxEdge: in.edges[0]}
 			want := fusedWant(t, p, path, Select{}, enc)
 			before := rec.count()
@@ -678,7 +678,7 @@ func TestEveryTypeMarkedExactHasAFixture(t *testing.T) {
 	sel := Select{Region: Region{X: 2, Y: 2, Width: 20, Height: 16}}
 	covered := map[string]bool{}
 	note := func(name, path string, declined bool) {
-		src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+		src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 		typ := src.Info().Type
 		plain := openSourceOn(t, p, path, OpenOptions{})
 		encodeAll(t, src, Select{}, enc)
@@ -729,7 +729,7 @@ func TestReuseKeepsOnlyWhatItsCopiesLeaveRoomFor(t *testing.T) {
 	enc := Encoding{Format: PNG, MaxEdge: 64}
 	for disk, want := range map[int64]bool{300_000: false, 700_000: true} {
 		p := requireProcessorWith(t, Config{Resources: Resources{Disk: disk}})
-		src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+		src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 		encodeAll(t, src, Select{}, enc)
 		if got := src.kept[0] != nil; got != want {
 			t.Errorf("Disk %d: kept = %v, want %v", disk, got, want)
@@ -768,7 +768,7 @@ func TestReuseKeepsTheFilterOfATIFFWithAlpha(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a.tif")
 	magick(t, requireMagick(t), "-size", "96x64", "gradient:#0020ff-#ffb000",
 		"(", "-size", "96x64", "gradient:white-black", ")", "-alpha", "off", "-compose", "copy_opacity", "-composite", path)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	big, small := Encoding{Format: PNG, MaxEdge: 1000}, Encoding{Format: PNG, MaxEdge: 24}
 	encodeAll(t, src, Select{}, big)
 	if src.kept[0] == nil {
@@ -928,7 +928,7 @@ func TestReuseEncodesAfterAFailedKeepRun(t *testing.T) {
 	path := heicFixtureFile(t, "adobe-256x96")
 	enc := Encoding{Format: PNG, MaxEdge: 64}
 	want := fusedWant(t, p, path, Select{}, enc)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	// A file cannot be written where a directory with something in it is.
 	block := filepath.Join(src.dir, ".kept-0.pam")
 	if err := os.Mkdir(block, 0o700); err != nil {
@@ -955,7 +955,7 @@ func TestReuseEncodesAfterAFailedKeepRun(t *testing.T) {
 func TestReuseFailedEncodeIsNotRememberedAsUnkeepable(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
-	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{KeepDecode: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, _, err := src.Encode(ctx, t.TempDir(), Select{}, Encoding{Format: PNG, MaxEdge: 64}); err == nil {
@@ -971,7 +971,7 @@ func TestReuseFailedEncodeIsNotRememberedAsUnkeepable(t *testing.T) {
 }
 
 // A JPEG whose full decode exceeds the caps is still encoded, reduced, as
-// without Reuse; a region of it is refused as before.
+// without KeepDecode; a region of it is refused as before.
 func TestReuseHonoursTheCapsAFullDecodeExceeds(t *testing.T) {
 	t.Parallel()
 	p := requireProcessorWith(t, Config{Caps: Caps{MaxFramePixels: 1_000_000}})
@@ -979,7 +979,7 @@ func TestReuseHonoursTheCapsAFullDecodeExceeds(t *testing.T) {
 	magick(t, requireMagick(t), "-size", "2000x1500", "gradient:#0020ff-#ffb000", "-quality", "90", path)
 	enc := Encoding{Format: JPEG, MaxEdge: 100}
 	want := fusedWant(t, p, path, Select{}, enc)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	sameBytes(t, "over the caps", encodeAll(t, src, Select{}, enc), want)
 	if len(src.kept) != 0 {
 		t.Error("a decode over the caps was kept")
@@ -989,7 +989,7 @@ func TestReuseHonoursTheCapsAFullDecodeExceeds(t *testing.T) {
 	_, _, perr := openSourceOn(t, p, path, OpenOptions{}).Encode(context.Background(), t.TempDir(), sel, enc)
 	_, _, rerr := src.Encode(context.Background(), t.TempDir(), sel, enc)
 	if (perr == nil) != (rerr == nil) {
-		t.Errorf("a region: without Reuse %v, with Reuse %v", perr, rerr)
+		t.Errorf("a region: without KeepDecode %v, with KeepDecode %v", perr, rerr)
 	}
 }
 
@@ -1067,7 +1067,7 @@ func TestReuseWebPProfileCopyFailureIsNotRemembered(t *testing.T) {
 	}
 	enc := Encoding{Format: PNG, MaxEdge: 400}
 	want := fusedWant(t, p, path, Select{}, enc)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	block := filepath.Join(src.dir, ".kept-0.icc")
 	if err := os.Mkdir(block, 0o700); err != nil {
 		t.Fatal(err)
@@ -1095,15 +1095,15 @@ func TestReuseKeepsTheFilterOfAnOpaqueWebP(t *testing.T) {
 	p := requireProcessor(t)
 	path := filepath.Join(t.TempDir(), "o.webp")
 	magick(t, requireMagick(t), "-size", "96x64", "gradient:#0020ff-#ffb000", "-alpha", "off", "-quality", "70", path)
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	big, small := Encoding{Format: PNG, MaxEdge: 1000}, Encoding{Format: PNG, MaxEdge: 24}
 	encodeAll(t, src, Select{}, big)
 	if src.kept[0] == nil {
 		t.Fatal("not kept")
 	}
 	// A fresh decode to a small target is reduced, which a full-size decode
-	// does not give; the first call of a Reuse Source decodes at full size.
-	want := encodeAll(t, openSourceOn(t, p, path, OpenOptions{Reuse: true}), Select{}, small)
+	// does not give; the first call of a KeepDecode Source decodes at full size.
+	want := encodeAll(t, openSourceOn(t, p, path, OpenOptions{KeepDecode: true}), Select{}, small)
 	sameBytes(t, "resized from the kept decode", encodeAll(t, src, Select{}, small), want)
 }
 
@@ -1119,7 +1119,7 @@ func TestReuseOpaqueEncodeGivesTheFusedBytes(t *testing.T) {
 				t.Parallel()
 				enc := Encoding{Format: format, MaxEdge: edge, Opaque: true}
 				plain := openSourceOn(t, p, path, OpenOptions{})
-				reuse := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+				reuse := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 				whole := encodeAll(t, plain, Select{}, enc)
 				sameBytes(t, "first encode", encodeAll(t, reuse, Select{}, enc), whole)
 				if reuse.kept[0] == nil {
@@ -1163,7 +1163,7 @@ func keptFileSizes(t *testing.T, src *Source) int64 {
 func TestKeptBytesIsTheSizeOfTheKeptFiles(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
-	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{KeepDecode: true})
 	if got := src.KeptBytes(); got != 0 {
 		t.Errorf("KeptBytes before an Encode = %d, want 0", got)
 	}
@@ -1185,7 +1185,7 @@ func TestKeptBytesFollowsEviction(t *testing.T) {
 	p := requireProcessor(t)
 	path := writeFile(t, "pages.tif", tiffPages(0, 0, 0))
 	enc := Encoding{Format: PNG, MaxEdge: 16}
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	encodeAll(t, src, Select{Frames: Indices(0, 1)}, enc)
 	two := src.KeptBytes()
 	if want := keptFileSizes(t, src); two != want || len(src.kept) != 2 {
@@ -1206,9 +1206,9 @@ func TestKeptBytesIsZeroWithoutReuseAndAfterClose(t *testing.T) {
 	plain := openSourceOn(t, p, path, OpenOptions{})
 	encodeAll(t, plain, Select{}, enc)
 	if got := plain.KeptBytes(); got != 0 {
-		t.Errorf("KeptBytes without Reuse = %d, want 0", got)
+		t.Errorf("KeptBytes without KeepDecode = %d, want 0", got)
 	}
-	src := openSourceOn(t, p, path, OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	encodeAll(t, src, Select{}, enc)
 	if src.KeptBytes() == 0 {
 		t.Fatal("nothing kept")
@@ -1225,7 +1225,7 @@ func TestKeptBytesIsZeroWithoutReuseAndAfterClose(t *testing.T) {
 func TestKeptBytesIsSafeDuringEncodes(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
-	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{Reuse: true})
+	src := openSourceOn(t, p, heicFixtureFile(t, "adobe-256x96"), OpenOptions{KeepDecode: true})
 	enc := Encoding{Format: WebP, MaxEdge: 48}
 	var wg sync.WaitGroup
 	for i := range 4 {

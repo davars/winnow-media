@@ -117,7 +117,7 @@ func tiffPages(flags ...uint32) []byte {
 	return out
 }
 
-func TestInfoSettledPerType(t *testing.T) {
+func TestInfoUprightPerType(t *testing.T) {
 	t.Parallel()
 	env := requireFFmpeg(t)
 	p := requireProcessor(t)
@@ -126,14 +126,14 @@ func TestInfoSettledPerType(t *testing.T) {
 	t.Run("heic", func(t *testing.T) {
 		t.Parallel()
 		info := openSourceOn(t, p, heicFixtureFile(t, "gradient-righttop"), OpenOptions{}).Info()
-		if !info.Settled || info.Kind != Still || info.Width != 480 || info.Height != 640 {
+		if !info.Upright || info.Kind != Still || info.Width != 480 || info.Height != 640 {
 			t.Errorf("Info = %+v, want a settled 480x640 still", info)
 		}
 	})
 	t.Run("jpeg", func(t *testing.T) {
 		t.Parallel()
 		info := openSourceOn(t, p, quadrantJPEG(t, env), OpenOptions{}).Info()
-		if !info.Settled || info.Width != 480 || info.Height != 640 || info.Orientation != 6 {
+		if !info.Upright || info.Width != 480 || info.Height != 640 || info.Orientation != 6 {
 			t.Errorf("Info = %+v, want a settled 480x640 with orientation 6", info)
 		}
 	})
@@ -142,7 +142,7 @@ func TestInfoSettledPerType(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "oriented.tif")
 		magick(t, env, "-size", "32x24", "gradient:red-blue", "-orient", "RightTop", path)
 		info := openSourceOn(t, p, path, OpenOptions{}).Info()
-		if !info.Settled || info.Width != 24 || info.Height != 32 || info.Orientation != 6 {
+		if !info.Upright || info.Width != 24 || info.Height != 32 || info.Orientation != 6 {
 			t.Errorf("Info = %+v, want a settled 24x32 with orientation 6", info)
 		}
 	})
@@ -153,7 +153,7 @@ func TestInfoSettledPerType(t *testing.T) {
 			uw, uh := uprightOf(t, env, path)
 			src := openSourceOn(t, p, path, OpenOptions{})
 			before := src.Info()
-			if before.Settled || before.Width == uw && before.Height == uh {
+			if before.Upright || before.Width == uw && before.Height == uh {
 				t.Fatalf("Info before = %+v, want an unsettled stored size (upright is %dx%d)", before, uw, uh)
 			}
 			images, _, err := src.Encode(ctx, t.TempDir(), Select{}, png)
@@ -161,7 +161,7 @@ func TestInfoSettledPerType(t *testing.T) {
 				t.Fatal(err)
 			}
 			after := src.Info()
-			if !after.Settled || after.Width != uw || after.Height != uh {
+			if !after.Upright || after.Width != uw || after.Height != uh {
 				t.Errorf("Info after = %+v, want a settled %dx%d", after, uw, uh)
 			}
 			if want := (Region{Width: uw, Height: uh}); images[0].Region != want {
@@ -172,14 +172,14 @@ func TestInfoSettledPerType(t *testing.T) {
 	t.Run("animation", func(t *testing.T) {
 		t.Parallel()
 		info := openSourceOn(t, p, writeGIF(t, solid, 3), OpenOptions{}).Info()
-		if !info.Settled || info.Kind != Animation || info.Frames != 3 || len(info.DelaysMS) != 3 || info.DurationMS != 150 {
+		if !info.Upright || info.Kind != Animation || info.Animation.Frames != 3 || len(info.Animation.Delays) != 3 || info.Animation.Duration != 150*time.Millisecond {
 			t.Errorf("Info = %+v, want a settled animation of 3 frames over 150 ms", info)
 		}
 	})
 	t.Run("video", func(t *testing.T) {
 		t.Parallel()
 		info := openSourceOn(t, p, sdrClip(t, env, "160x120", 10, 2), OpenOptions{}).Info()
-		if !info.Settled || info.Kind != Video || info.Width != 160 || info.Height != 120 || info.Codec != "h264" || info.DurationMS < 1900 {
+		if !info.Upright || info.Kind != Video || info.Width != 160 || info.Height != 120 || info.Video.Codec != "h264" || info.Video.Duration < 1900*time.Millisecond {
 			t.Errorf("Info = %+v, want a settled 160x120 h264 video of 2 s", info)
 		}
 	})
@@ -188,7 +188,7 @@ func TestInfoSettledPerType(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "plain.png")
 		magick(t, env, "-size", "32x24", "gradient:red-blue", path)
 		src := openSourceOn(t, p, path, OpenOptions{Orientation: 6})
-		if info := src.Info(); !info.Settled || info.Width != 24 || info.Height != 32 {
+		if info := src.Info(); !info.Upright || info.Width != 24 || info.Height != 32 {
 			t.Errorf("Info = %+v, want a settled 24x32", info)
 		}
 		if _, _, err := p.Open(ctx, sdrClip(t, env, "160x120", 10, 1), OpenOptions{Orientation: 6}); err == nil {
@@ -237,9 +237,35 @@ func TestInfoIsASnapshot(t *testing.T) {
 	p := requireProcessor(t)
 	src := openSourceOn(t, p, writeGIF(t, solid, 3), OpenOptions{})
 	info := src.Info()
-	info.DelaysMS[0] = 12345
-	if got := src.Info().DelaysMS[0]; got != 50 {
-		t.Errorf("a caller changed the Source's delays to %d", got)
+	info.Animation.Delays[0] = 12345
+	info.Animation.Frames = 99
+	if got := src.Info().Animation.Delays[0]; got != 50*time.Millisecond {
+		t.Errorf("a caller changed the Source's delays to %v", got)
+	}
+}
+
+func TestInfoOfAVideoIsASnapshot(t *testing.T) {
+	t.Parallel()
+	env := requireFFmpeg(t)
+	p := requireProcessor(t)
+	src := openSourceOn(t, p, sdrClip(t, env, "160x120", 10, 2), OpenOptions{})
+	info := src.Info()
+	info.Video.Codec = "changed"
+	info.Video.Rotation = 90
+	if got := src.Info().Video; got.Codec != "h264" || got.Rotation != 0 {
+		t.Errorf("a caller changed the Source's video info to %+v", got)
+	}
+}
+
+func TestTimesAreTruncatedToTheMillisecond(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		d    time.Duration
+		want int64
+	}{{0, 0}, {time.Millisecond - 1, 0}, {1999 * time.Microsecond, 1}, {2 * time.Second, 2000}, {-time.Microsecond, -1}} {
+		if got := durMS(c.d); got != c.want {
+			t.Errorf("durMS(%v) = %d, want %d", c.d, got, c.want)
+		}
 	}
 }
 
@@ -252,9 +278,9 @@ func TestVideoSourceProbesOnce(t *testing.T) {
 	for _, sel := range []Select{
 		{},
 		{Frames: Even(3)},
-		{Frames: Times(1500)},
-		{Frames: Run(500, 3)},
-		{Frames: Times(500), Region: Region{X: 10, Y: 10, Width: 50, Height: 40}},
+		{Frames: Times(msec(1500))},
+		{Frames: Consecutive(msec(500), 3)},
+		{Frames: Times(msec(500)), Region: Region{X: 10, Y: 10, Width: 50, Height: 40}},
 	} {
 		if _, _, err := src.Encode(context.Background(), t.TempDir(), sel, Encoding{Format: PNG, MaxEdge: 64}); err != nil {
 			t.Fatal(err)
@@ -284,10 +310,10 @@ func TestVideoTimesTakeTheSeekOrTheSelectPath(t *testing.T) {
 		}
 		return seeks, runs
 	}
-	if seeks, runs := count(Select{Frames: Times(1500)}); seeks != 1 || runs != 1 {
+	if seeks, runs := count(Select{Frames: Times(msec(1500))}); seeks != 1 || runs != 1 {
 		t.Errorf("one time: %d seeks of %d ffmpeg runs, want 1 of 1", seeks, runs)
 	}
-	if seeks, runs := count(Select{Frames: Times(500, 1500, 2500)}); seeks != 0 || runs != 1 {
+	if seeks, runs := count(Select{Frames: Times(msec(500), msec(1500), msec(2500))}); seeks != 0 || runs != 1 {
 		t.Errorf("three times: %d seeks of %d ffmpeg runs, want one select run with no seek", seeks, runs)
 	}
 	if seeks, runs := count(Select{}); seeks != 1 || runs != 1 {
@@ -303,7 +329,7 @@ func TestAnimationSourceKeepsTheFramesOfItsLastCall(t *testing.T) {
 	if got := runs.Load(); got != 0 {
 		t.Fatalf("Open ran the compositor %d times", got)
 	}
-	encode := func(sel Frames) []Image {
+	encode := func(sel FrameSelection) []Image {
 		t.Helper()
 		images, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: sel}, Encoding{Format: PNG, MaxEdge: 32})
 		if err != nil {
@@ -369,7 +395,7 @@ func TestAnimationSourceDropsUnusedFramesBeforeCompositing(t *testing.T) {
 		held = append(held, n)
 		return inner(ctx, in, req, onFrame)
 	}
-	for _, sel := range []Frames{Indices(0, 1, 2), Indices(3, 4, 5)} {
+	for _, sel := range []FrameSelection{Indices(0, 1, 2), Indices(3, 4, 5)} {
 		if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: sel}, Encoding{Format: PNG, MaxEdge: 32}); err != nil {
 			t.Fatal(err)
 		}
@@ -397,7 +423,7 @@ func TestAnimationSourceStreamsWhatDoesNotFitInDisk(t *testing.T) {
 		}
 		return n
 	}
-	encode := func(sel Frames) {
+	encode := func(sel FrameSelection) {
 		t.Helper()
 		if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: sel}, Encoding{Format: PNG, MaxEdge: 32}); err != nil {
 			t.Fatal(err)
@@ -547,8 +573,8 @@ func TestEncodeNamesFilesAcrossTargetsAndFrames(t *testing.T) {
 	var names []string
 	for i, img := range images {
 		names = append(names, img.Name)
-		if want := i / 3; img.Target != want {
-			t.Errorf("%s: Target %d, want %d", img.Name, img.Target, want)
+		if want := i / 3; img.Encoding != want {
+			t.Errorf("%s: Target %d, want %d", img.Name, img.Encoding, want)
 		}
 		if want := []int{1, 3, 5}[i%3]; len(img.Frames) != 1 || img.Frames[0].Index != want {
 			t.Errorf("%s: Frames %+v, want frame %d", img.Name, img.Frames, want)
@@ -568,7 +594,7 @@ func TestAnimationTimesAndRunsSelectTheFrameShownThen(t *testing.T) {
 	p := requireProcessor(t)
 	// Four frames of 50 ms.
 	src := openSourceOn(t, p, writeGIF(t, solid, 4), OpenOptions{})
-	frames := func(sel Frames) []Frame {
+	frames := func(sel FrameSelection) []Frame {
 		t.Helper()
 		images, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: sel}, Encoding{Format: PNG, MaxEdge: 32})
 		if err != nil {
@@ -580,16 +606,16 @@ func TestAnimationTimesAndRunsSelectTheFrameShownThen(t *testing.T) {
 		}
 		return out
 	}
-	if got, want := frames(Times(199, 0, 60, 110, 60)), []Frame{{0, 0}, {1, 50}, {2, 100}, {3, 150}}; !slices.Equal(got, want) {
+	if got, want := frames(Times(msec(199), 0, msec(60), msec(110), msec(60))), []Frame{{0, 0}, {1, msec(50)}, {2, msec(100)}, {3, msec(150)}}; !slices.Equal(got, want) {
 		t.Errorf("Times = %+v, want %+v", got, want)
 	}
-	if got, want := frames(Run(60, 2)), []Frame{{1, 50}, {2, 100}}; !slices.Equal(got, want) {
-		t.Errorf("Run(60, 2) = %+v, want %+v", got, want)
+	if got, want := frames(Consecutive(msec(60), 2)), []Frame{{1, msec(50)}, {2, msec(100)}}; !slices.Equal(got, want) {
+		t.Errorf("Consecutive(60ms, 2) = %+v, want %+v", got, want)
 	}
-	if got, want := frames(Run(110, 9)), []Frame{{2, 100}, {3, 150}}; !slices.Equal(got, want) {
-		t.Errorf("Run(110, 9) = %+v, want the frames to the end %+v", got, want)
+	if got, want := frames(Consecutive(msec(110), 9)), []Frame{{2, msec(100)}, {3, msec(150)}}; !slices.Equal(got, want) {
+		t.Errorf("Consecutive(110ms, 9) = %+v, want the frames to the end %+v", got, want)
 	}
-	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Times(200)}, Encoding{}); err == nil {
+	if _, _, err := src.Encode(context.Background(), t.TempDir(), Select{Frames: Times(msec(200))}, Encoding{}); err == nil {
 		t.Error("a time at the end of the animation was accepted")
 	}
 }
@@ -664,7 +690,7 @@ func TestEncodeLeavesTheDirectoryEmptyOnFailure(t *testing.T) {
 			rec := record(p)
 			rec.failAfter = 2
 			dir := t.TempDir()
-			sel := Select{Frames: Times(100, 700, 1300)}
+			sel := Select{Frames: Times(msec(100), msec(700), msec(1300))}
 			if name == "animation" {
 				sel = Select{Frames: All()}
 			}
@@ -728,9 +754,9 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 	video := openSourceOn(t, p, sdrClip(t, env, "160x120", 10, 2), OpenOptions{})
 	anim := openSourceOn(t, p, writeGIF(t, solid, 4), OpenOptions{})
 	forbidCompositor(t, p)
-	overMax := make([]int64, maxVideoSamples+1)
+	overMax := make([]time.Duration, maxVideoSamples+1)
 	for i := range overMax {
-		overMax[i] = int64(i)
+		overMax[i] = msec(i)
 	}
 	for _, c := range []struct {
 		name string
@@ -740,17 +766,17 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 		{"All on a video", video, Select{Frames: All()}},
 		{"Indices on a video", video, Select{Frames: Indices(0)}},
 		{"Times on a still", still, Select{Frames: Times(0)}},
-		{"Run on a still", still, Select{Frames: Run(0, 2)}},
+		{"Consecutive on a still", still, Select{Frames: Consecutive(0, 2)}},
 		{"Indices past a still's images", still, Select{Frames: Indices(1)}},
 		{"Indices past an animation", anim, Select{Frames: Indices(4)}},
-		{"Times past an animation", anim, Select{Frames: Times(200)}},
-		{"Times past a video", video, Select{Frames: Times(2500)}},
-		{"a negative time", video, Select{Frames: Times(-1)}},
+		{"Times past an animation", anim, Select{Frames: Times(msec(200))}},
+		{"Times past a video", video, Select{Frames: Times(msec(2500))}},
+		{"a negative time", video, Select{Frames: Times(-time.Millisecond)}},
 		{"Even(0)", anim, Select{Frames: Even(0)}},
 		{"more times of a video than the maximum", video, Select{Frames: Times(overMax...)}},
 		{"more even samples of a video than the maximum", video, Select{Frames: Even(maxVideoSamples + 1)}},
-		{"a run of a video longer than the maximum", video, Select{Frames: Run(0, maxVideoSamples+1)}},
-		{"a run of no frames of a video", video, Select{Frames: Run(0, 0)}},
+		{"a run of a video longer than the maximum", video, Select{Frames: Consecutive(0, maxVideoSamples+1)}},
+		{"a run of no frames of a video", video, Select{Frames: Consecutive(0, 0)}},
 		{"no times", video, Select{Frames: Times()}},
 		{"a negative index", anim, Select{Frames: Indices(1, -1)}},
 		{"no indices", anim, Select{Frames: Indices()}},
@@ -792,7 +818,7 @@ func TestOpenTypeReadsWhatNoSniffNames(t *testing.T) {
 			if _, _, err := src.Encode(ctx, t.TempDir(), Select{}, Encoding{Format: PNG, MaxEdge: 64}); err != nil {
 				t.Fatal(err)
 			}
-			if info := src.Info(); !info.Settled || info.Width != f.w || info.Height != f.h {
+			if info := src.Info(); !info.Upright || info.Width != f.w || info.Height != f.h {
 				t.Errorf("Info after an Encode = %+v, want a settled %dx%d", info, f.w, f.h)
 			}
 		})
@@ -840,7 +866,7 @@ func TestInfoImagesMarkAuxiliaryImages(t *testing.T) {
 	src := openSourceOn(t, p, path, OpenOptions{})
 	info := src.Info()
 	want := []ImageInfo{{32, 24, false}, {32, 24, true}, {32, 24, false}}
-	if info.Kind != Still || info.Frames != 3 || !slices.Equal(info.Images, want) {
+	if info.Kind != Still || len(info.Images) != 3 || !slices.Equal(info.Images, want) {
 		t.Fatalf("Info = %+v, want a still of images %v", info, want)
 	}
 	dir := t.TempDir()
@@ -884,7 +910,7 @@ func TestOpenRefusesAStillOfMoreImagesThanTheListLength(t *testing.T) {
 	magick(t, env, "-size", "8x8", "xc:red", "-duplicate", "2099", "-compress", "lzw", path)
 	src, _, err := p.Open(context.Background(), path, OpenOptions{})
 	if err == nil {
-		n := src.Info().Frames
+		n := len(src.Info().Images)
 		_ = src.Close()
 		t.Fatalf("opened a still of %d images, over the %s list length", n, policyListLength)
 	}

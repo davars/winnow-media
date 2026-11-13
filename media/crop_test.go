@@ -599,7 +599,7 @@ func TestRegionOfATurnedTIFFWithAPageOffset(t *testing.T) {
 		t.Fatalf("the TIFF's page is %s, want an offset of +30+20", g)
 	}
 	src := openSourceOn(t, p, path, OpenOptions{Type: "image/tiff"})
-	if info := src.Info(); !info.Settled || info.Width != 300 || info.Height != 400 {
+	if info := src.Info(); !info.Upright || info.Width != 300 || info.Height != 400 {
 		t.Fatalf("info %+v; want a settled 300x400 frame", info)
 	}
 	before := rec.count()

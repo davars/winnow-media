@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // animationImageEntry is an entry point that writes frames of an animation.
@@ -134,9 +135,9 @@ func TestInfoOfAVideo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.DurationMS < 3900 || info.DurationMS > 4100 || info.FrameRate != 10 ||
-		info.Width != 160 || info.Height != 120 || info.Rotation != 0 || info.HDR ||
-		info.Codec != "h264" || !info.HasAudio || info.Frames != 40 {
+	if info.Video.Duration < 3900*time.Millisecond || info.Video.Duration > 4100*time.Millisecond || info.Video.FrameRate != 10 ||
+		info.Width != 160 || info.Height != 120 || info.Video.Rotation != 0 || info.Video.HDR ||
+		info.Video.Codec != "h264" || !info.Video.HasAudio || info.Video.DeclaredFrames != 40 {
 		t.Errorf("info = %+v", info)
 	}
 	if usage.CPU <= 0 {
@@ -144,17 +145,17 @@ func TestInfoOfAVideo(t *testing.T) {
 	}
 
 	silent := sdrClip(t, env, "160x120", 10, 4)
-	if info, _, err = p.infoOf(ctx, silent); err != nil || info.HasAudio {
+	if info, _, err = p.infoOf(ctx, silent); err != nil || info.Video.HasAudio {
 		t.Errorf("silent clip: %+v, %v", info, err)
 	}
 
 	info, _, err = p.infoOf(ctx, rotatedClip(t, env))
-	if err != nil || info.Rotation != 90 || info.Width != 120 || info.Height != 160 {
+	if err != nil || info.Video.Rotation != 90 || info.Width != 120 || info.Height != 160 {
 		t.Errorf("rotated clip: %+v, %v", info, err)
 	}
 
 	info, _, err = p.infoOf(ctx, hlgClip(t, env, testsrc("160x120", 10, 2)))
-	if err != nil || !info.HDR || info.Codec != "hevc" {
+	if err != nil || !info.Video.HDR || info.Video.Codec != "hevc" {
 		t.Errorf("HLG clip: %+v, %v", info, err)
 	}
 
@@ -180,19 +181,19 @@ func TestInfoOfAnAnimation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Frames != 4 || info.Width != 24 || info.Height != 20 || !slices.Equal(info.DelaysMS, []int{50, 100, 100, 300}) {
+	if info.Animation.Frames != 4 || info.Width != 24 || info.Height != 20 || !slices.Equal(info.Animation.Delays, []time.Duration{msec(50), msec(100), msec(100), msec(300)}) {
 		t.Errorf("gif: %+v", info)
 	}
 
 	info, _, err = p.infoOf(ctx, writeGIF(t, solid, 7))
-	if err != nil || info.Frames != 7 || info.Width != 64 || info.Height != 48 || len(info.DelaysMS) != 7 {
+	if err != nil || info.Animation.Frames != 7 || info.Width != 64 || info.Height != 48 || len(info.Animation.Delays) != 7 {
 		t.Errorf("magick gif: %+v, %v", info, err)
 	}
 
 	t.Run("webp", func(t *testing.T) {
 		requireWebPBuilders(t)
 		info, _, err := p.infoOf(ctx, buildWebP(t, webpCase{codec: "lossless", frames: 6}))
-		if err != nil || info.Frames != 6 || info.Width != webpCanvasW || info.Height != webpCanvasH || len(info.DelaysMS) != 6 {
+		if err != nil || info.Animation.Frames != 6 || info.Width != webpCanvasW || info.Height != webpCanvasH || len(info.Animation.Delays) != 6 {
 			t.Errorf("webp: %+v, %v", info, err)
 		}
 	})
@@ -213,7 +214,7 @@ func TestEncodeTimes(t *testing.T) {
 		}
 		var times []int64
 		for i, img := range images {
-			times = append(times, img.Frames[0].TimeMS)
+			times = append(times, img.Frames[0].Time.Milliseconds())
 			if img.Name != frameName(i, ".jpg") || img.Width != 160 || img.Height != 120 || img.Frames[0].Index != 0 {
 				t.Errorf("image %d = %+v", i, img)
 			}
@@ -227,16 +228,16 @@ func TestEncodeTimes(t *testing.T) {
 
 		even, evenDir := videoInto(t, p, src, Encoding{}, 16)
 		for i, img := range images {
-			j := int(img.Frames[0].TimeMS / 1000)
+			j := int(img.Frames[0].Time.Milliseconds() / 1000)
 			if !bytes.Equal(readFrames(t, out, images[i:i+1])[0], readFrames(t, evenDir, even[j:j+1])[0]) {
-				t.Errorf("frame at %d ms differs from the evenly spaced sample", img.Frames[0].TimeMS)
+				t.Errorf("frame at %d ms differs from the evenly spaced sample", img.Frames[0].Time.Milliseconds())
 			}
 		}
 	})
 
 	t.Run("start of the video", func(t *testing.T) {
 		images, _, err := p.encodeTimes(ctx, src, Encoding{}, []int64{0}, t.TempDir())
-		if err != nil || len(images) != 1 || images[0].Frames[0].TimeMS != 0 {
+		if err != nil || len(images) != 1 || images[0].Frames[0].Time.Milliseconds() != 0 {
 			t.Errorf("images = %+v, err %v", images, err)
 		}
 	})
@@ -330,7 +331,7 @@ func TestEncodeRun(t *testing.T) {
 		var times []int64
 		var names []string
 		for _, img := range images {
-			times = append(times, img.Frames[0].TimeMS)
+			times = append(times, img.Frames[0].Time.Milliseconds())
 			names = append(names, img.Name)
 		}
 		if !slices.Equal(times, []int64{1500, 1600, 1700, 1800, 1900}) {
@@ -386,7 +387,7 @@ func TestEncodeRun(t *testing.T) {
 		}
 		var times []int64
 		for _, img := range images {
-			times = append(times, img.Frames[0].TimeMS)
+			times = append(times, img.Frames[0].Time.Milliseconds())
 		}
 		if !slices.Equal(times, []int64{3700, 3800, 3900}) {
 			t.Errorf("times = %v", times)
@@ -561,7 +562,7 @@ func TestEncodeIndices(t *testing.T) {
 	})
 }
 
-// The TimeMS of an animation frame is when it starts in the source: the sum
+// The Time of an animation frame is when it starts in the source: the sum
 // of the display delays before it, a stored delay below 20 ms counting as
 // 100 ms. An Image reports the same time as the delays Info gives.
 func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
@@ -578,7 +579,7 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 		}
 		var got []int64
 		for _, img := range images {
-			got = append(got, img.Frames[0].TimeMS)
+			got = append(got, img.Frames[0].Time.Milliseconds())
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("Indices%v times = %v, want %v", indices, got, want)
@@ -591,13 +592,13 @@ func TestAnimationImagesAreTimedFromTheirSourceStart(t *testing.T) {
 			t.Fatal(err)
 		}
 		var start int64
-		starts := make([]int64, len(source.Info().DelaysMS))
-		for i, d := range source.Info().DelaysMS {
-			starts[i], start = start, start+int64(d)
+		starts := make([]int64, len(source.Info().Animation.Delays))
+		for i, d := range source.Info().Animation.Delays {
+			starts[i], start = start, start+d.Milliseconds()
 		}
 		for _, img := range encoded {
-			if img.Frames[0].TimeMS != starts[img.Frames[0].Index] {
-				t.Errorf("All: frame %d at %d ms, Info says %d ms", img.Frames[0].Index, img.Frames[0].TimeMS, starts[img.Frames[0].Index])
+			if img.Frames[0].Time.Milliseconds() != starts[img.Frames[0].Index] {
+				t.Errorf("All: frame %d at %d ms, Info says %d ms", img.Frames[0].Index, img.Frames[0].Time.Milliseconds(), starts[img.Frames[0].Index])
 			}
 		}
 	}
@@ -674,7 +675,7 @@ func TestOpenDoesNotDecodeAStillWebP(t *testing.T) {
 			rec := record(p)
 			defer func() { p.run = rec.inner }()
 			info, _, err := p.infoOf(context.Background(), path)
-			if err != nil || info.Frames != 1 {
+			if err != nil || len(info.Images) != 1 {
 				t.Fatalf("info %+v, err %v", info, err)
 			}
 			for _, call := range rec.calls {

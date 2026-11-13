@@ -105,14 +105,14 @@ func TestEncodeMapsTheScenesTheWebPWriterMerged(t *testing.T) {
 				return ms
 			}
 			for i, f := range mapping {
-				if f.TimeMS != startMS(f.Index) {
-					t.Errorf("scene %d shows frame %d at %d ms, want %d", i, f.Index, f.TimeMS, startMS(f.Index))
+				if f.Time.Milliseconds() != startMS(f.Index) {
+					t.Errorf("scene %d shows frame %d at %d ms, want %d", i, f.Index, f.Time.Milliseconds(), startMS(f.Index))
 				}
 				end := startMS(len(delays))
 				if i+1 < len(mapping) {
-					end = mapping[i+1].TimeMS
+					end = mapping[i+1].Time.Milliseconds()
 				}
-				if got := (end - f.TimeMS) / 10; got != int64(written[i]) {
+				if got := (end - f.Time.Milliseconds()) / 10; got != int64(written[i]) {
 					t.Errorf("scene %d lasts %d cs in the file, its frames span %d", i, written[i], got)
 				}
 			}

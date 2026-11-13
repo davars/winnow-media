@@ -370,7 +370,7 @@ func TestEachTargetOfAnAnimationHasItsOwnMapping(t *testing.T) {
 	magick(t, real, "-size", "128x128", "xc:#323232", "(", "+clone", "-fill", "#3e3e3e", "-draw", "point 3,3", ")",
 		"(", "+clone", "-fill", "black", "-draw", "rectangle 0,0 127,127", ")", "-set", "delay", "5", "-loop", "0", path)
 	src := openSourceOn(t, requireProcessor(t), path, OpenOptions{})
-	if got := src.Info().Frames; got != 3 {
+	if got := src.Info().Animation.Frames; got != 3 {
 		t.Fatalf("fixture has %d frames", got)
 	}
 	out, _ := encodeInto(t, src, Select{Frames: All()},
