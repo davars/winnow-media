@@ -1,28 +1,45 @@
 # Measurements
 
-The caps, ceilings and limits of the `media` package were set from
-measurements of the largest inputs they admit. This file records the numbers,
-how they were taken and what each justified. The constants that state the
-bounds the library enforces (`media/limits.go`, `media/sandbox_linux.go`,
-`media/op_video.go`) link here. Figures that are projections, not measurements,
-are marked as such.
+The record behind the numbers in the `media` package: what was measured, how,
+and what each figure justified. The constants in `media/limits.go`,
+`media/sandbox_linux.go` and `media/op_video.go` link here. Figures that are
+projections, not measurements, are marked as such.
 
-The input size (25 MiB, a requirement of the deployment rather than a
-measurement), frame (52 million pixels), returned (64 million) and decoded
-(900 million) pixel values below, and 2000 frames, are a deployment's choice
-for `Config.Caps`; the library applies none of them by default, and the
-ceilings a zero `Caps` has are in the `Caps` doc comment. The tests hold the
-gate to these values through `measuredCaps` in `media/helpers_test.go`, which
-cites this file for them.
+## How to read this
 
-## Method
+The numbers are of two sorts.
 
-`internal/cmd/measure` generates the largest inputs the operations accept
+**The library's constants** hold for every `Processor`: the ceilings and fixed
+limits (16384 pixels a side, 2000 animation frames, 64 video samples), the
+sandbox's limits, ffmpeg's thread and allocation bounds, and the thresholds
+that choose how a file is decoded. They were set on the reference host, a
+12-CPU x86_64 machine, at the default `Resources`.
+
+**One deployment's sizing** is an example, not a default. It is for a small
+host: a Raspberry Pi 5 (4-core arm64) running one call at a time in a
+container with a 1536 MiB memory limit. The library applies none of these
+values; a zero `Caps` is the ceilings in the `Caps` doc comment.
+
+| Setting | Small-host value |
+|---|---|
+| `Caps.MaxInputBytes` | 25 MiB (a requirement of that deployment, not a measurement) |
+| `Caps.MaxFramePixels` | 52,000,000 |
+| `Caps.MaxReturnedPixels` | 64,000,000 |
+| `Caps.MaxDecodedPixels` | 900,000,000 |
+| `Caps.MaxAnimationFrames` | 2000 |
+| `Resources.Memory`, `Map` | 512 MiB, 1 GiB (the "low-memory limits" below) |
+
+Every time and memory figure below names the host it is from. Take the small
+host's values only for a host like it; for any other, measure.
+
+## How to measure
+
+`internal/cmd/measure` generates the largest inputs the small-host caps admit
 (25 MiB 4K 60 fps HEVC and H.264 video, 48 and 24 MP HEIC, long GIFs and
-animated WebPs) and runs each through a `Processor`, printing wall time, CPU,
-peak RSS, output count and error as JSON lines and as a table. Generated
-inputs are large and are not kept in the repository. The HEIC inputs can be
-generated only where x265 can encode them (x86_64).
+animated WebPs) and runs each through a `Processor` with the zero `Config`,
+printing wall time, CPU, peak RSS, output count and error as JSON lines and as
+a table. Generated inputs are large and are not kept in the repository. The
+HEIC inputs can be generated only where x265 can encode them (x86_64).
 
 ```sh
 nix run .#measure -- <dir>                  # generate what is missing, then measure
@@ -36,9 +53,11 @@ input, `-repeat N` reports median wall time and CPU, and `-extra
 kind:frames:WxH` (`gif`, `gifu` for full-canvas frames, `webp`) adds an
 animation. `-list` prints the input names.
 
-Two hosts were used. The reference host is a 12-CPU x86_64 machine. The
-Raspberry Pi 5 figures come from three Raspberry Pi 5 nodes running the
-low-memory limits (512 MiB memory, 1 GiB map), one request per 1536Mi pod.
+To size a host of your own, run the harness there and compare each input's
+wall time and peak RSS with your budget for one call. The harness cannot set
+`Caps` or `Resources`: to measure a configuration, run your own program's
+calls and read the `Usage` each returns, and your container's memory peak,
+which also counts the file-backed pixel cache.
 
 ## Caps and ceilings
 
@@ -53,12 +72,11 @@ On the reference host, with `measure`:
   measured with. A caller with a time budget chooses a smaller count from the
   fields of `Source.Info`.
 
-On the three Raspberry Pi 5 nodes, the still values (a side of 16384 and 52
-million pixels):
+On the small host, the still values (a side of 16384 and 52 million pixels):
 
 - 52 million pixels sits just above the largest phone formats: 48 MP (8064x6048,
   48.8 MP) and 50 MP sensors (at most 8192x6144, 50.3 MP). Every format
-  admitted at this size completes within the 1536Mi pod limit.
+  admitted at this size completes within the 1536 MiB memory limit.
 - Every format passes at 52 MP with at least 34% time and 39% memory
   headroom, and a HEIC panorama at 52 MP takes about 25 s (projected from
   28.7 s at 59.6 MP).
@@ -93,8 +111,6 @@ ImageMagick policy ceilings:
   measured to complete (36 s). The ffmpeg allocation limit is four times what
   an 8K frame needs (1 GiB; a 4K HDR frame needs 32 MiB, one float plane of the
   tone-mapping filters).
-- The library sets no deadline on a whole operation: a caller that wants one
-  passes a context.
 
 Raspberry Pi 5 against the reference host: at worst about 4 times. CPU was 4.1
 times for 4K HEVC decode, and wall time 4.0 times for two 8000x8000 GIF frames
@@ -121,10 +137,12 @@ inputs on the reference host:
 
 The values chosen, from those peaks:
 
-- CPU 210 s: the heaviest single process, 25 s, times 4.1 (the worst CPU
-  ratio measured on a Raspberry Pi 5, 4K HEVC decode), times a safety margin
-  of 2, rounded up. The limit is the Processor's `CPUTime`, 1200 s by default,
-  which is looser than this figure.
+- CPU: the limit is `Resources.CPUTime`, by default `TimeLimit` times
+  `Threads`, 1200 s. That is a backstop against a runaway tool, not a tuned
+  bound: the heaviest single process measured used 25 s. A bound derived from
+  the measurement would be about 210 s (25 s, times 4.1 for the worst CPU ratio
+  of the small host, times a margin of 2); a deployment that wants one sets
+  `CPUTime`.
 - Address space 8 GiB: 2.4 times the worst peak (3.2 GiB), leaving room for
   the per-thread arenas that grow with a host's CPU count. The limit is the
   Processor's `Memory` plus `Map` plus 5 GiB, 8 GiB at the defaults; the file
@@ -140,23 +158,16 @@ The values chosen, from those peaks:
   HEIC measured 919 MiB and 12.7 s of CPU directly and the same through the
   helper. The helper adds about 13 ms to a run.
 
-## Deployment model
+## The small host's deployment
 
-The measured model is one request per pod:
+One call at a time per container, with:
 
-- a memory limit of 1536Mi per request in flight, with `Resources` of 512 MiB
-  memory and 1 GiB map (the low-memory limits);
-- scratch on a disk-backed `emptyDir` (never `medium: Memory`) with a
-  `sizeLimit` of about 8Gi, holding ImageMagick's temporary directory and the
-  processor's scratch. ImageMagick's pixel cache is memory-mapped there, so
-  its pages must be reclaimable under the memory limit;
-- an `ephemeral-storage` request covering the volume;
-- real disk on every node that can run the pod, since reclaiming writes those
-  pages back.
-
-Landlock is not used because the Raspberry Pi 5 nodes this was built for have
-none; file confinement rests on the container, as the package documentation
-requires of a deployment.
+- a memory limit of 1536 MiB and `Resources` of 512 MiB memory and 1 GiB map
+  (the low-memory limits);
+- `Config.Dir` on a disk-backed volume, never a memory-backed one, with a size
+  limit of about 8 GiB. ImageMagick's pixel cache is memory-mapped there, so
+  its pages must be reclaimable under the memory limit, and reclaiming writes
+  them back to that disk.
 
 Anonymous memory and total cgroup peak on a Raspberry Pi 5 (arm64), for the
 largest inputs admitted:
@@ -173,21 +184,21 @@ limit.
 
 ## Memory profiles
 
-The low-memory limits were measured on 1536Mi Raspberry Pi 5 pods. At the
+The low-memory limits were measured on the small host. At the
 high-memory limits (the default `Resources`) an 80 MP image thrashed or was
 OOMKilled in most runs (the png8 and lossy WebP outputs each passed once); at
 the low-memory limits it completed,
 with every lossy format taking 20 to 27 s. Caveats: the measurement is of one
-request per pod, for a 2048 WebP output; avif stays near 1400 MiB of anonymous
+call per container, for a 2048 WebP output; avif stays near 1400 MiB of anonymous
 memory whatever the limits; and PNG and lossless WebP inputs took 30 to 35 s.
 
 ## Decoding
 
-Reduced decode of a JPEG (`jpeg:size`), a worked example of how the still caps
-judge it: a 73 MP JPEG (7308x10000) is admitted when the largest target
-reduces it to at most six eighths (a target up to 3750 px) and refused at
-seven eighths (about 55.9 MP) and where nothing reduces it. A 16382x3628 JPEG
-is admitted at targets of 2048 and below.
+Reduced decode of a JPEG, a worked example of how `Caps.MaxFramePixels` (here
+52 million) judges it: a 73 MP JPEG (7308x10000) is admitted when the largest
+`Encoding` reduces the decode to at most six eighths (a `MaxEdge` up to 3750)
+and refused at seven eighths (about 55.9 MP) and where nothing reduces it. A
+16382x3628 JPEG is admitted at a `MaxEdge` of 2048 and below.
 
 Still WebP, decoded by `webp-frames still` with libwebp's scaler:
 
