@@ -211,12 +211,15 @@
 // requests are refused and with which sentinel, and the names and order of
 // the files Encode writes.
 //
+// Limits only loosen: the ceilings and fixed limits at Caps, the ceilings a
+// zero Encoding.MaxEdge and MaxArea stand for, and [MaxVideoSamples] may rise
+// in a later v1 release but do not fall, so a request one v1 release accepts
+// is not refused by a later one for being over them.
+//
 // Not covered: output bytes (see Determinism), error text, the versions of
-// the tools, the numbers behind a zero value (the defaults of Resources, the
-// ceilings and fixed limits at Caps, and [MaxVideoSamples]), and the set
-// Types returns, which may grow. A deployment sets the fields it relies on; a
-// nil Config.Types follows Types, so a deployment for hostile input names its
-// types.
+// the tools, the defaults of Resources, and the set Types returns, which may
+// grow. A deployment sets the fields it relies on; a nil Config.Types follows
+// Types, so a deployment for hostile input names its types.
 //
 // Later versions may add fields to the structs, values to [Kind] and
 // [Format], and sentinels, so that an error which wraps none now may wrap one
