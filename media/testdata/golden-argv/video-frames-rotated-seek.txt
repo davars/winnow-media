@@ -4,7 +4,7 @@
 "-of"
 "json"
 "-show_entries"
-"stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,start_time:stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
+"stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,pix_fmt,start_time:stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
 "-max_alloc"
 "1073741824"
 "-threads"

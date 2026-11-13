@@ -122,7 +122,13 @@ type Resources struct {
 	// which its pixel cache spills (memory, then map, then disk). Defaults
 	// 1 GiB and 2 GiB.
 	Memory, Map int64
-	// Disk is ImageMagick's disk limit in bytes. Default 4 GiB.
+	// Disk is ImageMagick's disk limit in bytes. It also bounds the scratch
+	// the frames of one Encode call take together where they are all held on
+	// disk at once: the sampled frames of a video, which are uncompressed at
+	// the size the largest Encoding needs (up to the source's own size), and
+	// the composited frames of an animation. A call over it is refused with
+	// ErrTooLarge before any frame is decoded; an animation that only
+	// exceeds it is written a batch at a time instead. Default 4 GiB.
 	Disk int64
 	// Threads is the thread count of ImageMagick, ffmpeg and ffprobe; ffmpeg
 	// uses at most two for a source above 4096x2160 whatever Threads is.

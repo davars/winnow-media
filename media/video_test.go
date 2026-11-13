@@ -27,6 +27,7 @@ const stubVideoProbe = `{"streams":[{"index":0,"codec_type":"video","width":64,"
 type videoStub struct {
 	mu     sync.Mutex
 	probe  string
+	res    Resources
 	probes [][]string
 	runs   [][]string
 }
@@ -37,7 +38,7 @@ type videoStub struct {
 func (s *videoStub) processor(t *testing.T) *Processor {
 	t.Helper()
 	requireTools(t, "magick", "ffmpeg", "ffprobe")
-	p, err := newProcessor(context.Background(), Config{Unsandboxed: true, Dir: t.TempDir()}, func(next runner) runner {
+	p, err := newProcessor(context.Background(), Config{Unsandboxed: true, Dir: t.TempDir(), Resources: s.res}, func(next runner) runner {
 		return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
 			s.mu.Lock()
 			switch filepath.Base(spec.Tool) {

@@ -474,7 +474,9 @@ func (s *Source) checkIdentity() error {
 // call is refused. A rename over the path, an unlink or a new link changes the
 // file's status-change time, so it counts as a change. A Select that does not apply to the Source's kind, or a
 // region outside a frame whose size is settled, is refused before any tool
-// runs. The Usage covers the tool runs of this call alone, also when it fails.
+// runs. A video call whose sampled frames, held together in uncompressed form,
+// would exceed Resources.Disk is refused with ErrTooLarge before any frame is
+// decoded. The Usage covers the tool runs of this call alone, also when it fails.
 //
 // Calls on one Source run one at a time. A call waiting for the one before it
 // returns ctx's error, without running, if ctx ends first. Cancelling ctx
@@ -811,10 +813,23 @@ func (s *Source) encodeVideo(ctx context.Context, env toolEnv, dir string, fr Fr
 	if err := src.checkRegion(r); err != nil {
 		return nil, err
 	}
+	if err := checkSampleScratch(src.videoPlanFor(r, encs), asked, s.p.res.Disk); err != nil {
+		return nil, err
+	}
 	if err := src.decodeVideo(ctx, r, encs); err != nil {
 		return nil, err
 	}
 	return encodeSamples(ctx, src, dir, r, encs, name)
+}
+
+// checkSampleScratch refuses a video call whose n samples, all of which are
+// written to scratch before the first is encoded, would exceed disk.
+func checkSampleScratch(plan videoPlan, n int, disk int64) error {
+	if need := int64(n) * plan.sampleBytes(); need > disk {
+		return tooLarge("%d samples of %dx%d are %d bytes of scratch, Resources.Disk is %d",
+			n, plan.fw, plan.fh, need, disk)
+	}
+	return nil
 }
 
 // encodeSamples writes the frames src holds, composited or sampled, for each

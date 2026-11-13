@@ -74,10 +74,9 @@ func (s *frameSource) setSamples(n int) {
 	}
 }
 
-// decodeVideo samples the video at the size the encodes of encs need, unless
-// the samples already decoded serve them. A source decoded for a smaller
-// encoding is decoded again. A failed decode leaves no samples.
-func (s *frameSource) decodeVideo(ctx context.Context, r region, encs []encoding) error {
+// videoPlanFor plans the sampling of the region r at the size of the largest
+// of encs.
+func (s *frameSource) videoPlanFor(r region, encs []encoding) videoPlan {
 	v := s.video
 	w, h := v.info.upright()
 	decode, best := encs[0], 0
@@ -88,7 +87,15 @@ func (s *frameSource) decodeVideo(ctx context.Context, r region, encs []encoding
 			decode, best = enc, tw*th
 		}
 	}
-	plan := newVideoPlan(v.info, r, decode, s.env.threads())
+	return newVideoPlan(v.info, r, decode, s.env.threads())
+}
+
+// decodeVideo samples the video at the size the encodes of encs need, unless
+// the samples already decoded serve them. A source decoded for a smaller
+// encoding is decoded again. A failed decode leaves no samples.
+func (s *frameSource) decodeVideo(ctx context.Context, r region, encs []encoding) error {
+	v := s.video
+	plan := s.videoPlanFor(r, encs)
 	// One time is cheaper by a seek than by decoding from the start.
 	plan.selectFrames = plan.selectFrames && (v.run != nil || len(v.times) > 1)
 	if v.decoded && v.plan.covers(plan) {

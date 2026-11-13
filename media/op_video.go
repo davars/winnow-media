@@ -97,7 +97,8 @@ type videoInfo struct {
 	codec         string
 	hasAudio      bool
 	transfer      string
-	streams       int // streams in the container, of every kind
+	pixFmt        string // the decoder's pixel format; "" when unknown
+	streams       int    // streams in the container, of every kind
 	// streamStartUS is the stream's start time in microseconds, on the same
 	// clock as containerStartUS; it equals it when either is unknown.
 	streamStartUS int64
@@ -132,6 +133,7 @@ type probeJSON struct {
 		RFrameRate    string `json:"r_frame_rate"`
 		AvgFrameRate  string `json:"avg_frame_rate"`
 		ColorTransfer string `json:"color_transfer"`
+		PixFmt        string `json:"pix_fmt"`
 		StartTime     string `json:"start_time"`
 		Disposition   struct {
 			Default     int `json:"default"`
@@ -166,7 +168,7 @@ func inputArgs(dec decoder, path string) []string {
 }
 
 // probeEntries is what ffprobe is asked to show of a video.
-const probeEntries = "stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,start_time" +
+const probeEntries = "stream=index,codec_name,codec_type,width,height,duration,nb_frames,r_frame_rate,avg_frame_rate,color_transfer,pix_fmt,start_time" +
 	":stream_disposition=default,attached_pic:stream_side_data=rotation:format=duration,start_time"
 
 // probeVideo runs the probe that the sampling operations share.
@@ -226,7 +228,7 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 			return videoInfo{}, fmt.Errorf("video stream reports size %dx%d", s.Width, s.Height)
 		}
 		v := videoInfo{
-			stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer,
+			stream: s.Index, width: s.Width, height: s.Height, transfer: s.ColorTransfer, pixFmt: s.PixFmt,
 			streams: len(p.Streams), format: p.Format.FormatName, codec: s.CodecName, rate: parseRate(s.RFrameRate), avgRate: parseRate(s.AvgFrameRate),
 		}
 		for _, o := range p.Streams {
@@ -401,6 +403,34 @@ func (p videoPlan) covers(q videoPlan) bool {
 		return true
 	}
 	return !isHDRTransfer(p.info.transfer) && p.fw >= q.fw && p.fh >= q.fh
+}
+
+// widePixFmt matches a pixel format of more than 8 bits per component, whose
+// name ends in its byte order.
+var widePixFmt = regexp.MustCompile(`\d\d(le|be)$`)
+
+// alphaPixFmt matches a pixel format that carries alpha.
+var alphaPixFmt = regexp.MustCompile(`^(yuva|rgba|bgra|argb|abgr|gbrap|ya)`)
+
+// sampleBytes is the size of one sample file: a PAM of the delivered size, at
+// the depth ffmpeg writes. The HDR filter ends in 8 bits and 3 components;
+// otherwise the decoder's own format sets them, and a format the probe did not
+// name is counted at the widest, 4 components of 16 bits.
+func (v videoPlan) sampleBytes() int64 {
+	perPixel := int64(8)
+	switch pf := v.info.pixFmt; {
+	case isHDRTransfer(v.info.transfer):
+		perPixel = 3
+	case pf != "":
+		perPixel = 3
+		if alphaPixFmt.MatchString(pf) {
+			perPixel = 4
+		}
+		if widePixFmt.MatchString(pf) {
+			perPixel *= 2
+		}
+	}
+	return int64(v.fw) * int64(v.fh) * perPixel
 }
 
 // source returns what the encode of enc needs to know about the frames. A
