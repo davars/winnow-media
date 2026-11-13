@@ -1,181 +1,83 @@
 # winnow-media
 
-A Go library and Nix flake for running external media tools (ImageMagick,
-FFmpeg and webp-frames) from a pinned, reproducible tool
-closure. Licensed under AGPL-3.0.
+A Go library that turns an untrusted image, animation or video file into
+upright, sized, sRGB images, and a Nix flake that pins the programs it runs
+(ImageMagick, FFmpeg and `webp-frames`). Licensed under AGPL-3.0.
 
-The module has two packages and a flake:
+- [`media`](https://pkg.go.dev/github.com/davars/winnow-media/media) is the
+  library. It admits a file by its content, decodes it with external tools
+  under limits and in a sandbox, and writes the stills, frames or animations
+  asked for.
+- [`tool`](https://pkg.go.dev/github.com/davars/winnow-media/tool) finds those
+  tools: in a directory fixed at link time, or on `PATH`.
+- The flake builds the tools and links a binary to them; see
+  [Setup](#setup).
 
-- `github.com/davars/winnow-media/tool` resolves tool names to executable
-  paths: from a directory injected at link time, or from `PATH` in development
-  builds. `tool.FlakeRevision()` returns the flake revision injected the same
-  way.
-- `github.com/davars/winnow-media/media` builds ImageMagick and FFmpeg command
-  lines and runs them on untrusted input inside a sandbox (resource limits, a
-  system-call filter and cleanup of leftover processes), to turn one input file
-  into upright, sized sRGB images.
-- The flake builds the tool closure the `tool` package finds; see
-  [Flake outputs](#flake-outputs).
+It builds on Linux and macOS. The sandbox needs Linux 5.11 or later on amd64
+or arm64; elsewhere the library runs only with `Config.Unsandboxed`, which is
+not for hostile input.
 
-## Example
+## Using it
 
-```go
-package main
-
-import (
-	"context"
-	"log"
-	"os"
-
-	"github.com/davars/winnow-media/media"
-)
-
-func main() {
-	ctx := context.Background()
-	p, err := media.NewProcessor(ctx, media.Config{
-		Types: []string{"video/mp4", "image/jpeg"}, // nil: every type of media.Types()
-		Caps:  media.Caps{MaxInputBytes: 64 << 20, MaxFramePixels: 100_000_000},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer p.Close()
-
-	src, _, err := p.Open(ctx, "clip.mp4", media.OpenOptions{})
-	if err != nil {
-		log.Fatal(err) // test with errors.Is for ErrUnsupportedType, ErrTooLarge
-	}
-	defer src.Close()
-	info := src.Info()
-	log.Printf("%s %dx%d", info.Kind, info.Width, info.Height)
-	if info.Kind == media.Video {
-		log.Printf("duration %s", info.Video.Duration)
-	}
-
-	dir, err := os.MkdirTemp("", "frames") // must exist and be empty
-	if err != nil {
-		log.Fatal(err)
-	}
-	images, usage, err := src.Encode(ctx, dir, media.Select{Frames: media.Even(8)},
-		media.Encoding{Format: media.WebP, MaxEdge: 1024})
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, img := range images {
-		log.Printf("%s %dx%d shows %+v", img.Name, img.Width, img.Height, img.Frames)
-	}
-	log.Printf("cpu %s, peak rss %d bytes", usage.CPU, usage.MaxRSS)
-}
-```
-
-## Operations
-
-A `Processor` opens one untrusted input file as a `Source`; the `Source` is
-read as often as the caller likes. Each call returns a `Usage` (CPU time and
-peak resident set size over every tool run of the call, also on failure). Each
-output is sized and encoded by an `Encoding` (format JPEG, WebP or PNG,
-quality, longest side, pixel area, `Opaque` to flatten alpha onto white), is upright, is converted to sRGB when the
-source carries a profile, and carries no metadata.
+The [package documentation](https://pkg.go.dev/github.com/davars/winnow-media/media)
+is the reference. Its
+[examples](https://pkg.go.dev/github.com/davars/winnow-media/media#pkg-examples)
+(source: [`media/example_test.go`](media/example_test.go)) cover opening a
+file and reading its `Info`, one still to two encodings, samples of a video,
+an animation to one animated WebP, regions of a kept decode, a configuration
+for hostile input, and handling errors.
 
 | Call | Does |
 |---|---|
-| `Processor.Open` | Applies the gate and the caps and reads the headers, or probes a video, without decoding a pixel. `OpenOptions.Type` names the type of a file whose bytes name none (TGA, ICO, CUR, G3, DNG). `OpenOptions.KeepDecode` keeps a still's decode between `Encode` calls; `Source.KeptBytes` reports the disk it holds. |
-| `Source.Info` | What is known of the file: type, kind (still, animation, video), size, orientation (and whether `OpenOptions` gave it), frame count and delays, and for a video the duration, rate, rotation, HDR, codec and audio. |
-| `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Consecutive`) and region of a `Select`, one file per frame for each `Encoding`, or one animated WebP when `Animate` is set. |
-| `Source.Close`, `Processor.Close` | Remove a Source's scratch; closing the Processor closes its Sources. |
+| `NewProcessor` | Checks the tools, the sandbox and the generated ImageMagick policy, and fails rather than run without them. |
+| `Processor.Open` | Admits one file by its bytes, type and size, without decoding a pixel, and returns a `Source`. |
+| `Source.Info` | Describes the file: type, `Kind` (still, animation or video), size, orientation, and the facts of its kind. |
+| `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Consecutive`) and `Region` of a `Select` into an empty directory, once per `Encoding`: a file per frame, or one animated WebP. |
+| `Source.KeptBytes` | Reports the disk a Source holds for `OpenOptions.KeepDecode`. |
+| `Source.Close`, `Processor.Close` | Release a Source's file and scratch; closing the Processor closes its Sources. |
 
-A `Source` is checked against the file it was opened on before every `Encode`.
-Its calls are serialised, and an animation or video is not decoded until
-asked: the contracts, and what a Source keeps between calls, are in the doc
-comments and the [package documentation](media/env.go).
+## What you can rely on
 
-## Guarantees
+Each point is stated in full in the package documentation.
 
-For a `Processor`, stated in full in the
-[package documentation](media/env.go)
-(`go doc github.com/davars/winnow-media/media`):
+- **[Admission](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Admission).**
+  A file's type comes from its bytes, never its name, and must be one the
+  `Processor` was configured for. Sizes are refused from headers, before
+  pixels are decoded, against `Config.Caps`.
+- **[Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).**
+  The content cannot choose its decoder, and a tool cannot open a socket, gain
+  privileges or leave a process behind. The sandbox does not confine files or
+  resident memory: a deployment supplies that, and sets `Config.Types` and
+  `Config.Caps`, since the zero `Config` accepts everything the library can
+  read.
+- **[Lifecycle](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Lifecycle_and_concurrency).**
+  Everything is safe for concurrent use. A failed or cancelled `Encode`
+  leaves its directory empty and the `Source` usable.
+- **[Errors](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Errors).**
+  Six sentinels and `ToolError` say what went wrong and whether a retry can
+  succeed. Error text is not part of the contract.
+- **[Determinism](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Determinism).**
+  The same input, request, library version and tool binaries give the same
+  bytes on one architecture.
 
-- **Gate.** The input must be a regular file within `Caps.MaxInputBytes`. It is
-  opened once; the checks and Go's reads use that descriptor, and on Linux so
-  do the tools' (`/dev/fd/3`, not the path), so a file put at the path
-  afterwards is never read. Elsewhere the tools read through a link to the
-  path, which the per-`Encode` identity check guards. Its type comes from its
-  bytes, never its name, must be in `Config.Types`, and the decoder is pinned to
-  it. The coder allow-list of the generated policy is built from `Types`, so
-  content cannot choose another.
-- **Caps.** Input size, pixel counts and frame count are bounded by
-  `Config.Caps`, and side length, stream count and duration by constants (see
-  the `Caps` doc comment); a refusal wraps `ErrTooLarge`.
-- **Sandbox.** Every tool runs through a helper (the program's own executable,
-  started again) that sets `no_new_privs`, resource limits and a seccomp filter
-  denying sockets, and kills what the tool leaves behind. It needs Linux 5.11
-  or later on amd64 or arm64; elsewhere `NewProcessor` fails unless
-  `Config.Unsandboxed` runs the tools directly.
-- **Policy.** The tool's environment is fixed and ImageMagick runs under a
-  generated policy that `NewProcessor` reads back and refuses unless it is the
-  only one in effect.
-- **Determinism.** The same inputs, arguments and tool binaries give the same
-  output bytes.
+## Versioning
 
-The sandbox does not confine files: a deployment for hostile input supplies
-that (see the package documentation).
+From v1 the module follows Go's compatibility rules. The
+[Compatibility](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Compatibility)
+section of the package documentation says what that covers and what it does
+not: notably, output bytes can change with any library version or tool
+update, and the set of types can grow. The signatures of the flake's `lib`
+functions and the flat layout of `packages.<system>.default` are covered too.
 
-## Types and caps
+## Setup
 
-`Types()` lists the media types the library has a pinned decoder for: those
-ImageMagick reads with a built-in coder, and video: MP4, QuickTime, WebM,
-Matroska, AVI, ASF (WMV), MPEG program, elementary and transport streams, and
-FLV (the gate describes how a video is named in the
-[package documentation](media/env.go)). SVG, MVG, MSL, PostScript, EPS, PDF
-and text are never among them. TGA, ICO, G3 and DNG are in the list but are not
-identified from content: `OpenOptions.Type` names them.
-`Config.Types` narrows the set; nil is all of it. `Config.Caps` sets the limits
-that turn input away. A zero `Caps` is the library's ceilings, not values
-measured for any host, so a deployment for hostile input sets its own. The
-`Caps` doc comment lists them; [the measurements](docs/measurements.md) record
-the values a small deployment chose.
+`NewProcessor` needs four programs, whatever types are configured: `magick`
+(ImageMagick 7), `ffmpeg`, `ffprobe` and `webp-frames`.
 
-## Resources
+### With Nix
 
-`Config.Resources` bounds the memory, map, disk, threads and time of the tools
-a `Processor` runs; the defaults and what each field reaches are in the
-`Resources` doc comment. 512 MiB memory and 1 GiB map are measured for one
-request per 1536Mi pod (see [the measurements](docs/measurements.md#memory-profiles)).
-
-## Flake outputs
-
-Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
-`x86_64-darwin` and `aarch64-darwin`; `checks` and `devShells` are Linux only.
-
-- `packages.<system>.<tool>` for each of `ffmpeg`, `imagemagick` and
-  `webp-frames`. `ffmpeg` is nixpkgs' `ffmpeg-headless` (ffmpeg and ffprobe
-  only) and `imagemagick` is unmodified, both from this flake's pinned
-  nixpkgs.
-- `packages.<system>.default`: a directory containing every program of all
-  the tools, flat (`<dir>/magick`, not `<dir>/bin/magick`).
-- `lib.version`: the release version. The commit tagged `vX.Y.Z` carries
-  `X.Y.Z`; the next commit moves it to a `-dev` value.
-- `lib.toolDir { system, tools }`: the same kind of directory built from a
-  named subset, e.g. `tools = [ "imagemagick" "ffmpeg" ]`. An unknown name
-  fails evaluation.
-- `lib.ldflags { system, tools }`: the `-ldflags` list that points the `tool`
-  package at that directory and records the flake revision.
-- `lib.checkGoModPin { goModText, rev }` and `lib.assertGoModPin goModPath`:
-  see [the pin check](#the-pin-check).
-- `checks.<system>`: `test` (go test, with all the tools on `PATH` so the
-  tool-dependent tests run instead of skipping; the WebP tests also use
-  `cwebp` and `webpmux` from libwebp and exiftool, on the test `PATH` only), `lint`
-  (golangci-lint), `gofumpt`, `pin` (the fixtures for the pin check) and
-  `closure`, which builds a small probe binary the way a consumer would and
-  asserts that it resolves `magick` and `webp-frames` from the injected
-  directory, that both are in the binary's runtime closure, and that the
-  libwebp `webp-frames` links is the one ImageMagick links.
-- `packages.<system>.measure` and `apps.<system>.measure` (Linux): the
-  measurement harness, with ImageMagick and FFmpeg from this flake. Its usage
-  is in [the measurements](docs/measurements.md#method).
-- `devShells.<system>.default`: Go, golangci-lint, gofumpt and all the tools.
-
-## Building a binary against the tools
+The flake provides the tools at the versions the library is tested with, and
+links a binary to them:
 
 ```nix
 {
@@ -184,65 +86,128 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
 
   outputs = { self, nixpkgs, winnow-media, ... }:
     let system = "x86_64-linux"; pkgs = nixpkgs.legacyPackages.${system}; in {
-      packages.${system}.default = pkgs.buildGoModule {
-        pname = "myapp";
-        version = "0";
-        src = ./.;
-        vendorHash = "...";
-        ldflags = winnow-media.lib.ldflags {
-          inherit system;
-          tools = [ "imagemagick" "ffmpeg" "webp-frames" ];
+      packages.${system}.default =
+        assert winnow-media.lib.assertGoModPin ./go.mod;
+        pkgs.buildGoModule {
+          pname = "myapp";
+          version = "0";
+          src = ./.;
+          vendorHash = "...";
+          ldflags = winnow-media.lib.ldflags {
+            inherit system;
+            tools = [ "imagemagick" "ffmpeg" "webp-frames" ];
+          };
         };
-      };
     };
 }
 ```
 
-The injected tool directory's store path is embedded in the binary, so Nix's
-reference scan includes the tools and their dependencies in the binary's
-runtime closure (and in any container image built from it) without a
-separate contents list.
+The tool directory's store path is embedded in the binary, so the tools are in
+its runtime closure, and in any container image built from it.
 
-## Rules for consumers
-
-- **Importing `media` is the setup.** Its package `init` runs the importing
-  binary as the sandbox helper or frame compositor when a `WINNOW_MEDIA_*`
-  marker is set in its environment, and does nothing otherwise; no call in
-  `main` or `TestMain` is needed.
 - **No `nixpkgs.follows` on this input.** The tools must come from this
-  flake's own locked nixpkgs; following the consumer's would change the
-  binaries underneath the library.
-- **One revision for code and tools.** Pin the Go module in `go.mod` and the
-  tools in `flake.lock` to the same commit of this repository.
+  flake's own locked nixpkgs; following yours would change the binaries under
+  the library.
+- **One revision for code and tools.** `go.mod` and `flake.lock` must name the
+  same commit of this repository; [the pin check](#the-pin-check) enforces it.
+
+### Without Nix
+
+A binary built without the flake's `ldflags` finds the tools on `PATH`. You
+provide ImageMagick 7, FFmpeg, and `webp-frames`, which no distribution ships:
+build it from [`tools/webp-frames`](tools/webp-frames/webp-frames.c) against
+the libwebp your ImageMagick uses.
+
+```sh
+cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpmux -lwebpdemux -lwebp
+```
+
+Only the flake's tools are tested. With others, a type that `media.Types()`
+lists can fail at `Open` because the build lacks its decoder, and output bytes
+are your build's.
+
+### Deploying
+
+- The sandbox needs Linux 5.11 or later on amd64 or arm64, a mounted `/proc`,
+  and permission to install a seccomp filter, which container runtimes'
+  default profiles give. It needs no capability, user namespace or root.
+- For hostile input, run as an unprivileged user of its own in a container
+  with a read-only root filesystem, a memory limit, no network and no secrets.
+- Put `Config.Dir` on a disk, not in memory, with a size limit.
+- Nothing in the library limits how many calls run at once. The package
+  documentation's
+  [Sizing](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Sizing)
+  section says what each concurrent call needs;
+  [the measurements](docs/measurements.md) record what one deployment
+  measured.
+- A process that ends without `Processor.Close` leaves a `media-processor-*`
+  directory under `Config.Dir`; remove stale ones at startup.
+- Importing `media` is all the setup a program needs. Each tool runs under a
+  helper that is your own binary started again, so keep package `init`
+  functions free of side effects (see
+  [Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input)).
+
+### Testing your code
+
+`Processor` and `Source` are concrete types: put the calls you use behind a
+small interface of your own and fake it in unit tests. Tests that run the real
+tools need them on `PATH`; `nix develop github:davars/winnow-media` is a shell
+that has them, and `packages.<system>.default` is a directory of them to add
+to your own.
+
+## Flake outputs
+
+`packages` and `lib` cover `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`
+and `aarch64-darwin`; `checks`, `apps` and `devShells` are Linux only.
+
+- `packages.<system>.<tool>` for `ffmpeg`, `imagemagick` and `webp-frames`.
+  `ffmpeg` is nixpkgs' `ffmpeg-headless` (`ffmpeg` and `ffprobe`),
+  `imagemagick` is nixpkgs' build, and `webp-frames` is built here against the
+  libwebp that ImageMagick links.
+- `packages.<system>.default`: a directory holding every program of those
+  tools, flat (`<dir>/magick`, not `<dir>/bin/magick`).
+- `lib.toolDir { system, tools }`: the same kind of directory for the named
+  tools. An unknown name fails evaluation.
+- `lib.ldflags { system, tools }`: the list of strings for `buildGoModule`'s
+  `ldflags` that points the `tool` package at that directory and records the
+  flake revision. `media` needs all three tools.
+- `lib.version`: the release version, without the `v`.
+- `lib.assertGoModPin goModPath` and `lib.checkGoModPin { goModText, rev }`:
+  see [the pin check](#the-pin-check).
+- `checks.<system>`: the gate CI runs (`test`, `lint`, `gofumpt`, `pin`,
+  `closure`).
+- `packages.<system>.measure` and `apps.<system>.measure`: the measurement
+  harness; see [the measurements](docs/measurements.md#how-to-measure).
+- `devShells.<system>.default`: Go, the linters, the tools and the programs
+  the tests use.
 
 ## The pin check
 
-The Go module version in `go.mod` and the flake input in `flake.lock` must
-name the same commit. `lib.assertGoModPin` reads a `go.mod` and compares the
-12-hex-digit commit suffix of its `github.com/davars/winnow-media`
-pseudo-version with the revision this flake was locked at; a tagged
-version must equal `v` plus `lib.version`. It returns `true` on a match and
-throws, naming both values, on a mismatch, a missing requirement, a tag other
-than `v` plus `lib.version`, or a `replace` directive for the module. When the input has no revision (a dirty or `path:` override) it prints
-a warning and returns `true`.
+`lib.assertGoModPin ./go.mod` fails evaluation unless the
+`github.com/davars/winnow-media` version in `go.mod` and the flake input in
+`flake.lock` name the same commit. It accepts:
 
-Wire it into the evaluation of the package and of your CI check:
+- a pseudo-version whose 12-digit commit suffix matches the locked revision;
+- a tagged version equal to `v` plus `lib.version`.
 
-```nix
-packages.${system}.default =
-  assert winnow-media.lib.assertGoModPin ./go.mod;
-  pkgs.buildGoModule { /* ... */ };
-```
+It throws, naming both values, on a mismatch, a missing requirement, any other
+tag, or a `replace` directive for the module. When the input has no revision
+(a dirty tree or a `path:` override) it prints a warning and passes.
 
 `lib.checkGoModPin { goModText, rev }` is the same comparison as a pure
-function over strings; `checks.<system>.pin` exercises it over fixtures.
+function over strings.
 
 ## Development
 
 ```sh
-nix develop          # Go, golangci-lint, gofumpt and the tools
-nix flake check      # test, lint, gofumpt, closure
+nix develop          # Go, golangci-lint, gofumpt, the tools
+nix flake check      # test, lint, gofumpt, pin, closure
 ```
 
-CI runs `nix flake check` on x86_64 and aarch64 Linux. A weekly workflow
-opens a pull request updating `flake.lock`.
+CI runs `nix flake check` on x86_64 and aarch64 Linux; macOS is not tested. A
+weekly workflow opens a pull request updating `flake.lock`, which changes the
+tool binaries and so can change output bytes.
+
+To release version X.Y.Z: set `version` in `flake.nix` to `X.Y.Z`, tag that
+commit `vX.Y.Z`, and in the next commit move `version` to a `-dev` value, so
+that no untagged commit passes the pin check as a tag.
