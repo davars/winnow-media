@@ -146,9 +146,25 @@ func TestProcessorStillCapsOnHEIC(t *testing.T) {
 			if n := setHEICExtents(t, data, c.w, c.h); n == 0 {
 				t.Fatal("no ispe box in the fixture")
 			}
-			_, _, err := p.encodeFirst(context.Background(), writeFile(t, "in.heic", data), Encoding{}, t.TempDir())
-			if c.refused != errors.Is(err, ErrTooLarge) || (!c.refused && err != nil) {
-				t.Fatalf("err = %v, want ErrTooLarge = %v and no other error", err, c.refused)
+			path := writeFile(t, "in.heic", data)
+			ctx := context.Background()
+			if c.refused {
+				if _, _, err := p.encodeFirst(ctx, path, Encoding{}, t.TempDir()); !errors.Is(err, ErrTooLarge) {
+					t.Fatalf("err = %v, want ErrTooLarge", err)
+				}
+				return
+			}
+			// The cap judges the signalled size at Open. The forged extents
+			// differ from the pixels, which the decoder refuses at Encode.
+			src, _, err := p.Open(ctx, path, OpenOptions{})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = src.Close() })
+			_, _, err = src.Encode(ctx, t.TempDir(), Select{}, Encoding{})
+			if te := new(ToolError); err != nil &&
+				(!errors.As(err, &te) || !strings.Contains(string(te.Stderr), "does not have the size signaled")) {
+				t.Fatalf("Encode: %v, want none or a decoder's size mismatch", err)
 			}
 		})
 	}

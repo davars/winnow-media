@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -745,15 +746,53 @@ func TestVideoWithoutStreamDurationUsesTheContainersFromTheStreamStart(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Video.Duration != 5004*time.Millisecond {
-		t.Errorf("duration = %v, want the container's 6632 ms less the stream's 1628 ms", info.Video.Duration)
+	// The container's start is the earliest stream's, so it depends on the
+	// ffmpeg that wrote the file; the expectation is computed from the probe.
+	res, err := env.run(context.Background(), "ffprobe", "-v", "error", "-select_streams", "v:0", "-of", "json",
+		"-show_entries", "format=start_time,duration:stream=start_time", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probed struct {
+		Format struct {
+			StartTime string `json:"start_time"`
+			Duration  string `json:"duration"`
+		} `json:"format"`
+		Streams []struct {
+			StartTime string `json:"start_time"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(res.Stdout, &probed); err != nil || len(probed.Streams) != 1 {
+		t.Fatalf("probe = %s, %v", res.Stdout, err)
+	}
+	seconds := func(s string) float64 {
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			t.Fatalf("probe time %q: %v", s, err)
+		}
+		return v
+	}
+	offset := seconds(probed.Streams[0].StartTime) - seconds(probed.Format.StartTime)
+	if seconds(probed.Format.StartTime) <= 0 || math.Abs(offset-1.5) > 0.1 {
+		t.Fatalf("fixture has container start %s and stream offset %.3f s, want a positive start and an offset of 1.5 s",
+			probed.Format.StartTime, offset)
+	}
+	want := time.Duration(math.Round((seconds(probed.Format.Duration)-offset)*1000)) * time.Millisecond
+	if want < 4*time.Second || want > 6500*time.Millisecond {
+		t.Fatalf("expected duration %v, want it between 4 s and 6.5 s", want)
+	}
+	if got := info.Video.Duration; got < want-time.Millisecond || got > want+time.Millisecond {
+		t.Errorf("duration = %v, want the container's %s s less the stream's %.3f s offset, %v",
+			got, probed.Format.Duration, offset, want)
 	}
 	images, _, err := p.encodeEven(context.Background(), src, Encoding{Format: PNG}, 15, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(images) < 12 {
-		t.Errorf("%d frames, want at least 12 of the 15", len(images))
+	// The video is 40 frames at 10 fps; the samples that fall past it are
+	// skipped.
+	if atLeast := int(15 * 4 * time.Second / want); len(images) < atLeast {
+		t.Errorf("%d frames, want at least %d of the 15", len(images), atLeast)
 	}
 }
 

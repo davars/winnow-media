@@ -72,28 +72,24 @@ func hostileWebPs(t *testing.T) map[string]hostileWebP {
 	overlong := cloneBytes(good)
 	binary.LittleEndian.PutUint32(overlong[frames[1]+4:], 1<<30)
 	headers := webpOutcome{err: "reading headers"}
-	notDecodable := map[string]webpOutcome{
-		"Even":    {err: "is not a decodable animated WebP"},
-		"Indices": {err: "is outside the animation's 1 frames"},
-	}
 	return map[string]hostileWebP{
 		"header only":               {data: good[:30], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
 		"truncated in a frame":      {data: good[:frames[3]+40], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
 		"half the file":             {data: good[:len(good)/2], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
 		"cut between frames":        {data: good[:frames[4]], w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
-		"frame outside the canvas":  {data: patchFrame(2, 0, 500), w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
-		"canvas smaller than frame": {data: canvasSmall, w: 10, h: 10, frames: 6, refusal: "decodable", through: notDecodable},
+		"frame outside the canvas":  {data: patchFrame(2, 0, 500), w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
+		"canvas smaller than frame": {data: canvasSmall, w: 10, h: 10, frames: 6, refusal: "decodable", through: both(headers)},
 		// How many scenes ImageMagick reads from these two damaged files is its
 		// own leniency, so the contract is a refusal or at most the frames asked
 		// for.
 		"garbage frame header": {data: garbageFrame, w: 40, h: 30, frames: 6, refusal: "header read found", through: map[string]webpOutcome{
 			"Even": {atMost: 6}, "Indices": {atMost: 3},
 		}},
-		"garbage frame data": {data: garbageData, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
+		"garbage frame data": {data: garbageData, w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
 		"corrupt frame pixels": {data: corruptPixels, w: 40, h: 30, frames: 6, refusal: "decoding frame", through: map[string]webpOutcome{
 			"Even": {atMost: 6}, "Indices": {atMost: 3},
 		}},
-		"chunk size past the end": {data: overlong, w: 40, h: 30, frames: 6, refusal: "decodable", through: notDecodable},
+		"chunk size past the end": {data: overlong, w: 40, h: 30, frames: 6, refusal: "decodable", through: both(headers)},
 	}
 }
 
