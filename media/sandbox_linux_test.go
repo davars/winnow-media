@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -768,8 +769,31 @@ func TestToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 	if !errors.As(err, &te) || (te.Signal != syscall.SIGKILL && te.Signal != syscall.SIGXCPU) || te.ExitCode != -1 {
 		t.Errorf("err = %#v, want a *ToolError killed by SIGKILL or SIGXCPU", err)
 	}
-	if res.Usage == nil || res.Usage.CPU < time.Second-cpuSlack {
+	if res.Usage == nil || res.Usage.CPU < time.Second-cpuSlack(time.Second) {
 		t.Errorf("usage = %+v, want at least the 1 s limit", res.Usage)
+	}
+}
+
+// A multi-threaded tool killed at the CPU limit is attributed to ErrTimeLimit
+// like a single-threaded one. With as many busy threads as the host has CPUs
+// or more, the run's measured CPU time lands within tens of milliseconds
+// either side of the limit the kernel enforced: on a 12-CPU host against 2 s,
+// from 9 ms over to 45 ms short, more than 10 ms short in anywhere from 2% to
+// most of the kills depending on the host's state. The test kills 40 times so
+// that a slack too tight to cover that spread shows.
+func TestMultiThreadedToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
+	for _, threads := range []int{runtime.NumCPU(), 2 * runtime.NumCPU()} {
+		for range 20 {
+			p := fakeProcessorWith(t, Resources{CPUTime: 2 * time.Second})
+			res, err := runFake(t, p, "spin", strconv.Itoa(threads))
+			var cpu time.Duration
+			if res.Usage != nil {
+				cpu = res.Usage.CPU
+			}
+			if !errors.Is(err, ErrTimeLimit) {
+				t.Errorf("%d threads: err = %v, measured CPU %v, want ErrTimeLimit", threads, err, cpu)
+			}
+		}
 	}
 }
 

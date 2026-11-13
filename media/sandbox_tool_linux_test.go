@@ -155,7 +155,22 @@ func fakeTool(args []string) {
 	case "sleep":
 		time.Sleep(time.Minute)
 	case "spin":
-		// spin: use CPU until the sandbox kills the process.
+		// spin [threads]: use CPU, on threads goroutines (default one), until
+		// the sandbox kills the process.
+		threads := 1
+		if len(args) > 1 {
+			threads, _ = strconv.Atoi(args[1])
+		}
+		runtime.GOMAXPROCS(threads)
+		for range threads - 1 {
+			go func() {
+				for n := 0; ; n++ {
+					if n < 0 {
+						return
+					}
+				}
+			}()
+		}
 		for n := 0; ; n++ {
 			if n < 0 {
 				return

@@ -71,8 +71,14 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 }
 
 // cpuSlack is how far short of the CPU limit a killed run's measured CPU time
-// may fall and still count as having reached it: rusage holds microseconds.
-const cpuSlack = 10 * time.Millisecond
+// may fall and still count as having reached it: the larger of 250 ms and 1%
+// of the limit. The kernel's CPU accounting, which triggers the kill, and the
+// rusage read afterwards differ by tens of milliseconds when many threads are
+// busy; a SIGKILL from anything else that close to the budget is not a
+// realistic confusion.
+func cpuSlack(limit time.Duration) time.Duration {
+	return max(250*time.Millisecond, limit/100)
+}
 
 // reachedCPULimit reports whether a run ended because it reached the
 // sandbox's CPU-time limit. The limit's soft and hard values are equal, so the
@@ -82,7 +88,7 @@ const cpuSlack = 10 * time.Millisecond
 func reachedCPULimit(res toolResult, limit time.Duration) bool {
 	sig := syscall.Signal(res.Signal)
 	return limit > 0 && (sig == syscall.SIGKILL || sig == syscall.SIGXCPU) &&
-		res.Usage != nil && res.Usage.CPU+cpuSlack >= limit
+		res.Usage != nil && res.Usage.CPU+cpuSlack(limit) >= limit
 }
 
 // runError turns the outcome of one run into an error, or nil. A run that
