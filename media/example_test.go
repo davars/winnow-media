@@ -9,10 +9,87 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/davars/winnow-media/media"
 )
+
+// The whole path: a Processor, a file opened and described, and one Encode.
+// The README carries a copy of this function's body.
+func Example() {
+	ctx := context.Background()
+	p, err := media.NewProcessor(ctx, media.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer p.Close()
+
+	// Open admits the file by its bytes and decodes nothing.
+	src, _, err := p.Open(ctx, "photo.heic", media.OpenOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer src.Close()
+	info := src.Info()
+	fmt.Printf("%s %s, %dx%d\n", info.Kind, info.Type, info.Width, info.Height)
+
+	// Encode writes into an empty directory: here the first frame or image,
+	// upright and in sRGB, as a WebP of at most 1024 pixels a side.
+	dir, err := os.MkdirTemp("", "out")
+	if err != nil {
+		log.Fatal(err)
+	}
+	images, _, err := src.Encode(ctx, dir, media.Select{},
+		media.Encoding{Format: media.WebP, MaxEdge: 1024})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, img := range images {
+		fmt.Printf("%s: %dx%d\n", filepath.Join(dir, img.Name), img.Width, img.Height)
+	}
+}
+
+// The types a Processor accepts when Config.Types is nil.
+func ExampleTypes() {
+	for _, t := range media.Types() {
+		fmt.Println(t)
+	}
+	// Output:
+	// image/avif
+	// image/bmp
+	// image/g3fax
+	// image/gif
+	// image/heic
+	// image/heif
+	// image/jp2
+	// image/jpeg
+	// image/jxl
+	// image/png
+	// image/tiff
+	// image/vnd.adobe.photoshop
+	// image/vnd.djvu
+	// image/vnd.microsoft.icon
+	// image/webp
+	// image/x-adobe-dng
+	// image/x-exr
+	// image/x-pcx
+	// image/x-portable-arbitrarymap
+	// image/x-portable-bitmap
+	// image/x-portable-greymap
+	// image/x-portable-pixmap
+	// image/x-tga
+	// image/x-xcf
+	// video/mp2t
+	// video/mp4
+	// video/mpeg
+	// video/quicktime
+	// video/webm
+	// video/x-flv
+	// video/x-matroska
+	// video/x-ms-asf
+	// video/x-msvideo
+}
 
 // Open reads headers only, so it is also the way to ask what a file is.
 func ExampleProcessor_Open() {
@@ -42,6 +119,23 @@ func ExampleProcessor_Open() {
 	default:
 		// A later version of the library may add a kind.
 	}
+}
+
+// A few types cannot be told from a file's bytes (see Types): such a file is
+// read only when the caller names its type.
+func ExampleOpenOptions_type() {
+	ctx := context.Background()
+	p, err := media.NewProcessor(ctx, media.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer p.Close()
+
+	src, _, err := p.Open(ctx, "texture.tga", media.OpenOptions{Type: "image/x-tga"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer src.Close()
 }
 
 // One call decodes the still once and writes every Encoding from that decode.
@@ -184,7 +278,7 @@ func ExampleNewProcessor_hostileInput() {
 		Types: []string{"image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4"},
 		Caps: media.Caps{
 			MaxInputBytes:      64 << 20,    // the file on disk
-			MaxFramePixels:     50_000_000,  // one decoded frame: memory per tool run
+			MaxFramePixels:     52_000_000,  // one decoded frame: memory per tool run; admits a 50 MP photo
 			MaxAnimationFrames: 1000,        // frames an animation may declare
 			MaxDecodedPixels:   900_000_000, // every frame of an animation: time to decode it
 			MaxReturnedPixels:  64_000_000,  // the frames one call asks for: time and scratch
@@ -192,10 +286,13 @@ func ExampleNewProcessor_hostileInput() {
 		Resources: media.Resources{
 			Memory:    512 << 20,        // ImageMagick's pixel cache in memory
 			Map:       1 << 30,          // and memory-mapped from scratch
-			Disk:      2 << 30,          // and on disk; also bounds what a Source keeps
+			Disk:      2 << 30,          // and on disk; also what a Source keeps and a video call's samples
 			Threads:   2,                // per tool run
 			TimeLimit: 60 * time.Second, // ImageMagick's work on one image
-			CPUTime:   90 * time.Second, // CPU of one tool run, over all its threads
+			// CPU of one tool run, over all its threads. The heaviest run
+			// measured would need about 210 s on a slow host
+			// (docs/measurements.md); a lower value ends legitimate runs.
+			CPUTime: 240 * time.Second,
 		},
 		Dir: "/var/lib/myapp/scratch", // on disk, with room for Disk per concurrent call
 	})
@@ -205,7 +302,7 @@ func ExampleNewProcessor_hostileInput() {
 	defer p.Close()
 
 	// The library sets no deadline on a call; the context is the wall-clock
-	// bound.
+	// bound of the Open and of every Encode it is passed to.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	src, _, err := p.Open(ctx, "upload", media.OpenOptions{})
@@ -244,6 +341,6 @@ func Example_errors() {
 		// A *ToolError, most often a file its decoder cannot read, or an
 		// operating-system error. The tool's stderr is for operators' logs
 		// only: it can quote the input.
-		log.Printf("open: %v; stderr: %s", err, media.Stderr(err))
+		log.Printf("%v; stderr: %s", err, media.Stderr(err))
 	}
 }

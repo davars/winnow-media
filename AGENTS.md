@@ -35,8 +35,8 @@ Each fact has one home. Other places link to it rather than restate it.
 |---|---|
 | Doc comment on an exported symbol | Its contract: what it does, what it accepts and refuses, what it returns and the errors, and the state it leaves. A caller using one symbol should not need the README. |
 | Package doc comment (`media/doc.go`, `tool/tool.go`) | The model that spans symbols: the kinds, admission, the security model, lifecycle, the error table, determinism, sizing and the compatibility promise, stated as guarantees. |
-| `media/example_test.go` | Worked usage, as Example functions the gate compiles. The README links to them and carries no code of its own. |
-| `README.md` | Orientation and setup: what the module is for, its packages, one line per operation, a summary of the guarantees that links to the package doc, setup with and without Nix, deploying, the flake outputs, the pin check, development and the release rule. |
+| `media/example_test.go` | Worked usage, as Example functions the gate compiles. The README links to them. |
+| `README.md` | Orientation and setup: what the module is for, its packages, a short example (kept equal to the body of the package `Example` by a test), one line per operation, a summary of the guarantees that links to the package doc, setup with and without Nix, deploying, the flake outputs, the pin check, development and the release rule. |
 | `docs/` | Records that support a number or a choice: measurements, their method and what they justified. The constant's comment links to the record. |
 | Commit message | History: what changed, why, and what was tried. |
 | A consumer's own docs | How that consumer uses the library (see Vocabulary). |
