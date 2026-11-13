@@ -68,19 +68,20 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
 }
 
-// runError turns the outcome of one run into an error, or nil.
+// runError turns the outcome of one run into an error, or nil. A run that
+// failed after starting is a *ToolError carrying tail as its Stderr.
 func runError(ctx context.Context, name string, res toolResult, err error, tail []byte) error {
 	switch {
 	case ctx.Err() != nil:
-		return fmt.Errorf("%s: %w: %s", name, ctx.Err(), tail)
+		return fmt.Errorf("%s: %w", name, ctx.Err())
 	case err != nil:
-		return fmt.Errorf("%s: %w: %s", name, err, tail)
+		return fmt.Errorf("%s: %w", name, err)
 	case res.Err != "":
-		return fmt.Errorf("%s: %s: %s", name, res.Err, tail)
+		return fmt.Errorf("%s: %s", name, res.Err)
 	case res.Signal != 0:
-		return fmt.Errorf("%s: killed by signal: %s: %s", name, syscall.Signal(res.Signal), tail)
+		return &ToolError{Tool: name, ExitCode: -1, Signal: syscall.Signal(res.Signal), Stderr: tail}
 	case res.Code != 0:
-		return fmt.Errorf("%s: exit status %d: %s", name, res.Code, tail)
+		return &ToolError{Tool: name, ExitCode: res.Code, Stderr: tail}
 	}
 	return nil
 }

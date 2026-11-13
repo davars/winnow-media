@@ -1,16 +1,10 @@
 package media
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
-
-// ErrUnsupportedType is returned, wrapped with the media type found in the
-// input's bytes, when that type is not in Config.Types or the bytes are of no
-// type the package recognizes. Test for it with errors.Is.
-var ErrUnsupportedType = errors.New("unsupported media type")
 
 // Format is the encoding of an output image.
 type Format string
@@ -118,9 +112,9 @@ func (r region) shape() error {
 	case r.zero():
 		return nil
 	case r.x < 0 || r.y < 0:
-		return fmt.Errorf("region corner %d,%d is negative", r.x, r.y)
+		return invalid("region corner %d,%d is negative", r.x, r.y)
 	case r.width < 1 || r.height < 1:
-		return fmt.Errorf("region %dx%d has a side below 1 pixel", r.width, r.height)
+		return invalid("region %dx%d has a side below 1 pixel", r.width, r.height)
 	}
 	return nil
 }
@@ -132,7 +126,7 @@ func (r region) check(w, h int) error {
 		return err
 	}
 	if r.width > w || r.x > w-r.width || r.height > h || r.y > h-r.height {
-		return fmt.Errorf("region %dx%d at %d,%d is outside the %dx%d frame", r.width, r.height, r.x, r.y, w, h)
+		return invalid("region %dx%d at %d,%d is outside the %dx%d frame", r.width, r.height, r.x, r.y, w, h)
 	}
 	return nil
 }
@@ -155,7 +149,7 @@ func (e Encoding) resolve() (encoding, error) {
 	}
 	ext, ok := outputFormats[out.format]
 	if !ok {
-		return encoding{}, fmt.Errorf("unknown format %q", e.Format)
+		return encoding{}, invalid("unknown format %q", e.Format)
 	}
 	out.ext = ext
 	var err error
@@ -177,7 +171,7 @@ func resolveInt(name string, v, def, lo, hi int) (int, error) {
 		return def, nil
 	}
 	if v < lo || v > hi {
-		return 0, fmt.Errorf("%s %d is outside %d..%d", name, v, lo, hi)
+		return 0, invalid("%s %d is outside %d..%d", name, v, lo, hi)
 	}
 	return v, nil
 }
@@ -203,10 +197,10 @@ func inDir(dir string, fn func() ([]Image, error)) ([]Image, error) {
 func requireEmptyDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("output directory: %w", err)
+		return fmt.Errorf("%w: output directory: %w", ErrInvalidRequest, withoutPath(err))
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("output directory %s is not empty", dir)
+		return invalid("output directory is not empty")
 	}
 	return nil
 }

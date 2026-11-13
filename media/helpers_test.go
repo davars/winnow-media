@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,8 +35,10 @@ func testEnv(t *testing.T) toolEnv {
 			cmd.Stderr = &stderr
 			out, err := cmd.Output()
 			res := runResult{Stdout: out, Stderr: stderr.Bytes(), Usage: usageOf(cmd.ProcessState)}
-			if err != nil {
-				return res, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(stderr.String()))
+			if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
+				return res, &ToolError{Tool: name, ExitCode: ee.ExitCode(), Stderr: bytes.TrimSpace(stderr.Bytes())}
+			} else if err != nil {
+				return res, fmt.Errorf("%s: %w", name, err)
 			}
 			return res, nil
 		},

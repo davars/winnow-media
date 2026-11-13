@@ -94,7 +94,7 @@ func TestVideoRefusals(t *testing.T) {
 		p.run = func(_ context.Context, in *os.File, name string, _ ...string) (runResult, error) {
 			if name == "ffprobe" {
 				probes++
-				return runResult{}, errors.New("ffprobe: exit status 183: Invalid data found when processing input")
+				return runResult{}, &ToolError{Tool: "ffprobe", ExitCode: 183, Stderr: []byte("Invalid data found when processing input")}
 			}
 			others++
 			return runResult{}, errors.New("tool run")

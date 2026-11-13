@@ -166,7 +166,7 @@ func TestHostileAnimatedWebPsAreRefusedOrBounded(t *testing.T) {
 					return
 				}
 				if want.err != "" {
-					if err == nil || !strings.Contains(err.Error(), want.err) {
+					if err == nil || !strings.Contains(errText(err), want.err) {
 						t.Errorf("err = %v, want it to say %q", err, want.err)
 					}
 					if len(images) != 0 {

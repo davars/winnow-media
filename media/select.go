@@ -1,8 +1,6 @@
 package media
 
 import (
-	"errors"
-	"fmt"
 	"slices"
 	"sort"
 	"time"
@@ -76,7 +74,7 @@ type Select struct {
 	Region Region
 }
 
-var errAllOfVideo = errors.New("a video has no frame count to select all of; use even samples, times or consecutive frames")
+var errAllOfVideo = invalid("a video has no frame count to select all of; use even samples, times or consecutive frames")
 
 // durMS is d in whole milliseconds, truncated; a negative d never reads as 0.
 func durMS(d time.Duration) int64 {
@@ -92,23 +90,23 @@ const maxVideoSamples = maxMaxFrames
 // indexList returns the ascending distinct indices f holds, each below n.
 func (f FrameSelection) indexList(n int, owner, what string) ([]int, error) {
 	if len(f.ints) == 0 {
-		return nil, errors.New("no indices given")
+		return nil, invalid("no indices given")
 	}
 	out := slices.Clone(f.ints)
 	slices.Sort(out)
 	out = slices.Compact(out)
 	if out[0] < 0 {
-		return nil, fmt.Errorf("index %d is negative", out[0])
+		return nil, invalid("index %d is negative", out[0])
 	}
 	if last := out[len(out)-1]; last >= n {
-		return nil, fmt.Errorf("index %d is outside the %s %d %ss", last, owner, n, what)
+		return nil, invalid("index %d is outside the %s %d %ss", last, owner, n, what)
 	}
 	return out, nil
 }
 
 func evenCount(n int) error {
 	if n < 1 {
-		return fmt.Errorf("even count %d selects no frame", n)
+		return invalid("even count %d selects no frame", n)
 	}
 	return nil
 }
@@ -128,7 +126,7 @@ func (f FrameSelection) images(n int) ([]int, error) {
 	case framesIndices:
 		return f.indexList(n, "still's", "image")
 	}
-	return nil, errors.New("a still has images, selected by Indices; times and consecutive frames select frames of an animation or video")
+	return nil, invalid("a still has images, selected by Indices; times and consecutive frames select frames of an animation or video")
 }
 
 // animation resolves f against an animation whose frames start at starts, in
@@ -137,10 +135,10 @@ func (f FrameSelection) animation(starts []int64, total int64) ([]int, error) {
 	n := len(starts)
 	at := func(ms int64) (int, error) {
 		if ms < 0 {
-			return 0, fmt.Errorf("time %d ms is negative", ms)
+			return 0, invalid("time %d ms is negative", ms)
 		}
 		if ms > 0 && ms >= total {
-			return 0, fmt.Errorf("time %d ms is not inside the animation, which lasts %d ms", ms, total)
+			return 0, invalid("time %d ms is not inside the animation, which lasts %d ms", ms, total)
 		}
 		return sort.Search(n, func(i int) bool { return starts[i] > ms }) - 1, nil
 	}
@@ -158,7 +156,7 @@ func (f FrameSelection) animation(starts []int64, total int64) ([]int, error) {
 		return f.indexList(n, "animation's", "frame")
 	case framesTimes:
 		if len(f.times) == 0 {
-			return nil, errors.New("no times given")
+			return nil, invalid("no times given")
 		}
 		var out []int
 		for _, t := range f.times {
@@ -172,7 +170,7 @@ func (f FrameSelection) animation(starts []int64, total int64) ([]int, error) {
 		return slices.Compact(out), nil
 	}
 	if f.n < 1 {
-		return nil, fmt.Errorf("%d consecutive frames from %d ms selects no frame", f.n, durMS(f.start))
+		return nil, invalid("%d consecutive frames from %d ms selects no frame", f.n, durMS(f.start))
 	}
 	first, err := at(durMS(f.start))
 	if err != nil {
@@ -190,7 +188,7 @@ func (f FrameSelection) animation(starts []int64, total int64) ([]int, error) {
 func (f FrameSelection) video(info videoInfo) (times []int64, run *frameRun, err error) {
 	count := func(n int, what string) error {
 		if n < 1 || n > maxVideoSamples {
-			return fmt.Errorf("%d %s is outside 1..%d", n, what, maxVideoSamples)
+			return invalid("%d %s is outside 1..%d", n, what, maxVideoSamples)
 		}
 		return nil
 	}
@@ -208,7 +206,7 @@ func (f FrameSelection) video(info videoInfo) (times []int64, run *frameRun, err
 		}
 		return sampleTimesMS(info, f.n), nil, nil
 	case framesIndices:
-		return nil, nil, errors.New("indices select frames of an animation or images of a still; a video is read by even samples, times or consecutive frames")
+		return nil, nil, invalid("indices select frames of an animation or images of a still; a video is read by even samples, times or consecutive frames")
 	case framesTimes:
 		if err := count(len(f.times), "times"); err != nil {
 			return nil, nil, err

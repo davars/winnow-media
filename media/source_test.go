@@ -547,8 +547,8 @@ func TestChangedInputIsRefused(t *testing.T) {
 			change(t, path)
 			dir := t.TempDir()
 			_, usage, err := src.Encode(context.Background(), dir, Select{}, enc)
-			if err == nil || !strings.Contains(err.Error(), "changed") {
-				t.Fatalf("err = %v, want a refusal that the file changed", err)
+			if !errors.Is(err, ErrInputChanged) {
+				t.Fatalf("err = %v, want ErrInputChanged", err)
 			}
 			if usage != (Usage{}) {
 				t.Errorf("the refused call ran tools: %+v", usage)
@@ -788,6 +788,8 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 		dir := t.TempDir()
 		if _, usage, err := c.src.Encode(context.Background(), dir, c.sel, Encoding{Format: PNG}); err == nil {
 			t.Errorf("%s: accepted", c.name)
+		} else if !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("%s: err = %v, want ErrInvalidRequest", c.name, err)
 		} else if usage != (Usage{}) || rec.count() != before || len(dirNames(t, dir)) != 0 {
 			t.Errorf("%s: ran tools or left files: %v", c.name, err)
 		}

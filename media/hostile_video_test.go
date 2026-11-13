@@ -261,7 +261,7 @@ func TestSandboxBlocksNetworkSegmentsWhenTheWhitelistAllowsThem(t *testing.T) {
 	if n := hits.Load(); n != 0 {
 		t.Errorf("the segment was requested %d times through the sandbox", n)
 	}
-	if err == nil || !strings.Contains(err.Error(), "not permitted") {
+	if err == nil || !strings.Contains(errText(err), "not permitted") {
 		t.Errorf("err = %v, stdout %q; want a refused socket", err, res.Stdout)
 	}
 }

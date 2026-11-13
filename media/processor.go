@@ -14,7 +14,7 @@ import (
 )
 
 // stderrHead and stderrTail are how much of the start and of the end of a
-// failed tool's standard error an error carries. A fatal runtime error names
+// failed tool's standard error a ToolError carries. A fatal runtime error names
 // its cause first and buries it under a goroutine dump.
 const (
 	stderrHead = 512
@@ -336,14 +336,14 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string
 	// the descriptor must then be the file that was judged.
 	pre, err := os.Stat(path)
 	if err != nil {
-		return admitted{}, fmt.Errorf("source: %w", err)
+		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	if !pre.Mode().IsRegular() {
-		return admitted{}, fmt.Errorf("source %s is not a regular file", path)
+		return admitted{}, errors.New("source is not a regular file")
 	}
 	f, err := p.openInput(path)
 	if err != nil {
-		return admitted{}, fmt.Errorf("source: %w", err)
+		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	defer func() {
 		if err != nil {
@@ -352,10 +352,10 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string
 	}()
 	info, err := f.Stat()
 	if err != nil {
-		return admitted{}, fmt.Errorf("source: %w", err)
+		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	if a, b := idOf(pre), idOf(info); a.dev != b.dev || a.ino != b.ino || !info.Mode().IsRegular() {
-		return admitted{}, fmt.Errorf("source %s changed while it was opened", path)
+		return admitted{}, fmt.Errorf("source: %w while it was opened", ErrInputChanged)
 	}
 	if info.Size() > p.caps.inputBytes {
 		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
@@ -453,8 +453,12 @@ func probeRefused(err error) bool {
 	if strings.Contains(msg, "no video stream") || strings.Contains(msg, "video stream reports size") {
 		return true
 	}
-	return strings.Contains(msg, "exit status") &&
-		(strings.Contains(msg, "Invalid data found") || strings.Contains(msg, "not on whitelist"))
+	var te *ToolError
+	if !errors.As(err, &te) || te.ExitCode <= 0 {
+		return false
+	}
+	stderr := string(te.Stderr)
+	return strings.Contains(stderr, "Invalid data found") || strings.Contains(stderr, "not on whitelist")
 }
 
 // detectVideo asks ffprobe, in the sandbox and through the input's
@@ -469,7 +473,7 @@ func (p *Processor) detectVideo(ctx context.Context, m *meter, f *os.File, ref s
 		if !probeRefused(err) {
 			return err
 		}
-		return unrecognized("not a video of a configured container: " + firstLine(err.Error()))
+		return unrecognized("not a video of a configured container")
 	}
 	typ, demuxer, ok := p.detectedType(info.format, preferMOV)
 	if !ok {
@@ -507,9 +511,9 @@ func (p *Processor) inputDir() (dir string, release func(), err error) {
 func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref string) (typ, coder string, scenes []sceneHeader, err error) {
 	scenes, err = identifyHeadersAs(ctx, p.env(m, f), ref+stillScenes, true, gateHeaderFormat)
 	if err != nil {
-		if msg := err.Error(); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
-			(strings.Contains(msg, "security policy") || strings.Contains(msg, "no decode delegate")) {
-			return "", "", nil, unrecognized("content no supported coder reads: " + firstLine(msg))
+		if stderr := string(stderrOf(err)); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
+			(strings.Contains(stderr, "security policy") || strings.Contains(stderr, "no decode delegate")) {
+			return "", "", nil, unrecognized("content no supported coder reads")
 		}
 		return "", "", nil, err
 	}
@@ -528,10 +532,4 @@ func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref st
 		return "", "", nil, unrecognized("the file's first image is a reduced-resolution preview, as in a camera raw file; name its type")
 	}
 	return typ, coder, scenes, nil
-}
-
-// firstLine returns s up to its first newline.
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(s, "\n")
-	return line
 }

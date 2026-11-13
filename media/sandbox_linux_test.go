@@ -236,23 +236,28 @@ func TestSandboxReportsHowTheToolEnded(t *testing.T) {
 }
 
 // A tool that fails after a flood on standard error has both ends of it in the
-// error: the first line, which names the cause, and the last.
+// ToolError: the first line, which names the cause, and the last. The error
+// text carries none of it.
 func TestSandboxErrorKeepsTheStartAndEndOfStandardError(t *testing.T) {
 	p := fakeProcessor(t)
 	res, err := runFake(t, p, "noise", "100000")
 	if err == nil {
 		t.Fatal("the tool failed but the run did not")
 	}
-	for _, want := range []string{"exit status 4", "FIRST-LINE", "LAST-LINE", "bytes omitted"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err does not contain %q: %.300q", want, err)
+	var te *ToolError
+	if !errors.As(err, &te) || te.ExitCode != 4 || te.Signal != 0 || te.Tool != "tool" {
+		t.Fatalf("err = %#v, want a *ToolError of tool tool with exit code 4", err)
+	}
+	for _, want := range []string{"FIRST-LINE", "LAST-LINE", "bytes omitted"} {
+		if !strings.Contains(string(te.Stderr), want) {
+			t.Errorf("ToolError.Stderr does not contain %q: %.300q", want, te.Stderr)
 		}
 	}
 	if !strings.Contains(string(res.Stderr), "FIRST-LINE") || !strings.Contains(string(res.Stderr), "LAST-LINE") {
 		t.Errorf("Result.Stderr does not hold both ends: %.300q", res.Stderr)
 	}
-	if limit := stderrHead + stderrTail + 200; len(err.Error()) > limit {
-		t.Errorf("the error is %d bytes, more than %d", len(err.Error()), limit)
+	if strings.Contains(err.Error(), "FIRST-LINE") || len(err.Error()) > 100 {
+		t.Errorf("the error text carries standard error: %.300q", err)
 	}
 }
 
@@ -264,9 +269,13 @@ func TestSandboxCompositorErrorKeepsTheStartAndEndOfStandardError(t *testing.T) 
 	if err == nil {
 		t.Fatal("the compositor failed but the run did not")
 	}
-	for _, want := range []string{"exit status 5", "FIRST-LINE", "LAST-LINE", "bytes omitted"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("err does not contain %q: %.300q", want, err)
+	var te *ToolError
+	if !errors.As(err, &te) || te.ExitCode != 5 {
+		t.Fatalf("err = %#v, want a *ToolError with exit code 5", err)
+	}
+	for _, want := range []string{"FIRST-LINE", "LAST-LINE", "bytes omitted"} {
+		if !strings.Contains(string(te.Stderr), want) {
+			t.Errorf("ToolError.Stderr does not contain %q: %.300q", want, te.Stderr)
 		}
 	}
 }

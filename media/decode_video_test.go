@@ -279,7 +279,7 @@ func TestOpenKeepsImagesThatLookLikeVideo(t *testing.T) {
 	// the Processor, and a refusal that says so, not one of a video.
 	wbmp := append([]byte{0, 0, 1, 0xBA, 1}, make([]byte, 7425)...)
 	_, _, err := p.Open(context.Background(), writeFile(t, "x.wbmp", wbmp), OpenOptions{})
-	if !errors.Is(err, ErrUnsupportedType) || !strings.Contains(err.Error(), "reading headers") {
+	if !errors.Is(err, ErrUnsupportedType) || !strings.Contains(err.Error(), "no supported coder reads") {
 		t.Errorf("WBMP: err = %v, want ErrUnsupportedType after the image read", err)
 	}
 }

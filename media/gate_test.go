@@ -137,8 +137,8 @@ func TestContentNamingADeniedCoderIsRefusedUnderThePolicy(t *testing.T) {
 			if !isUnsupported(err) {
 				t.Fatalf("err = %v, want ErrUnsupportedType", err)
 			}
-			if !strings.Contains(err.Error(), policyRefusal) {
-				t.Errorf("err = %v, want ImageMagick's refusal under the policy", err)
+			if !strings.Contains(err.Error(), "no supported coder reads") {
+				t.Errorf("err = %v, want the refusal of a coder the policy denies", err)
 			}
 			allowed := requireProcessorWith(t, Config{Types: []string{typ}})
 			if _, _, err := allowed.encodeFirst(context.Background(), path, Encoding{}, t.TempDir()); err != nil {

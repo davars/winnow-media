@@ -22,7 +22,7 @@ var exifOrientations = [...]string{
 // 0, and an error for any other number outside 1 to 8.
 func orientationName(n int) (string, error) {
 	if n < 0 || n >= len(exifOrientations) {
-		return "", fmt.Errorf("orientation %d is outside 1..8", n)
+		return "", invalid("orientation %d is outside 1..8", n)
 	}
 	return exifOrientations[n], nil
 }

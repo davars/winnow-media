@@ -1,24 +1,10 @@
 package media
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
 )
-
-// ErrTooLarge is returned, wrapped with the cap and the values that
-// exceeded it, when an input is larger than a Processor accepts, and when a
-// header read reaches ImageMagick's list length ceiling (2048 scenes). Test
-// for it with errors.Is.
-var ErrTooLarge = errors.New("input too large")
-
-// ErrTimeLimit is returned, wrapped with what the tool reported, when a
-// magick run (an encode or a header read) reached ImageMagick's time limit.
-// ImageMagick often exits 0 when it does, with the work unfinished, so such a
-// run's output is never used. The error is recognised from ImageMagick's
-// message on stderr. Test for it with errors.Is.
-var ErrTimeLimit = errors.New("time limit exceeded")
 
 // The bomb ceilings below hold whatever Caps a Processor is given; each was
 // set from measurements of the largest inputs it admits, made with

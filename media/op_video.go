@@ -484,10 +484,10 @@ func selectFrom(us int64) string {
 // before the end of the video.
 func checkSeekTime(v videoInfo, ms int64) error {
 	if ms < 0 {
-		return fmt.Errorf("time %d ms is negative", ms)
+		return invalid("time %d ms is negative", ms)
 	}
 	if ms > 0 && ms >= v.durationMS {
-		return fmt.Errorf("time %d ms is not inside the video, whose duration is %d ms (0 when unknown)", ms, v.durationMS)
+		return invalid("time %d ms is not inside the video, whose duration is %d ms (0 when unknown)", ms, v.durationMS)
 	}
 	return nil
 }

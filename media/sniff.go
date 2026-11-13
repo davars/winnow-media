@@ -44,12 +44,12 @@ var errOtherBrand = unrecognized("ISO base media brand")
 func readHead(in input) ([]byte, error) {
 	r, done, err := in.open()
 	if err != nil {
-		return nil, fmt.Errorf("source: %w", err)
+		return nil, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	defer done()
 	buf, err := io.ReadAll(io.LimitReader(r, sniffBytes))
 	if err != nil {
-		return nil, fmt.Errorf("source: %w", err)
+		return nil, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	return buf, nil
 }

@@ -243,7 +243,7 @@ func (p *Processor) open(ctx context.Context, path string, opts OpenOptions) (*S
 		err = src.checkIdentity()
 	}
 	if err == nil && !p.register(src) {
-		err = errors.New("the processor is closed")
+		err = fmt.Errorf("processor: %w", ErrClosed)
 	}
 	if err != nil {
 		in.release()
@@ -362,7 +362,7 @@ func (s *Source) openAnimation(env toolEnv) error {
 
 func (s *Source) openVideo(ctx context.Context, env toolEnv, opts OpenOptions) error {
 	if opts.Orientation != 0 {
-		return errors.New("orientation does not apply to a video")
+		return invalid("orientation does not apply to a video")
 	}
 	var info videoInfo
 	if s.probed != nil {
@@ -427,10 +427,10 @@ func (s *Source) Close() error {
 func (s *Source) checkIdentity() error {
 	info, err := s.file.Stat()
 	if err != nil {
-		return fmt.Errorf("source: %w", err)
+		return fmt.Errorf("source: %w", withoutPath(err))
 	}
 	if idOf(info) != s.id {
-		return fmt.Errorf("source %s changed since it was opened", s.path)
+		return fmt.Errorf("source: %w since it was opened", ErrInputChanged)
 	}
 	return nil
 }
@@ -464,7 +464,7 @@ func numbered(n int, ext string) string { return fmt.Sprintf("%03d%s", n, ext) }
 func (s *Source) encode(ctx context.Context, dir string, sel Select, encodings []Encoding, name func(n int, ext string) string) ([]Image, Usage, error) {
 	var m meter
 	if len(encodings) == 0 {
-		return nil, m.usage, errors.New("no encodings")
+		return nil, m.usage, invalid("no encodings")
 	}
 	encs := make([]encoding, len(encodings))
 	for i, t := range encodings {
@@ -487,7 +487,7 @@ func (s *Source) encode(ctx context.Context, dir string, sel Select, encodings [
 		return nil, m.usage, err
 	}
 	if s.closed {
-		return nil, m.usage, errors.New("the source is closed")
+		return nil, m.usage, fmt.Errorf("source: %w", ErrClosed)
 	}
 	if err := s.checkIdentity(); err != nil {
 		return nil, m.usage, err
@@ -557,7 +557,7 @@ func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr F
 	}
 	for _, enc := range encs {
 		if enc.animate && len(idx) > 1 {
-			return nil, errors.New("images of a still cannot be written as one animation")
+			return nil, invalid("images of a still cannot be written as one animation")
 		}
 	}
 	s.dropKeptExcept(idx)
@@ -685,7 +685,7 @@ func (s *Source) streamAnimation(ctx context.Context, env toolEnv, src *frameSou
 func checkAnimate(encs []encoding, n int) error {
 	for _, enc := range encs {
 		if enc.animate && n > 1 && enc.format != WebP {
-			return fmt.Errorf("%s output cannot hold %d frames", enc.format, n)
+			return invalid("%s output cannot hold %d frames", enc.format, n)
 		}
 	}
 	return nil

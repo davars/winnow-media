@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -358,7 +359,7 @@ func stubbedProcessor(t *testing.T, types []string, fn func(name string) (runRes
 	}
 }
 
-var errProbeRefusal = errors.New("ffprobe: exit status 183: Invalid data found when processing input")
+var errProbeRefusal error = &ToolError{Tool: "ffprobe", ExitCode: 183, Stderr: []byte("Invalid data found when processing input")}
 
 func probeOutput(width, height, streams int) []byte {
 	var parts []string
@@ -395,11 +396,11 @@ func TestProbeCapsRefuseWithErrTooLargeBeforeAnyDecode(t *testing.T) {
 func TestProbeFailuresThatSayNothingOfTheFileAreNotRefusals(t *testing.T) {
 	t.Parallel()
 	for name, probeErr := range map[string]error{
-		"time limit":  fmt.Errorf("ffprobe: exit status 1: Invalid data found: %w", ErrTimeLimit),
-		"too large":   fmt.Errorf("ffprobe: exit status 1: Invalid data found: %w", tooLarge("a cap")),
-		"killed":      errors.New("ffprobe: killed by signal: killed: "),
+		"time limit":  fmt.Errorf("ffprobe: %w: %w", ErrTimeLimit, &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Invalid data found")}),
+		"too large":   fmt.Errorf("ffprobe: %w: %w", tooLarge("a cap"), &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Invalid data found")}),
+		"killed":      &ToolError{Tool: "ffprobe", ExitCode: -1, Signal: syscall.SIGKILL},
 		"fork failed": errors.New("ffprobe: fork/exec: resource temporarily unavailable"),
-		"memory":      errors.New("ffprobe: exit status 1: Cannot allocate memory"),
+		"memory":      &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Cannot allocate memory")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -407,7 +408,7 @@ func TestProbeFailuresThatSayNothingOfTheFileAreNotRefusals(t *testing.T) {
 				if tool == "ffprobe" {
 					return runResult{}, probeErr
 				}
-				return runResult{}, errors.New("magick: exit status 1: no decode delegate for this image format")
+				return runResult{}, noDelegate
 			})
 			_, _, err := p.Open(context.Background(), writeFile(t, "input", aviHead), OpenOptions{})
 			if err == nil || isUnsupported(err) {
@@ -461,7 +462,7 @@ func TestRefusedProbeIsFollowedByTheHeaderRead(t *testing.T) {
 		if tool == "ffprobe" {
 			return runResult{}, errProbeRefusal
 		}
-		return runResult{}, errors.New("magick: exit status 1: no decode delegate for this image format")
+		return runResult{}, noDelegate
 	})
 	if _, _, err := p.Open(context.Background(), writeFile(t, "input", aviHead), OpenOptions{}); !isUnsupported(err) {
 		t.Errorf("err = %v, want ErrUnsupportedType", err)
@@ -498,3 +499,5 @@ func TestVideoLookingHeadOverDangerousContentIsRefused(t *testing.T) {
 		}
 	}
 }
+
+var noDelegate error = &ToolError{Tool: "magick", ExitCode: 1, Stderr: []byte("no decode delegate for this image format")}

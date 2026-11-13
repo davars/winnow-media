@@ -453,6 +453,8 @@ func TestEncodeRefusesBeforeRunningTools(t *testing.T) {
 			before := rec.count()
 			if _, _, err := c.src.Encode(context.Background(), c.dir, c.sel, c.enc); err == nil {
 				t.Fatal("Encode succeeded")
+			} else if !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("err = %v, want ErrInvalidRequest", err)
 			}
 			if n := rec.count() - before; n != 0 {
 				t.Errorf("%d tool runs before refusal", n)

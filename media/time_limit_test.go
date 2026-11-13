@@ -260,14 +260,14 @@ func TestEncodeTimeLimitWithAFailingExit(t *testing.T) {
 	}
 	env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
 		return runResult{Stderr: []byte(timeLimitStderr)},
-			fmt.Errorf("magick: exit status 1: %s", strings.TrimSpace(timeLimitStderr))
+			&ToolError{Tool: "magick", ExitCode: 1, Stderr: []byte(strings.TrimSpace(timeLimitStderr))}
 	}}
 	_, err := env.runEncode(context.Background(), nil, encodeCheck{outputs: []string{out}})
 	if !errors.Is(err, ErrTimeLimit) {
 		t.Fatalf("err = %v, want ErrTimeLimit", err)
 	}
-	if n := strings.Count(err.Error(), "time limit exceeded `x.tif'"); n != 1 {
-		t.Errorf("the message appears %d times in %q", n, err)
+	if strings.Contains(err.Error(), "x.tif") {
+		t.Errorf("the message quotes stderr: %q", err)
 	}
 	assertGone(t, out)
 }
@@ -472,7 +472,7 @@ func TestVideoAnimatedWebPsRefuseABadReport(t *testing.T) {
 func TestIdentifyHeadersTimeLimitOutranksListLength(t *testing.T) {
 	t.Parallel()
 	env := toolEnv{resources: defaultResources(), caps: measuredCaps, run: func(context.Context, string, ...string) (runResult, error) {
-		return runResult{Stderr: []byte(timeLimitStderr)}, errors.New("magick: " + listLengthRefusal)
+		return runResult{Stderr: []byte(timeLimitStderr)}, &ToolError{Tool: "magick", ExitCode: 1, Stderr: []byte(listLengthRefusal)}
 	}}
 	_, err := identifyHeaders(context.Background(), env, "x.tif", true)
 	if !errors.Is(err, ErrTimeLimit) || errors.Is(err, ErrTooLarge) {

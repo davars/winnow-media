@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -122,7 +123,7 @@ func identifyHeadersAs(ctx context.Context, env toolEnv, inputRef string, ping b
 	args = append(args, "-format", format, inputRef)
 	res, err := env.runMagick(ctx, args...)
 	if err != nil {
-		if !errors.Is(err, ErrTimeLimit) && strings.Contains(err.Error(), listLengthRefusal) {
+		if !errors.Is(err, ErrTimeLimit) && bytes.Contains(stderrOf(err), []byte(listLengthRefusal)) {
 			return nil, tooLarge("file holds more than %s scenes, the limit is %d", policyListLength, maxAnimationFrames)
 		}
 		return nil, fmt.Errorf("reading headers: %w", err)

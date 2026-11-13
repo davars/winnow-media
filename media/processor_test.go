@@ -73,7 +73,7 @@ func TestRunnerEnvironmentIgnoresCallerConfiguration(t *testing.T) {
 	secret := writeFile(t, "secret.txt", []byte("secret"))
 	out := filepath.Join(t.TempDir(), "out.png")
 	_, err := runMagick(p, "mvg:"+mvgFile(t, secret), "png:"+out)
-	if err == nil || !strings.Contains(err.Error(), policyRefusal) {
+	if err == nil || !strings.Contains(errText(err), policyRefusal) {
 		t.Fatalf("MVG read with a widening user policy: err = %v, want a policy refusal", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestRunnerRefusesDangerousCoders(t *testing.T) {
 	} {
 		t.Run(input[:strings.IndexAny(input, ":@")+1], func(t *testing.T) {
 			_, err := runMagick(p, input, "png:"+out)
-			if err == nil || !strings.Contains(err.Error(), policyRefusal) {
+			if err == nil || !strings.Contains(errText(err), policyRefusal) {
 				t.Errorf("err = %v, want a policy refusal", err)
 			}
 			if _, err := os.Stat(out); err == nil {

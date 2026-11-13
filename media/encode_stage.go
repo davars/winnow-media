@@ -197,8 +197,7 @@ var timeLimitMessage = []byte("time limit exceeded")
 
 // timeLimitError returns err, made to wrap ErrTimeLimit if ImageMagick
 // reported its time limit on stderr, whatever its exit status; runErr is the
-// error of the run, nil when it exited 0. A run that exited 0 yields an error
-// quoting stderr; the error of a failed run already does.
+// error of the run, nil when it exited 0.
 func timeLimitError(stderr []byte, runErr error) error {
 	switch {
 	case !bytes.Contains(stderr, timeLimitMessage):
@@ -206,7 +205,7 @@ func timeLimitError(stderr []byte, runErr error) error {
 	case runErr != nil:
 		return fmt.Errorf("%w: %w", ErrTimeLimit, runErr)
 	}
-	return fmt.Errorf("magick: %w: %s", ErrTimeLimit, bytes.TrimSpace(stderr))
+	return fmt.Errorf("magick: %w", ErrTimeLimit)
 }
 
 // checkFrames returns an error for a frame outside its bound, which is how a
