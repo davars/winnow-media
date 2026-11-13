@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"syscall"
-	"time"
 )
 
 // runSpec is one process to run: the tool's path, arguments, whole
@@ -36,8 +35,8 @@ type toolResult struct {
 	// Usage is what the tool and its descendants consumed, or nil when the
 	// runner could not measure it.
 	Usage *Usage
-	// CPULimit is set when the runner killed the tool because its CPU time
-	// reached the budget.
+	// CPULimit is set when the tool was killed at its CPU limit: by the
+	// runner at the budget, or by the kernel at the limit behind it.
 	CPULimit bool
 }
 
@@ -70,27 +69,13 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 	var stderr headTailBuffer
 	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir, Input: in}, &stdout, &stderr)
 	tail := bytes.TrimSpace(stderr.bytes())
-	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail, p.cpuLimit)
-}
-
-// reachedCPULimit reports whether a kill that the sandbox helper did not
-// attribute was nevertheless the kernel's CPU-time limit firing as the
-// backstop. The helper enforces the budget on the same clock the kernel uses,
-// so it normally kills first and says so (toolResult.CPULimit), exactly; the
-// kernel limit sits above the budget and only backs it up. A SIGKILL or
-// SIGXCPU of a run whose measured CPU time is at least the budget can only be
-// that backstop; one below it is something else. limit is 0 when no limit is
-// in force.
-func reachedCPULimit(res toolResult, limit time.Duration) bool {
-	sig := syscall.Signal(res.Signal)
-	return limit > 0 && (sig == syscall.SIGKILL || sig == syscall.SIGXCPU) &&
-		res.Usage != nil && res.Usage.CPU >= limit
+	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
 }
 
 // runError turns the outcome of one run into an error, or nil. A run that
 // failed after starting is a *ToolError carrying tail as its Stderr; one the
-// sandbox killed at cpuLimit also wraps ErrTimeLimit.
-func runError(ctx context.Context, name string, res toolResult, err error, tail []byte, cpuLimit time.Duration) error {
+// sandbox killed at its CPU limit also wraps ErrTimeLimit.
+func runError(ctx context.Context, name string, res toolResult, err error, tail []byte) error {
 	switch {
 	case ctx.Err() != nil:
 		return fmt.Errorf("%s: %w", name, ctx.Err())
@@ -100,9 +85,9 @@ func runError(ctx context.Context, name string, res toolResult, err error, tail 
 		return fmt.Errorf("%s: %s", name, res.Err)
 	case res.Signal != 0:
 		te := &ToolError{Tool: name, ExitCode: -1, Signal: syscall.Signal(res.Signal), Stderr: tail}
-		// The watcher can read the budget as reached just after the tool died
-		// of something else; only its own kill, a SIGKILL, counts.
-		if (res.CPULimit && syscall.Signal(res.Signal) == syscall.SIGKILL) || reachedCPULimit(res, cpuLimit) {
+		// The flag can be set for a tool that then died of something else;
+		// only a SIGKILL is the CPU limit's own.
+		if res.CPULimit && syscall.Signal(res.Signal) == syscall.SIGKILL {
 			return fmt.Errorf("%w: %w", ErrTimeLimit, te)
 		}
 		return te
@@ -152,7 +137,7 @@ func (p *Processor) composeFrames(ctx context.Context, in *os.File, req composeR
 	if lines.err != nil {
 		return usage, lines.err
 	}
-	runErr := runError(parent, name, res, err, bytes.TrimSpace(stderr.bytes()), p.cpuLimit)
+	runErr := runError(parent, name, res, err, bytes.TrimSpace(stderr.bytes()))
 	if te := (*ToolError)(nil); errors.As(runErr, &te) && bytes.Contains(te.Stderr, []byte(notConsumedMessage)) {
 		runErr = fmt.Errorf("%w: %w", ErrTimeLimit, runErr)
 	}

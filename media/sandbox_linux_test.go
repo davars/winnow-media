@@ -33,7 +33,7 @@ func fakeProcessorWith(t *testing.T, r Resources) *Processor {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Processor{dir: t.TempDir(), tools: map[string]string{"tool": self}, cpuLimit: r.CPUTime}
+	p := &Processor{dir: t.TempDir(), tools: map[string]string{"tool": self}}
 	if err := os.Mkdir(p.tmpDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -758,8 +758,7 @@ func TestSandboxHandsTheToolTheInputOnDescriptorThree(t *testing.T) {
 }
 
 // A tool that reaches the sandbox's CPU limit is killed, and the error says it
-// ran out of time: the signal and the measured CPU time together are the
-// evidence. TimeLimit, which is wall-clock, is not the limit.
+// ran out of time. TimeLimit, which is wall-clock, is not the limit.
 func TestToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 	p := fakeProcessorWith(t, Resources{CPUTime: time.Second, TimeLimit: 300 * time.Second})
 	res, err := runFake(t, p, "spin")
@@ -767,21 +766,18 @@ func TestToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 		t.Fatalf("err = %v, want ErrTimeLimit", err)
 	}
 	var te *ToolError
-	if !errors.As(err, &te) || (te.Signal != syscall.SIGKILL && te.Signal != syscall.SIGXCPU) || te.ExitCode != -1 {
-		t.Errorf("err = %#v, want a *ToolError killed by SIGKILL or SIGXCPU", err)
+	if !errors.As(err, &te) || te.Signal != syscall.SIGKILL || te.ExitCode != -1 {
+		t.Errorf("err = %#v, want a *ToolError killed by SIGKILL", err)
 	}
-	if res.Usage == nil || res.Usage.CPU < time.Second-50*time.Millisecond {
-		t.Errorf("usage = %+v, want at least the 1 s limit", res.Usage)
+	if res.Usage == nil || res.Usage.CPU < 750*time.Millisecond {
+		t.Errorf("usage = %+v, want about the 1 s limit", res.Usage)
 	}
 }
 
 // A multi-threaded tool killed at the CPU limit is attributed to ErrTimeLimit
 // like a single-threaded one. With as many busy threads as the host has CPUs
-// or more, the run's measured CPU time lands either side of the limit the
-// kernel enforced: on a 12-CPU host against 2 s, from 9 ms over to 45 ms
-// short, more than 10 ms short in anywhere from 2% to most of the kills
-// depending on the host's state. The test kills 40 times so that a slack too
-// tight to cover that spread shows.
+// or more, the kill lands a poll interval or less past the budget; the test
+// kills 40 times to show a run that slips past the helper's check.
 func TestMultiThreadedToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 	for _, threads := range []int{runtime.NumCPU(), 2 * runtime.NumCPU()} {
 		for range 20 {
@@ -799,12 +795,12 @@ func TestMultiThreadedToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 }
 
 // A kill at a longer CPU limit, on a host with other work, is attributed too.
-// The test saturates every CPU for about 10 s, so it is not parallel.
-// The kernel checks RLIMIT_CPU against tick-sampled CPU time, which charges a
-// spinning tool for whole ticks it shared with short bursts of other work,
-// while the run's measured CPU is its precise run time, so the shortfall
-// grows with the limit: 290 to 450 ms at 30 s with 12 threads on a loaded
-// 12-CPU host, more than 1% of the limit. The test makes that load itself.
+// The kernel's tick-sampled clock charges a spinning tool for whole ticks it
+// shared with short bursts of other work, so it runs ahead of the precise run
+// time by a share that grows with the limit; the backstop must not beat the
+// helper's check, or attribute the kill itself, when it does. The test makes
+// that load itself, saturating every CPU for about 10 s, so it is not
+// parallel.
 func TestMultiThreadedToolKilledAtALongerCPULimitOnABusyHostIsErrTimeLimit(t *testing.T) {
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -869,34 +865,21 @@ func TestNewProcessorWiresCPUTimeToTheAttribution(t *testing.T) {
 }
 
 // The kernel's limit is the budget plus a tenth of it, or a second, rounded to
-// whole seconds; a kill the helper did not attribute counts as the backstop
-// only when the measured CPU time reached the budget.
-func TestCPUBackstopAndFallbackAttribution(t *testing.T) {
+// whole seconds.
+func TestCPUBackstop(t *testing.T) {
 	for budget, want := range map[uint64]uint64{0: 0, 1: 2, 5: 6, 10: 11, 11: 13, 100: 110, 1200: 1320} {
 		if got := (rlimits{CPU: budget}).backstopCPU(); got != want {
 			t.Errorf("backstopCPU(%d) = %d, want %d", budget, got, want)
 		}
 	}
-	kill := func(sig syscall.Signal, cpu time.Duration) toolResult {
-		return toolResult{Signal: int(sig), Usage: &Usage{CPU: cpu}}
-	}
-	const limit = 10 * time.Second
-	for _, c := range []struct {
-		res  toolResult
-		want bool
-	}{
-		{kill(syscall.SIGKILL, limit-time.Millisecond), false},
-		{kill(syscall.SIGKILL, limit), true},
-		{kill(syscall.SIGXCPU, limit+time.Second), true},
-		{kill(syscall.SIGTERM, limit+time.Second), false},
-		{toolResult{Signal: int(syscall.SIGKILL)}, false},
-	} {
-		if got := reachedCPULimit(c.res, limit); got != c.want {
-			t.Errorf("%+v: reachedCPULimit = %v, want %v", c.res, got, c.want)
-		}
-	}
-	if reachedCPULimit(kill(syscall.SIGKILL, limit), 0) {
-		t.Error("a run with no limit in force reached it")
+}
+
+// waitid on a process that is not the caller's child fails with ECHILD, and
+// awaitExit returns that error instead of hiding it.
+func TestAwaitExitReturnsTheError(t *testing.T) {
+	err := awaitExit(os.Getpid())
+	if !errors.Is(err, syscall.ECHILD) {
+		t.Errorf("awaitExit(own pid) = %v, want ECHILD", err)
 	}
 }
 
@@ -908,7 +891,7 @@ func TestOnlyTheWatchersOwnKillIsTheCPULimit(t *testing.T) {
 		want bool
 	}{{syscall.SIGKILL, true}, {syscall.SIGSEGV, false}, {syscall.SIGABRT, false}} {
 		res := toolResult{Signal: int(c.sig), CPULimit: true, Usage: &Usage{}}
-		err := runError(ctx, "tool", res, nil, nil, 10*time.Second)
+		err := runError(ctx, "tool", res, nil, nil)
 		if got := errors.Is(err, ErrTimeLimit); got != c.want {
 			t.Errorf("watcher flag with %v: ErrTimeLimit = %v, want %v (%v)", c.sig, got, c.want, err)
 		}
@@ -916,9 +899,9 @@ func TestOnlyTheWatchersOwnKillIsTheCPULimit(t *testing.T) {
 }
 
 // The helper itself stops a tool at the budget, on the tool's process-wide
-// CPU clock, well before the kernel's backstop a second later: this proves
-// that clock is readable by the helper under the sandbox's filter and that the
-// kill is the helper's, since the backstop would end the run a second late.
+// CPU clock, before the kernel's backstop a second later: this proves that
+// clock is readable by the helper under the sandbox's filter. The CPU bound
+// below is under the backstop, so a run that meets it was ended by the helper.
 func TestHelperKillsAToolAtTheCPUBudget(t *testing.T) {
 	const budget = 2 * time.Second
 	self, err := os.Executable()
@@ -936,9 +919,40 @@ func TestHelperKillsAToolAtTheCPUBudget(t *testing.T) {
 		if !res.CPULimit || res.Signal != int(syscall.SIGKILL) {
 			t.Errorf("%s threads: CPULimit = %v, signal %d, want the helper's SIGKILL", threads, res.CPULimit, res.Signal)
 		}
-		if cpu := res.Usage.CPU; cpu < budget || cpu > budget+500*time.Millisecond {
-			t.Errorf("%s threads: measured CPU %v, want the budget %v to 500 ms over", threads, cpu, budget)
+		// A poll can fall just short of the budget and the kill lands one
+		// interval later, during which every thread keeps running; the bound
+		// allows four such intervals per thread and stays under the backstop.
+		n, _ := strconv.Atoi(threads)
+		limit := budget + time.Duration(4*n)*cpuPollInterval
+		// The helper kills on the kernel's tick-sampled clock, which can read
+		// ahead of the measured run time, so the floor only rules out a
+		// premature kill.
+		if cpu := res.Usage.CPU; cpu < budget*3/4 || cpu > limit {
+			t.Errorf("%s threads: measured CPU %v, want %v to %v", threads, cpu, budget*3/4, limit)
 		}
+		t.Logf("%s threads: killed at %v", threads, res.Usage.CPU)
+	}
+}
+
+// With the helper's own check off, the kernel's backstop ends the run, and the
+// helper still reports it as the CPU limit, judged on the kernel's clock.
+func TestKernelBackstopKillIsTheCPULimit(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := rlimitsFor(Resources{CPUTime: time.Second}.withDefaults())
+	res, err := runHelper(context.Background(), helperConfig{
+		Tool: self, Args: []string{"--tool", "spin"}, Env: []string{"LC_ALL=C"}, Limits: limits, Fault: "cpu-watch",
+	}, io.Discard, io.Discard)
+	if err != nil || res.Err != "" {
+		t.Fatalf("err = %v, %q", err, res.Err)
+	}
+	if !res.CPULimit || res.Signal != int(syscall.SIGKILL) {
+		t.Errorf("CPULimit = %v, signal %d, want the kernel's SIGKILL attributed", res.CPULimit, res.Signal)
+	}
+	if want := time.Duration(limits.backstopCPU()) * time.Second; res.Usage.CPU < want-100*time.Millisecond {
+		t.Errorf("measured CPU %v, want the backstop %v", res.Usage.CPU, want)
 	}
 }
 

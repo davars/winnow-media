@@ -60,9 +60,12 @@ type limitSpec struct {
 
 // backstopCPU is the kernel's RLIMIT_CPU: the budget, which the helper
 // enforces itself, plus a tenth of it or one second, whichever is more. The
-// kernel samples CPU time on ticks and the helper's check runs every
-// cpuPollInterval, so the kernel limit must sit clear of the budget to stay a
-// backstop for a helper that failed to act. A zero budget stays zero.
+// kernel checks the limit against tick-sampled CPU time, which runs ahead of
+// the run time by a share of it under contention, and the helper only polls
+// every cpuPollInterval; the margin keeps the kernel from firing first in
+// ordinary runs. A kernel kill is attributed by its own comparison (see
+// helperRun), so the margin is not what makes the attribution right. A zero
+// budget stays zero.
 func (l rlimits) backstopCPU() uint64 {
 	if l.CPU == 0 {
 		return 0
@@ -99,7 +102,8 @@ type helperConfig struct {
 	// Limits are the resource limits the helper applies to itself.
 	Limits rlimits
 	// Fault makes the helper skip one guard so that tests can check that the
-	// Processor notices: "filter" or "limit:<name>".
+	// Processor notices: "filter", "limit:<name>" or "cpu-watch", which turns off
+	// the helper's own CPU check so that only the kernel's limit ends a run.
 	Fault string
 }
 
@@ -117,8 +121,8 @@ type helperResult struct {
 	// started with CLONE_VM starts with the parent program's peak resident
 	// set.
 	Usage *Usage `json:",omitempty"`
-	// CPULimit is set when the helper killed the tool because its CPU time
-	// reached the budget.
+	// CPULimit is set when the tool was killed at its CPU limit: by the helper
+	// at the budget, or by the kernel at the backstop behind it.
 	CPULimit bool         `json:",omitempty"`
 	Probe    *probeReport `json:",omitempty"`
 }
@@ -349,7 +353,7 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	stopWatch := make(chan struct{})
 	watched := make(chan struct{})
 	var cpuLimit atomic.Bool
-	if budget := time.Duration(cfg.Limits.CPU) * time.Second; budget > 0 {
+	if budget := time.Duration(cfg.Limits.CPU) * time.Second; budget > 0 && cfg.Fault != "cpu-watch" {
 		go func() {
 			defer close(watched)
 			if watchCPU(cmd.Process.Pid, budget, stopWatch) {
@@ -362,18 +366,28 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	// The watcher names the tool by pid, so it must stop before the tool is
 	// reaped: an unreaped tool keeps its pid, a reaped one can lend it to an
 	// unrelated process.
-	awaitExit(cmd.Process.Pid)
+	awaitErr := awaitExit(cmd.Process.Pid)
 	close(stopWatch)
 	<-watched
+	// The unreaped tool's clock still reads; a kill once it passed the kernel
+	// limit is that limit firing, judged on the kernel's own clock.
+	zombieCPU, zombieErr := processCPUTime(cmd.Process.Pid)
 	waitErr := cmd.Wait()
 	var res helperResult
 	res.CPULimit = cpuLimit.Load()
+	if awaitErr != nil {
+		res.Err = fmt.Sprintf("waiting for the tool: %v", awaitErr)
+	}
 	var exitErr *exec.ExitError
-	if waitErr != nil && !errors.As(waitErr, &exitErr) {
+	if waitErr != nil && !errors.As(waitErr, &exitErr) && res.Err == "" {
 		res.Err = fmt.Sprintf("waiting for the tool: %v", waitErr)
 	}
 	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		res.Signal = int(ws.Signal())
+		if backstop := cfg.Limits.backstopCPU(); ws.Signal() == syscall.SIGKILL && backstop > 0 && zombieErr == nil &&
+			zombieCPU >= time.Duration(backstop)*time.Second {
+			res.CPULimit = true
+		}
 	} else {
 		res.Code = cmd.ProcessState.ExitCode()
 	}
@@ -391,9 +405,9 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 }
 
 // awaitExit blocks until process pid has exited, without reaping it (waitid
-// with WNOWAIT). It returns at once on an error other than EINTR; the caller's
-// Wait then reports it.
-func awaitExit(pid int) {
+// with WNOWAIT), and returns the error that stopped it early, if any. EINTR
+// is retried.
+func awaitExit(pid int) error {
 	const (
 		pPID    = 1
 		wExited = 4
@@ -402,8 +416,12 @@ func awaitExit(pid int) {
 	var info [128]byte // siginfo_t
 	for {
 		_, _, e := syscall.Syscall6(syscall.SYS_WAITID, pPID, uintptr(pid), uintptr(unsafe.Pointer(&info[0])), wExited|wNoWait, 0, 0)
-		if e != syscall.EINTR {
-			return
+		switch e {
+		case 0:
+			return nil
+		case syscall.EINTR:
+		default:
+			return fmt.Errorf("waitid: %w", e)
 		}
 	}
 }
@@ -415,8 +433,9 @@ const cpuPollInterval = 50 * time.Millisecond
 // watchCPU kills the tool and everything below the helper once the tool's
 // process-wide CPU time reaches budget, and reports whether it did. It
 // returns, reporting false, when stop closes or the tool's clock can no longer
-// be read. The budget is checked on the clock the kernel's own limit uses, so
-// a kill here is exactly a run that used its CPU time.
+// be read. The budget is checked on the clock the kernel's own limit uses, and
+// sits below that limit, so the kernel fires first only when the process runs
+// a whole poll interval past the budget between checks.
 func watchCPU(pid int, budget time.Duration, stop <-chan struct{}) bool {
 	ticker := time.NewTicker(cpuPollInterval)
 	defer ticker.Stop()
@@ -438,13 +457,19 @@ func watchCPU(pid int, budget time.Duration, stop <-chan struct{}) bool {
 	}
 }
 
-// processCPUTime returns the CPU time of every thread of process pid, read
-// from the clock clock_getcpuclockid(3) returns for it: the encoding is
-// (^pid << 3) | CPUCLOCK_SCHED, process-wide. Reading a clock needs no
-// permission beyond naming the process, and clock_gettime is not filtered.
+// cpuclockProf is the kind in the low bits of a process CPU clock id that the
+// kernel checks RLIMIT_CPU against: tick-sampled user plus system time. It can
+// run ahead of the precise run time that rusage reports.
+const cpuclockProf = 0
+
+// processCPUTime returns the CPU time of every thread of process pid on the
+// kernel's RLIMIT_CPU clock, read from the clock clock_getcpuclockid(3)
+// returns for it: the encoding is (^pid << 3) | cpuclockProf, process-wide. It
+// also reads a process that has exited and is not yet reaped. Reading a clock
+// needs no permission beyond naming the process, and clock_gettime is not
+// filtered.
 func processCPUTime(pid int) (time.Duration, error) {
-	const cpuclockSched = 2
-	clock := int32(^int32(pid)<<3 | cpuclockSched)
+	clock := int32(^int32(pid)<<3 | cpuclockProf)
 	var ts syscall.Timespec
 	if _, _, e := syscall.Syscall(syscall.SYS_CLOCK_GETTIME, uintptr(clock), uintptr(unsafe.Pointer(&ts)), 0); e != 0 {
 		return 0, e
