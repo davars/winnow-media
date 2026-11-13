@@ -147,6 +147,13 @@ func fakeTool(args []string) {
 		fmt.Println("socket", <-reply)
 	case "sleep":
 		time.Sleep(time.Minute)
+	case "spin":
+		// spin: use CPU until the sandbox kills the process.
+		for n := 0; ; n++ {
+			if n < 0 {
+				return
+			}
+		}
 	case "spawn":
 		// spawn <marker> <ready> [hold]: start a grandchild in its own
 		// session, then exit, or with "hold" keep running.

@@ -443,6 +443,11 @@ func compositorMain() {
 	os.Exit(0)
 }
 
+// notConsumedMessage is what a compositor says when it gives up waiting for a
+// frame to be consumed: webp-frames prints the same words, and a run whose
+// standard error holds them failed on Resources.TimeLimit.
+const notConsumedMessage = "not consumed in"
+
 // runCompositor decodes the GIF named by args (see composeRequest.args),
 // composites it and writes each selected frame to the output directory as a
 // PAM file, then prints the frame's ordinal, the id of its profile and 1 on
@@ -497,7 +502,7 @@ func runCompositor(args []string, out io.Writer) (err error) {
 				return nil
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("frame %d not consumed in %v", ordinal-inFlight, timeout)
+				return fmt.Errorf("frame %d %s %v", ordinal-inFlight, notConsumedMessage, timeout)
 			}
 			time.Sleep(2 * time.Millisecond)
 		}

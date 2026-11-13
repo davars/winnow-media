@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/davars/winnow-media/tool"
 )
@@ -45,6 +46,9 @@ type Processor struct {
 	// Empty when there are none, which turns the probe off.
 	detect string
 	tools  map[string]string
+	// cpuLimit is the sandbox's CPU-time limit on one tool run, which a kill
+	// at that limit is attributed to; 0 when the tools run unsandboxed.
+	cpuLimit time.Duration
 	// start runs one process: the sandbox helper, or the direct runner.
 	start runner
 	// run runs one tool, with in, when not nil, as its input descriptor; tests
@@ -104,7 +108,9 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 		return nil, fmt.Errorf("processor: %w", err)
 	}
 	start := runner(directRunner)
+	var cpuLimit time.Duration
 	if !cfg.Unsandboxed {
+		cpuLimit = res.CPUTime
 		if err := sandboxAvailable(); err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
 		}
@@ -147,7 +153,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	for _, typ := range types {
 		accepts[typ] = true
 	}
-	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, detect: detectedDemuxers(types), tools: tools, start: start}
+	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, detect: detectedDemuxers(types), tools: tools, cpuLimit: cpuLimit, start: start}
 	p.run = p.runTool
 	p.compose = p.composeFrames
 	rules := processorPolicy(res, types)

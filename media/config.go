@@ -116,6 +116,7 @@ func (c Caps) resolve() (caps, error) {
 // ceiling. The values reach the generated ImageMagick policy and the -limit
 // flags of every magick run, ffmpeg's and ffprobe's thread counts, the frame
 // compositor's wait for a consumed frame, and the sandbox's resource limits.
+// A tool that reaches a time limit fails with an error wrapping ErrTimeLimit.
 type Resources struct {
 	// Memory and Map are ImageMagick's memory and map limits in bytes, between
 	// which its pixel cache spills (memory, then map, then disk). Defaults
@@ -127,11 +128,16 @@ type Resources struct {
 	// uses at most two for a source above 4096x2160 whatever Threads is.
 	// Default 4.
 	Threads int
-	// TimeLimit is ImageMagick's per-image time limit, how long a frame
-	// compositor waits for a frame to be consumed, and the sandbox's CPU-time
-	// limit for a tool. It must be a whole number of seconds, at least one.
-	// Default 300 s.
+	// TimeLimit is ImageMagick's per-image time limit and how long a frame
+	// compositor waits for a frame to be consumed: both are wall-clock time.
+	// It must be a whole number of seconds, at least one. Default 300 s.
 	TimeLimit time.Duration
+	// CPUTime is the CPU time one tool run may use, summed over its threads;
+	// the sandbox enforces it as the tool's CPU-time limit, which has no effect
+	// with Config.Unsandboxed. It must be a whole number of seconds, at least
+	// one. Zero is TimeLimit times Threads, each after its default: 1200 s at
+	// the defaults.
+	CPUTime time.Duration
 }
 
 const (
@@ -158,11 +164,23 @@ func (r Resources) withDefaults() Resources {
 	if r.TimeLimit == 0 {
 		r.TimeLimit = defaultTimeLimit
 	}
+	if r.CPUTime == 0 {
+		// Whole seconds, saturating where a Duration would overflow.
+		const maxSeconds = math.MaxInt64 / int64(time.Second)
+		secs, threads := int64(r.TimeLimit/time.Second), int64(r.Threads)
+		if secs > maxSeconds/threads {
+			secs = maxSeconds
+		} else {
+			secs *= threads
+		}
+		r.CPUTime = time.Duration(secs) * time.Second
+	}
 	return r
 }
 
 // resolve returns r with the defaults filled in, or an error for a negative
-// field or a TimeLimit that is not a whole number of seconds of at least one.
+// field or a TimeLimit or CPUTime that is not a whole number of seconds of at
+// least one.
 func (r Resources) resolve() (Resources, error) {
 	for _, f := range []struct {
 		name string
@@ -177,6 +195,9 @@ func (r Resources) resolve() (Resources, error) {
 	}
 	if r.TimeLimit != 0 && (r.TimeLimit < time.Second || r.TimeLimit%time.Second != 0) {
 		return Resources{}, fmt.Errorf("resources: TimeLimit %v is not a whole number of seconds of at least one", r.TimeLimit)
+	}
+	if r.CPUTime != 0 && (r.CPUTime < time.Second || r.CPUTime%time.Second != 0) {
+		return Resources{}, fmt.Errorf("resources: CPUTime %v is not a whole number of seconds of at least one", r.CPUTime)
 	}
 	return r.withDefaults(), nil
 }
@@ -238,7 +259,7 @@ func saturatingAdd(a, b uint64) uint64 {
 func rlimitsFor(r Resources) rlimits {
 	disk := uint64(r.Disk)
 	return rlimits{
-		CPU:      uint64(r.TimeLimit / time.Second),
+		CPU:      uint64(r.CPUTime / time.Second),
 		Address:  saturatingAdd(saturatingAdd(uint64(r.Memory), uint64(r.Map)), addressHeadroom),
 		FileSize: saturatingAdd(disk, disk/4),
 	}

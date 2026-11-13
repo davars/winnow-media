@@ -3,10 +3,12 @@ package media
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"syscall"
+	"time"
 )
 
 // runSpec is one process to run: the tool's path, arguments, whole
@@ -65,12 +67,28 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 	var stderr headTailBuffer
 	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir, Input: in}, &stdout, &stderr)
 	tail := bytes.TrimSpace(stderr.bytes())
-	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
+	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail, p.cpuLimit)
+}
+
+// cpuSlack is how far short of the CPU limit a killed run's measured CPU time
+// may fall and still count as having reached it: rusage holds microseconds.
+const cpuSlack = 10 * time.Millisecond
+
+// reachedCPULimit reports whether a run ended because it reached the
+// sandbox's CPU-time limit. The limit's soft and hard values are equal, so the
+// kernel kills with SIGKILL; SIGXCPU is what a soft limit alone sends. Either
+// signal alone could come from anything else, so the run's measured CPU time
+// must also have reached the limit. limit is 0 when no limit is in force.
+func reachedCPULimit(res toolResult, limit time.Duration) bool {
+	sig := syscall.Signal(res.Signal)
+	return limit > 0 && (sig == syscall.SIGKILL || sig == syscall.SIGXCPU) &&
+		res.Usage != nil && res.Usage.CPU+cpuSlack >= limit
 }
 
 // runError turns the outcome of one run into an error, or nil. A run that
-// failed after starting is a *ToolError carrying tail as its Stderr.
-func runError(ctx context.Context, name string, res toolResult, err error, tail []byte) error {
+// failed after starting is a *ToolError carrying tail as its Stderr; one the
+// sandbox killed at cpuLimit also wraps ErrTimeLimit.
+func runError(ctx context.Context, name string, res toolResult, err error, tail []byte, cpuLimit time.Duration) error {
 	switch {
 	case ctx.Err() != nil:
 		return fmt.Errorf("%s: %w", name, ctx.Err())
@@ -79,7 +97,11 @@ func runError(ctx context.Context, name string, res toolResult, err error, tail 
 	case res.Err != "":
 		return fmt.Errorf("%s: %s", name, res.Err)
 	case res.Signal != 0:
-		return &ToolError{Tool: name, ExitCode: -1, Signal: syscall.Signal(res.Signal), Stderr: tail}
+		te := &ToolError{Tool: name, ExitCode: -1, Signal: syscall.Signal(res.Signal), Stderr: tail}
+		if reachedCPULimit(res, cpuLimit) {
+			return fmt.Errorf("%w: %w", ErrTimeLimit, te)
+		}
+		return te
 	case res.Code != 0:
 		return &ToolError{Tool: name, ExitCode: res.Code, Stderr: tail}
 	}
@@ -126,7 +148,11 @@ func (p *Processor) composeFrames(ctx context.Context, in *os.File, req composeR
 	if lines.err != nil {
 		return usage, lines.err
 	}
-	return usage, runError(parent, name, res, err, bytes.TrimSpace(stderr.bytes()))
+	runErr := runError(parent, name, res, err, bytes.TrimSpace(stderr.bytes()), p.cpuLimit)
+	if te := (*ToolError)(nil); errors.As(runErr, &te) && bytes.Contains(te.Stderr, []byte(notConsumedMessage)) {
+		runErr = fmt.Errorf("%w: %w", ErrTimeLimit, runErr)
+	}
+	return usage, runErr
 }
 
 // stopOnError is a writer that calls stop when its writes fail, so that a

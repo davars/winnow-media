@@ -31,7 +31,7 @@ func fakeProcessorWith(t *testing.T, r Resources) *Processor {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Processor{dir: t.TempDir(), tools: map[string]string{"tool": self}}
+	p := &Processor{dir: t.TempDir(), tools: map[string]string{"tool": self}, cpuLimit: r.CPUTime}
 	if err := os.Mkdir(p.tmpDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func toolLimits(t *testing.T, p *Processor) map[string][2]uint64 {
 func TestSandboxAppliesEachLimitToTheTool(t *testing.T) {
 	seen := toolLimits(t, fakeProcessor(t))
 	for name, w := range map[string]uint64{
-		"Max cpu time":      300,
+		"Max cpu time":      1200,
 		"Max address space": 8 << 30,
 		"Max file size":     5 << 30,
 		"Max open files":    sandboxOpenFiles,
@@ -142,7 +142,7 @@ func TestSandboxAppliesEachLimitToTheTool(t *testing.T) {
 // the tool's runs and in the probe's report.
 func TestSandboxLimitsFollowResources(t *testing.T) {
 	t.Parallel()
-	r := Resources{Memory: 1 << 30, Map: 1 << 30, Disk: 2 << 30, TimeLimit: 100 * time.Second}
+	r := Resources{Memory: 1 << 30, Map: 1 << 30, Disk: 2 << 30, TimeLimit: 50 * time.Second, CPUTime: 100 * time.Second}
 	want := map[string]uint64{
 		"Max cpu time":      100,
 		"Max address space": 7 << 30,
@@ -745,5 +745,50 @@ func TestSandboxHandsTheToolTheInputOnDescriptorThree(t *testing.T) {
 	}
 	if extra > 1 {
 		t.Errorf("the tool holds descriptors %v, want only 0 to 3", fields[2:])
+	}
+}
+
+// A tool that reaches the sandbox's CPU limit is killed, and the error says it
+// ran out of time: the signal and the measured CPU time together are the
+// evidence. TimeLimit, which is wall-clock, is not the limit.
+func TestToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
+	p := fakeProcessorWith(t, Resources{CPUTime: time.Second, TimeLimit: 300 * time.Second})
+	res, err := runFake(t, p, "spin")
+	if !errors.Is(err, ErrTimeLimit) {
+		t.Fatalf("err = %v, want ErrTimeLimit", err)
+	}
+	var te *ToolError
+	if !errors.As(err, &te) || (te.Signal != syscall.SIGKILL && te.Signal != syscall.SIGXCPU) || te.ExitCode != -1 {
+		t.Errorf("err = %#v, want a *ToolError killed by SIGKILL or SIGXCPU", err)
+	}
+	if res.Usage == nil || res.Usage.CPU < time.Second-cpuSlack {
+		t.Errorf("usage = %+v, want at least the 1 s limit", res.Usage)
+	}
+}
+
+// A kill by the same signal that is not at the CPU limit, and an exit, are not
+// time limits.
+func TestOtherKillsAreNotErrTimeLimit(t *testing.T) {
+	p := fakeProcessorWith(t, Resources{CPUTime: time.Second})
+	for _, args := range [][]string{{"kill-self", strconv.Itoa(int(syscall.SIGKILL))}, {"exit", "1"}} {
+		if _, err := runFake(t, p, args...); err == nil || errors.Is(err, ErrTimeLimit) {
+			t.Errorf("%v: err = %v, want an error that is not ErrTimeLimit", args, err)
+		}
+	}
+}
+
+// A compositor that gives up on a frame nobody consumed ran out of time.
+func TestCompositorThatTimesOutWaitingIsErrTimeLimit(t *testing.T) {
+	p := fakeProcessor(t)
+	err := composeWithScript(t, p, "echo 'frame 0 not consumed in 150 ms' >&2\nexit 1\n")
+	if !errors.Is(err, ErrTimeLimit) {
+		t.Errorf("err = %v, want ErrTimeLimit", err)
+	}
+	var te *ToolError
+	if !errors.As(err, &te) || te.ExitCode != 1 {
+		t.Errorf("err = %#v, want a *ToolError with exit code 1", err)
+	}
+	if err := composeWithScript(t, p, "echo 'something else' >&2\nexit 1\n"); errors.Is(err, ErrTimeLimit) {
+		t.Errorf("another compositor failure is ErrTimeLimit: %v", err)
 	}
 }

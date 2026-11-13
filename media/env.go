@@ -119,8 +119,8 @@
 // Every tool a Processor runs goes through a helper: the program's own
 // executable, started again with such a marker. The helper sets no_new_privs
 // and these limits (soft and hard): CPU time, address space and file size
-// derived from the Processor's Resources (at the defaults 300 s, 8 GiB and
-// 5 GiB: the time limit, memory plus map plus 5 GiB, and the disk limit plus a
+// derived from the Processor's Resources (at the defaults 1200 s, 8 GiB and
+// 5 GiB: CPUTime, memory plus map plus 5 GiB, and the disk limit plus a
 // quarter), open files 1024, and tasks the user's current count plus 512. It
 // installs a seccomp filter, in pure Go, that makes socket and socketpair fail
 // with EPERM, kills a process using another system-call ABI (32-bit or x32)

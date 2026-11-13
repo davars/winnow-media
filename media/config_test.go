@@ -19,7 +19,7 @@ func TestDefaultResourcesAreTheFormerConstants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Resources{Memory: 1 << 30, Map: 2 << 30, Disk: 4 << 30, Threads: 4, TimeLimit: 300 * time.Second}); got != want {
+	if want := (Resources{Memory: 1 << 30, Map: 2 << 30, Disk: 4 << 30, Threads: 4, TimeLimit: 300 * time.Second, CPUTime: 1200 * time.Second}); got != want {
 		t.Errorf("defaults = %+v, want %+v", got, want)
 	}
 	var rules []string
@@ -42,8 +42,8 @@ func TestDefaultResourcesAreTheFormerConstants(t *testing.T) {
 	if flags := got.limitArgs(); !slices.Equal(flags, wantFlags) {
 		t.Errorf("limit flags = %q, want %q", flags, wantFlags)
 	}
-	if l := rlimitsFor(got); l != (rlimits{CPU: 300, Address: 8 << 30, FileSize: 5 << 30}) {
-		t.Errorf("rlimits = %+v, want 300 s, 8 GiB and 5 GiB", l)
+	if l := rlimitsFor(got); l != (rlimits{CPU: 1200, Address: 8 << 30, FileSize: 5 << 30}) {
+		t.Errorf("rlimits = %+v, want 1200 s, 8 GiB and 5 GiB", l)
 	}
 }
 
@@ -58,6 +58,9 @@ func TestResourcesValidation(t *testing.T) {
 		"huge threads":    {Threads: math.MaxInt32 + 1},
 		"sub-second time": {TimeLimit: 500 * time.Millisecond},
 		"fractional time": {TimeLimit: 1500 * time.Millisecond},
+		"negative cpu":    {CPUTime: -time.Second},
+		"sub-second cpu":  {CPUTime: 500 * time.Millisecond},
+		"fractional cpu":  {CPUTime: 1500 * time.Millisecond},
 	} {
 		if _, err := r.resolve(); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -336,6 +339,36 @@ func TestUsageIsPerCall(t *testing.T) {
 		}
 		if usage != want {
 			t.Errorf("%s: Usage = %+v, want %+v from its own %d runs", fixture, usage, want, len(own))
+		}
+	}
+}
+
+// CPUTime is the CPU time of one tool run, apart from TimeLimit, which is
+// wall-clock: zero is TimeLimit times Threads, and only CPUTime reaches the
+// sandbox's CPU limit.
+func TestCPUTimeDefaultsToTimeLimitTimesThreads(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		in   Resources
+		want time.Duration
+	}{
+		"defaults":                 {Resources{}, 1200 * time.Second},
+		"threads":                  {Resources{Threads: 8}, 2400 * time.Second},
+		"time limit":               {Resources{TimeLimit: 30 * time.Second}, 120 * time.Second},
+		"both":                     {Resources{TimeLimit: 30 * time.Second, Threads: 2}, 60 * time.Second},
+		"set":                      {Resources{TimeLimit: 30 * time.Second, CPUTime: 2 * time.Minute}, 2 * time.Minute},
+		"set below the time limit": {Resources{CPUTime: time.Second}, time.Second},
+		"saturates":                {Resources{TimeLimit: 7 * 24 * time.Hour, Threads: math.MaxInt32}, time.Duration(math.MaxInt64/int64(time.Second)) * time.Second},
+	} {
+		got, err := c.in.resolve()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.CPUTime != c.want {
+			t.Errorf("%s: CPUTime = %v, want %v", name, got.CPUTime, c.want)
+		}
+		if want := uint64(c.want / time.Second); rlimitsFor(got).CPU != want {
+			t.Errorf("%s: CPU limit = %d, want %d", name, rlimitsFor(got).CPU, want)
 		}
 	}
 }
