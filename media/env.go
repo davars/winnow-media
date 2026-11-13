@@ -122,8 +122,9 @@
 // derived from the Processor's Resources (at the defaults 1200 s, 8 GiB and
 // 5 GiB: CPUTime, memory plus map plus 5 GiB, and the disk limit plus a
 // quarter), open files 1024, and tasks the user's current count plus 512. It
-// installs a seccomp filter, in pure Go, that makes socket and socketpair fail
-// with EPERM, kills a process using another system-call ABI (32-bit or x32)
+// installs a seccomp filter, in pure Go, that makes socket, socketpair and the
+// io_uring calls (io_uring can create a socket without socket) fail with
+// EPERM, kills a process using another system-call ABI (32-bit or x32)
 // and allows everything else. It becomes a child subreaper, runs the tool as
 // its child, and after the tool exits kills and reaps every process left under
 // it, orphans included. A tool killed by a signal is reported as an error.
@@ -139,8 +140,9 @@
 // is the program's own executable, started with a marker its package init
 // recognises, and the second is started from the tool directory like magick;
 // their CPU and peak memory count in Usage. NewProcessor starts the helper
-// once in a probe mode that tries socket under the filter and reads the limits
-// back; it requires the call denied and every limit set. The sandbox needs
+// once in a probe mode that tries socket, socketpair and io_uring_setup under
+// the filter and reads the limits back; it requires the calls denied and every
+// limit set. The sandbox needs
 // Linux 5.11 or later on amd64 or arm64; elsewhere, and on an older kernel,
 // NewProcessor returns an error unless Config.Unsandboxed is set. That runs each
 // tool directly, in a process group that is killed with the call and when the

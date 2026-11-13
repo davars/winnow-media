@@ -40,6 +40,13 @@ func fakeTool(args []string) {
 		_, err2 := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 		fmt.Println("socket", errnoOf(err1))
 		fmt.Println("socketpair", errnoOf(err2))
+		for _, c := range []struct {
+			name string
+			nr   uintptr
+		}{{"io_uring_setup", sysIoUringSetup}, {"io_uring_enter", sysIoUringEnter}, {"io_uring_register", sysIoUringRegister}} {
+			_, _, e := syscall.RawSyscall6(c.nr, 0, 0, 0, 0, 0, 0)
+			fmt.Println(c.name, int(e))
+		}
 	case "syscalls":
 		// Everything a tool does besides networking: files, pipes, memory,
 		// threads and child processes.

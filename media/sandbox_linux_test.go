@@ -54,7 +54,7 @@ func TestSandboxDeniesSocketCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	eperm := strconv.Itoa(int(syscall.EPERM))
-	want := []string{"socket " + eperm, "socketpair " + eperm}
+	want := []string{"socket " + eperm, "socketpair " + eperm, "io_uring_setup " + eperm, "io_uring_enter " + eperm, "io_uring_register " + eperm}
 	if got := lines(res.Stdout); !slices.Equal(got, want) {
 		t.Errorf("socket calls gave %q, want %q", got, want)
 	}
@@ -457,10 +457,11 @@ func TestProbeRefusesWhenAGuardIsMissing(t *testing.T) {
 func TestCheckProbe(t *testing.T) {
 	good := func() *probeReport {
 		r := &probeReport{
-			SocketErrno:     int(syscall.EPERM),
-			SocketpairErrno: int(syscall.EPERM),
-			Limits:          map[string][2]uint64{},
-			ProcessBase:     100,
+			SocketErrno:       int(syscall.EPERM),
+			SocketpairErrno:   int(syscall.EPERM),
+			IoUringSetupErrno: int(syscall.EPERM),
+			Limits:            map[string][2]uint64{},
+			ProcessBase:       100,
 		}
 		for _, l := range defaultLimits.specs() {
 			v := l.value
@@ -481,6 +482,8 @@ func TestCheckProbe(t *testing.T) {
 		"socket allowed":      func(r *probeReport) { r.SocketErrno = 0 },
 		"socket other errno":  func(r *probeReport) { r.SocketErrno = int(syscall.EAFNOSUPPORT) },
 		"socketpair allowed":  func(r *probeReport) { r.SocketpairErrno = 0 },
+		"io_uring allowed":    func(r *probeReport) { r.IoUringSetupErrno = 0 },
+		"io_uring not denied": func(r *probeReport) { r.IoUringSetupErrno = int(syscall.EFAULT) },
 		"limit missing":       func(r *probeReport) { delete(r.Limits, limitCPU) },
 		"soft unlimited":      func(r *probeReport) { r.Limits[limitAddress] = [2]uint64{^uint64(0), defaultLimits.Address} },
 		"hard unlimited":      func(r *probeReport) { r.Limits[limitFileSize] = [2]uint64{defaultLimits.FileSize, ^uint64(0)} },
@@ -538,6 +541,10 @@ func TestFilterProgram(t *testing.T) {
 	}{
 		{"socket", auditArch, sysSocket, deny},
 		{"socketpair", auditArch, sysSocketpair, deny},
+		{"io_uring_setup", auditArch, sysIoUringSetup, deny},
+		{"io_uring_enter", auditArch, sysIoUringEnter, deny},
+		{"io_uring_register", auditArch, sysIoUringRegister, deny},
+		{"the call after io_uring_register", auditArch, sysIoUringRegister + 1, retAllow},
 		{"read", auditArch, 0, retAllow},
 		{"execve", auditArch, uint32(syscall.SYS_EXECVE), retAllow},
 		{"another architecture", 0x40000003, sysSocket, retKill},

@@ -82,7 +82,8 @@ type Processor struct {
 // when done.
 //
 // The sandbox is a helper process that limits the tool's resources and denies
-// it socket creation, and kills whatever the tool leaves running. NewProcessor
+// it socket creation (socket, socketpair and io_uring, which can create one),
+// and kills whatever the tool leaves running. NewProcessor
 // refuses to return unless the helper reports the sandbox applied, with the
 // limits derived from cfg.Resources. It returns an error on platforms other
 // than Linux on amd64 or arm64, unless cfg.Unsandboxed is set.

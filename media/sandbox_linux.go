@@ -111,9 +111,11 @@ type helperResult struct {
 // probeReport is what the helper observed about its own sandbox.
 type probeReport struct {
 	// SocketErrno and SocketpairErrno are the errors of an AF_UNIX socket(2)
-	// and socketpair(2) call; 0 means the call succeeded.
-	SocketErrno     int
-	SocketpairErrno int
+	// and socketpair(2) call, and IoUringSetupErrno that of io_uring_setup(2),
+	// which can create a socket without either; 0 means the call succeeded.
+	SocketErrno       int
+	SocketpairErrno   int
+	IoUringSetupErrno int
 	// Limits maps a limit's name to its soft and hard values read back.
 	Limits map[string][2]uint64
 	// ProcessBase is the number of tasks of the user when the process limit
@@ -121,8 +123,8 @@ type probeReport struct {
 	ProcessBase uint64
 }
 
-// checkProbe returns an error unless r shows the socket calls denied and
-// every limit set, no higher than limits (and the fixed ones).
+// checkProbe returns an error unless r shows the socket and io_uring calls
+// denied and every limit set, no higher than limits (and the fixed ones).
 func checkProbe(r *probeReport, limits rlimits) error {
 	if r == nil {
 		return errors.New("the helper did not report")
@@ -130,7 +132,7 @@ func checkProbe(r *probeReport, limits rlimits) error {
 	for _, c := range []struct {
 		name  string
 		errno int
-	}{{"socket", r.SocketErrno}, {"socketpair", r.SocketpairErrno}} {
+	}{{"socket", r.SocketErrno}, {"socketpair", r.SocketpairErrno}, {"io_uring_setup", r.IoUringSetupErrno}} {
 		if syscall.Errno(c.errno) != syscall.EPERM {
 			return fmt.Errorf("%s is not denied: errno %d, want %d", c.name, c.errno, int(syscall.EPERM))
 		}
@@ -412,6 +414,12 @@ func readProbe(base uint64, limits rlimits) *probeReport {
 		_ = syscall.Close(fds[0])
 		_ = syscall.Close(fds[1])
 	}
+	// A null parameter block: a call that is allowed fails with EFAULT or
+	// ENOSYS, never EPERM, and one that is denied by the filter never reaches
+	// the kernel.
+	if _, _, e := syscall.RawSyscall(sysIoUringSetup, 1, 0, 0); e != 0 {
+		r.IoUringSetupErrno = int(e)
+	}
 	for _, l := range limits.specs() {
 		var rl syscall.Rlimit
 		if err := syscall.Getrlimit(l.resource, &rl); err == nil {
@@ -433,9 +441,9 @@ type sockFprog struct {
 	filter *sockFilter
 }
 
-// installFilter denies socket and socketpair with EPERM and allows every
-// other system call of the native ABI; any other ABI is killed, so that
-// neither 32-bit socketcall nor x32 reaches the sockets. Filters apply to the
+// installFilter denies socket, socketpair and the io_uring system calls with
+// EPERM and allows every other system call of the native ABI; any other ABI is
+// killed, so that neither 32-bit socketcall nor x32 reaches the sockets. Filters apply to the
 // calling thread, and the helper may start the tool from any thread, so the
 // filter is synchronised to all threads.
 func installFilter() error {
@@ -474,13 +482,20 @@ func filterProgram() []sockFilter {
 	if rejectX32 {
 		prog = append(prog, sockFilter{code: bpfJset, jf: 1, k: x32Bit}, sockFilter{code: bpfRet, k: retKill})
 	}
+	for i, nr := range deniedSyscalls {
+		// A match skips the checks after it and the allow, to the denial.
+		prog = append(prog, sockFilter{code: bpfJeq, jt: uint8(len(deniedSyscalls) - i), k: nr})
+	}
 	return append(prog,
-		sockFilter{code: bpfJeq, jt: 2, k: sysSocket},
-		sockFilter{code: bpfJeq, jt: 1, k: sysSocketpair},
 		sockFilter{code: bpfRet, k: retAllow},
 		sockFilter{code: bpfRet, k: retErrno | uint32(syscall.EPERM)},
 	)
 }
+
+// deniedSyscalls are the system calls the filter fails with EPERM. io_uring
+// is denied because it can create a socket (IORING_OP_SOCKET, Linux 5.19)
+// without socket(2).
+var deniedSyscalls = []uint32{sysSocket, sysSocketpair, sysIoUringSetup, sysIoUringEnter, sysIoUringRegister}
 
 // userTasks counts the tasks (threads) owned by uid, the quantity
 // RLIMIT_NPROC compares with.
