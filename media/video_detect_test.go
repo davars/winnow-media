@@ -429,11 +429,12 @@ func TestVideoFramePixelsCapIsAppliedAtOpen(t *testing.T) {
 func TestProbeFailuresThatSayNothingOfTheFileAreNotRefusals(t *testing.T) {
 	t.Parallel()
 	for name, probeErr := range map[string]error{
-		"time limit":  fmt.Errorf("ffprobe: %w: %w", ErrTimeLimit, &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Invalid data found")}),
-		"too large":   fmt.Errorf("ffprobe: %w: %w", tooLarge("a cap"), &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Invalid data found")}),
-		"killed":      &ToolError{Tool: "ffprobe", ExitCode: -1, Signal: syscall.SIGKILL},
-		"fork failed": errors.New("ffprobe: fork/exec: resource temporarily unavailable"),
-		"memory":      &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Cannot allocate memory")},
+		"time limit":                      fmt.Errorf("ffprobe: %w: %w", ErrTimeLimit, &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Invalid data found")}),
+		"too large":                       fmt.Errorf("ffprobe: %w: %w", tooLarge("a cap"), &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Invalid data found")}),
+		"killed":                          &ToolError{Tool: "ffprobe", ExitCode: -1, Signal: syscall.SIGKILL},
+		"killed after printing a refusal": &ToolError{Tool: "ffprobe", ExitCode: -1, Signal: syscall.SIGKILL, Stderr: []byte("Invalid data found")},
+		"fork failed":                     errors.New("ffprobe: fork/exec: resource temporarily unavailable"),
+		"memory":                          &ToolError{Tool: "ffprobe", ExitCode: 1, Stderr: []byte("Cannot allocate memory")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

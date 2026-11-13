@@ -797,6 +797,29 @@ func TestMultiThreadedToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 	}
 }
 
+// The frame compositor's runs are attributed like any tool's: a compositor
+// that spins until the sandbox kills it at the CPU limit is ErrTimeLimit.
+func TestCompositorKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
+	p := fakeProcessorWith(t, Resources{CPUTime: time.Second})
+	if err := composeWithScript(t, p, "while :; do :; done\n"); !errors.Is(err, ErrTimeLimit) {
+		t.Errorf("err = %v, want ErrTimeLimit", err)
+	}
+}
+
+// NewProcessor hands Resources.CPUTime to the attribution: a Processor built
+// by it, not by the harness, reports a kill at the limit as ErrTimeLimit.
+func TestNewProcessorWiresCPUTimeToTheAttribution(t *testing.T) {
+	p := requireProcessorWith(t, Config{Resources: Resources{CPUTime: time.Second}})
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.tools["tool"] = self
+	if _, err := runFake(t, p, "spin"); !errors.Is(err, ErrTimeLimit) {
+		t.Errorf("err = %v, want ErrTimeLimit", err)
+	}
+}
+
 // A kill by the same signal that is not at the CPU limit, and an exit, are not
 // time limits.
 func TestOtherKillsAreNotErrTimeLimit(t *testing.T) {

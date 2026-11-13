@@ -480,8 +480,8 @@ func TestInputIsStatedBeforeItIsOpened(t *testing.T) {
 			}
 			return openInputFile(path)
 		}
-		if _, _, err := p.Open(context.Background(), path, OpenOptions{}); err == nil || !strings.Contains(err.Error(), "changed") {
-			t.Errorf("err = %v, want a refusal that the file changed", err)
+		if _, _, err := p.Open(context.Background(), path, OpenOptions{}); err == nil || !strings.Contains(err.Error(), "changed") || !errors.Is(err, ErrInputChanged) {
+			t.Errorf("err = %v, want ErrInputChanged", err)
 		}
 	})
 }
