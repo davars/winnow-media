@@ -5,10 +5,10 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
-# The update is pushed and its PR opened with FLAKE_LOCK_TOKEN, a
+# The branch is pushed and its PR opened with FLAKE_LOCK_TOKEN, a
 # fine-grained token with contents and pull-requests write on this
 # repository: a PR opened with the workflow's own token starts no workflows,
-# so CI would never run on it.
+# so CI would never run on it. No third-party action sees the token.
 permissions:
   contents: read
 
@@ -17,12 +17,35 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.FLAKE_LOCK_TOKEN }}
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - uses: DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3 # v29
-        with:
-          token: ${{ secrets.FLAKE_LOCK_TOKEN }}
-          pr-title: "Update flake.lock"
-          pr-labels: dependencies
+      - name: Update flake.lock and open or refresh its PR
+        env:
+          GH_TOKEN: ${{ secrets.FLAKE_LOCK_TOKEN }}
+          BRANCH: update-flake-lock
+        run: |
+          set -euo pipefail
+          nix flake update 2> update.log
+          if git diff --quiet -- flake.lock; then
+            echo "flake.lock is current"
+            exit 0
+          fi
+          {
+            echo "Weekly \`nix flake update\`, within the channels \`flake.nix\` names."
+            echo
+            echo '```'
+            grep -v '^warning:' update.log || true
+            echo '```'
+          } > body.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git commit -m "Update flake.lock" -F body.md -- flake.lock
+          git push --force origin "$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number -q length)" = 0 ]; then
+            gh pr create --base main --head "$BRANCH" --title "Update flake.lock" --body-file body.md
+          fi
