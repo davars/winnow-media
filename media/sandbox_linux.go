@@ -58,11 +58,23 @@ type limitSpec struct {
 	value    uint64
 }
 
+// backstopCPU is the kernel's RLIMIT_CPU: the budget, which the helper
+// enforces itself, plus a tenth of it or one second, whichever is more. The
+// kernel samples CPU time on ticks and the helper's check runs every
+// cpuPollInterval, so the kernel limit must sit clear of the budget to stay a
+// backstop for a helper that failed to act. A zero budget stays zero.
+func (l rlimits) backstopCPU() uint64 {
+	if l.CPU == 0 {
+		return 0
+	}
+	return saturatingAdd(l.CPU, max(1, (l.CPU+9)/10))
+}
+
 // specs lists the limits except the process limit's value, which depends on
 // the user's current tasks.
 func (l rlimits) specs() []limitSpec {
 	return []limitSpec{
-		{limitCPU, syscall.RLIMIT_CPU, l.CPU},
+		{limitCPU, syscall.RLIMIT_CPU, l.backstopCPU()},
 		{limitAddress, syscall.RLIMIT_AS, l.Address},
 		{limitFileSize, syscall.RLIMIT_FSIZE, l.FileSize},
 		{limitOpenFiles, syscall.RLIMIT_NOFILE, sandboxOpenFiles},
@@ -104,8 +116,11 @@ type helperResult struct {
 	// helper: the helper's own rusage cannot be used, because a child
 	// started with CLONE_VM starts with the parent program's peak resident
 	// set.
-	Usage *Usage       `json:",omitempty"`
-	Probe *probeReport `json:",omitempty"`
+	Usage *Usage `json:",omitempty"`
+	// CPULimit is set when the helper killed the tool because its CPU time
+	// reached the budget.
+	CPULimit bool         `json:",omitempty"`
+	Probe    *probeReport `json:",omitempty"`
 }
 
 // probeReport is what the helper observed about its own sandbox.
@@ -254,7 +269,7 @@ func sandboxRunner(limits rlimits) runner {
 }
 
 func (r helperResult) toolResult() toolResult {
-	return toolResult{Err: r.Err, Signal: r.Signal, Code: r.Code, Usage: r.Usage}
+	return toolResult{Err: r.Err, Signal: r.Signal, Code: r.Code, Usage: r.Usage, CPULimit: r.CPULimit}
 }
 
 // helperMain is the sandbox helper: it applies the sandbox to itself, runs
@@ -331,8 +346,24 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	if cancelled.Load() {
 		killDescendants()
 	}
+	stopWatch := make(chan struct{})
+	watched := make(chan struct{})
+	var cpuLimit atomic.Bool
+	if budget := time.Duration(cfg.Limits.CPU) * time.Second; budget > 0 {
+		go func() {
+			defer close(watched)
+			if watchCPU(cmd.Process.Pid, budget, stopWatch) {
+				cpuLimit.Store(true)
+			}
+		}()
+	} else {
+		close(watched)
+	}
 	waitErr := cmd.Wait()
+	close(stopWatch)
+	<-watched
 	var res helperResult
+	res.CPULimit = cpuLimit.Load()
 	var exitErr *exec.ExitError
 	if waitErr != nil && !errors.As(waitErr, &exitErr) {
 		res.Err = fmt.Sprintf("waiting for the tool: %v", waitErr)
@@ -353,6 +384,50 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	}
 	res.Usage = usage
 	return res
+}
+
+// cpuPollInterval is how often the helper compares the tool's CPU time with
+// the budget.
+const cpuPollInterval = 50 * time.Millisecond
+
+// watchCPU kills the tool and everything below the helper once the tool's
+// process-wide CPU time reaches budget, and reports whether it did. It
+// returns, reporting false, when stop closes or the tool's clock can no longer
+// be read. The budget is checked on the clock the kernel's own limit uses, so
+// a kill here is exactly a run that used its CPU time.
+func watchCPU(pid int, budget time.Duration, stop <-chan struct{}) bool {
+	ticker := time.NewTicker(cpuPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return false
+		case <-ticker.C:
+		}
+		used, err := processCPUTime(pid)
+		if err != nil {
+			return false
+		}
+		if used >= budget {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			killDescendants()
+			return true
+		}
+	}
+}
+
+// processCPUTime returns the CPU time of every thread of process pid, read
+// from the clock clock_getcpuclockid(3) returns for it: the encoding is
+// (^pid << 3) | CPUCLOCK_SCHED, process-wide. Reading a clock needs no
+// permission beyond naming the process, and clock_gettime is not filtered.
+func processCPUTime(pid int) (time.Duration, error) {
+	const cpuclockSched = 2
+	clock := int32(^int32(pid)<<3 | cpuclockSched)
+	var ts syscall.Timespec
+	if _, _, e := syscall.Syscall(syscall.SYS_CLOCK_GETTIME, uintptr(clock), uintptr(unsafe.Pointer(&ts)), 0); e != 0 {
+		return 0, e
+	}
+	return time.Duration(ts.Sec)*time.Second + time.Duration(ts.Nsec), nil
 }
 
 func setSubreaper() error {

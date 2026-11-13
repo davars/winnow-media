@@ -36,6 +36,9 @@ type toolResult struct {
 	// Usage is what the tool and its descendants consumed, or nil when the
 	// runner could not measure it.
 	Usage *Usage
+	// CPULimit is set when the runner killed the tool because its CPU time
+	// reached the budget.
+	CPULimit bool
 }
 
 // runner starts one process, with its standard output and error going to the
@@ -70,26 +73,18 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail, p.cpuLimit)
 }
 
-// cpuSlack is how far short of the CPU limit a killed run's measured CPU time
-// may fall and still count as having reached it: the larger of 250 ms and 5%
-// of the limit. The kernel enforces RLIMIT_CPU on tick-sampled CPU time while
-// wait4 reports precise run time, so a killed run's measured time can fall
-// short by a share of the limit that grows with load and thread count. A
-// SIGKILL from anything else within the last 5% of the budget is reported as
-// ErrTimeLimit.
-func cpuSlack(limit time.Duration) time.Duration {
-	return max(250*time.Millisecond, limit/20)
-}
-
-// reachedCPULimit reports whether a run ended because it reached the
-// sandbox's CPU-time limit. The limit's soft and hard values are equal, so the
-// kernel kills with SIGKILL; SIGXCPU is what a soft limit alone sends. Either
-// signal alone could come from anything else, so the run's measured CPU time
-// must also have reached the limit. limit is 0 when no limit is in force.
+// reachedCPULimit reports whether a kill that the sandbox helper did not
+// attribute was nevertheless the kernel's CPU-time limit firing as the
+// backstop. The helper enforces the budget on the same clock the kernel uses,
+// so it normally kills first and says so (toolResult.CPULimit), exactly; the
+// kernel limit sits above the budget and only backs it up. A SIGKILL or
+// SIGXCPU of a run whose measured CPU time is at least the budget can only be
+// that backstop; one below it is something else. limit is 0 when no limit is
+// in force.
 func reachedCPULimit(res toolResult, limit time.Duration) bool {
 	sig := syscall.Signal(res.Signal)
 	return limit > 0 && (sig == syscall.SIGKILL || sig == syscall.SIGXCPU) &&
-		res.Usage != nil && res.Usage.CPU+cpuSlack(limit) >= limit
+		res.Usage != nil && res.Usage.CPU >= limit
 }
 
 // runError turns the outcome of one run into an error, or nil. A run that
@@ -105,7 +100,7 @@ func runError(ctx context.Context, name string, res toolResult, err error, tail 
 		return fmt.Errorf("%s: %s", name, res.Err)
 	case res.Signal != 0:
 		te := &ToolError{Tool: name, ExitCode: -1, Signal: syscall.Signal(res.Signal), Stderr: tail}
-		if reachedCPULimit(res, cpuLimit) {
+		if res.CPULimit || reachedCPULimit(res, cpuLimit) {
 			return fmt.Errorf("%w: %w", ErrTimeLimit, te)
 		}
 		return te
