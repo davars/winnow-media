@@ -166,9 +166,8 @@ The values chosen, from those peaks:
   enforced for root.
 - The helper measures `Usage` from the tool's own rusage and that of the
   descendants it reaps, not from its own, which starts at the calling
-  program's peak resident set. A 48 MP HEIC measured 919 MiB and 12.7 s of CPU
-  directly and the same through the helper. The helper adds about 13 ms to a
-  run.
+  program's peak resident set. A 48 MP HEIC measured the same peak and CPU
+  time directly and through the helper. The helper adds about 13 ms to a run.
 
 ## The small host's deployment
 
