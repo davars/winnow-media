@@ -145,8 +145,9 @@ func (i Info) clone() Info {
 // is safe for concurrent use.
 type Source struct {
 	p *Processor
-	// mu serialises calls and guards every field below up to imu.
-	mu     sync.Mutex
+	// gate serialises calls and guards every field below up to imu: a call
+	// holds it by having sent into it, and a call waiting for it can give up.
+	gate   chan struct{}
 	closed bool
 	// file is the input, opened once by Open and read through for the
 	// Source's life; ref is what the tools call it.
@@ -208,8 +209,19 @@ type Source struct {
 // Elsewhere a tool reads through a link to the path, and only the per-Encode
 // identity check guards it.
 //
+// Open on a closed Processor returns ErrClosed without touching the file, and
+// a Processor closed while Open runs waits for it, and the Open that has not
+// finished by then returns ErrClosed. Errors wrap ErrUnsupportedType, ErrTooLarge, ErrTimeLimit or
+// ErrInvalidRequest (an OpenOptions.Orientation out of range, or given for a
+// video) as the cause is; none can succeed on a retry of the same file except
+// ErrTimeLimit.
+//
 // The caller must Close the Source, or close the Processor.
 func (p *Processor) Open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {
+	if !p.beginOpen() {
+		return nil, Usage{}, fmt.Errorf("open: processor: %w", ErrClosed)
+	}
+	defer p.opening.Done()
 	src, usage, err := p.open(ctx, path, opts)
 	if err != nil {
 		return nil, usage, fmt.Errorf("open: %w", err)
@@ -228,7 +240,7 @@ func (p *Processor) open(ctx context.Context, path string, opts OpenOptions) (*S
 		return nil, m.usage, err
 	}
 	src := &Source{
-		p: p, file: in.file, path: in.abs, ref: in.ref, dir: in.dir, release: in.release, id: in.id,
+		gate: make(chan struct{}, 1), p: p, file: in.file, path: in.abs, ref: in.ref, dir: in.dir, release: in.release, id: in.id,
 		typ: in.typ, override: override, dec: in.decoder,
 	}
 	src.probed = in.probe
@@ -404,12 +416,30 @@ func (s *Source) KeptBytes() int64 {
 	return s.keptTotal.Load()
 }
 
-// Close closes the input and removes the Source's scratch. It is idempotent,
-// and waits for a call that is running. Images already written are not
-// affected.
+// lock acquires the gate, or returns ctx's error if ctx ends first. A context
+// that has ended never acquires it.
+func (s *Source) lock(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case s.gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Source) unlock() { <-s.gate }
+
+// Close closes the input and removes the Source's scratch. It is idempotent.
+// It waits for a call that is running, which it does not interrupt: cancel
+// that call's context first to end it sooner. Images already written are not
+// affected, and a call that was waiting its turn when Close ran returns
+// ErrClosed.
 func (s *Source) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.gate <- struct{}{}
+	defer s.unlock()
 	if s.closed {
 		return nil
 	}
@@ -449,6 +479,16 @@ func (s *Source) checkIdentity() error {
 // file's status-change time, so it counts as a change. A Select that does not apply to the Source's kind, or a
 // region outside a frame whose size is settled, is refused before any tool
 // runs. The Usage covers the tool runs of this call alone, also when it fails.
+//
+// Calls on one Source run one at a time. A call waiting for the one before it
+// returns ctx's error, without running, if ctx ends first. Cancelling ctx
+// during a run kills its tools and returns an error wrapping ctx's. A call
+// that fails or is cancelled leaves the Source usable and dir empty, though
+// what the Source keeps between calls (see OpenOptions.KeepDecode and the
+// package documentation) may have been dropped. Errors wrap ErrInvalidRequest
+// for a request that is wrong whatever the file (retrying the call cannot
+// succeed), ErrInputChanged when the file is not the one opened, ErrClosed
+// when the Source is closed, ErrTooLarge, ErrTimeLimit, or a *ToolError.
 func (s *Source) Encode(ctx context.Context, dir string, sel Select, encodings ...Encoding) ([]Image, Usage, error) {
 	images, usage, err := s.encode(ctx, dir, sel, encodings, numbered)
 	if err != nil {
@@ -481,8 +521,10 @@ func (s *Source) encode(ctx context.Context, dir string, sel Select, encodings [
 	if err != nil {
 		return nil, m.usage, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.lock(ctx); err != nil {
+		return nil, m.usage, err
+	}
+	defer s.unlock()
 	if err := requireEmptyDir(dir); err != nil {
 		return nil, m.usage, err
 	}
@@ -560,7 +602,6 @@ func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr F
 			return nil, invalid("images of a still cannot be written as one animation")
 		}
 	}
-	s.dropKeptExcept(idx)
 	srcs := make([]*frameSource, len(idx))
 	for f, k := range idx {
 		if srcs[f], err = s.stillAt(ctx, env, k); err != nil {
@@ -570,6 +611,7 @@ func (s *Source) encodeStills(ctx context.Context, env toolEnv, dir string, fr F
 			return nil, err
 		}
 	}
+	s.dropKeptExcept(idx)
 	n := len(idx)
 	images := make([]Image, len(encs)*n)
 	for f, es := range srcs {

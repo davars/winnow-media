@@ -1134,8 +1134,10 @@ func TestReuseOpaqueEncodeGivesTheFusedBytes(t *testing.T) {
 // requireKeptAgrees fails unless KeptBytes is what the disk budget counts.
 func requireKeptAgrees(t *testing.T, src *Source) {
 	t.Helper()
-	src.mu.Lock()
-	defer src.mu.Unlock()
+	if err := src.lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer src.unlock()
 	if got, want := src.keptTotal.Load(), src.keptBytes(); got != want {
 		t.Errorf("KeptBytes = %d, the budget counts %d", got, want)
 	}

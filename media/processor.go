@@ -61,9 +61,12 @@ type Processor struct {
 	compose func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error)
 
 	// mu guards closed and sources, the Sources Open made that are not yet
-	// closed.
+	// closed. opening counts the Opens that began before Close; Add is only
+	// called under mu while closed is false, which orders it before Close's
+	// Wait.
 	mu      sync.Mutex
 	closed  bool
+	opening sync.WaitGroup
 	sources map[*Source]struct{}
 }
 
@@ -177,9 +180,12 @@ func (p *Processor) install(rules []policyRule) error {
 
 func (p *Processor) tmpDir() string { return filepath.Join(p.dir, "tmp") }
 
-// Close closes every Source the Processor opened that is still open, waiting
-// for the calls running on them, then removes the Processor's directory. The Processor must not be used
-// afterwards; Open on a closed Processor fails.
+// Close closes every Source the Processor opened that is still open and
+// removes the Processor's directory. It waits for the Open calls in progress,
+// which then fail with ErrClosed, and for the calls running on the Sources; it
+// interrupts none of them, so cancel their contexts first to end them sooner.
+// Open after Close began returns ErrClosed. Close is safe to call more than
+// once.
 func (p *Processor) Close() error {
 	p.mu.Lock()
 	p.closed = true
@@ -188,10 +194,24 @@ func (p *Processor) Close() error {
 		open = append(open, s)
 	}
 	p.mu.Unlock()
+	p.opening.Wait()
 	for _, s := range open {
 		_ = s.Close()
 	}
 	return os.RemoveAll(p.dir)
+}
+
+// beginOpen records an Open in progress, which Close waits for; it reports
+// false if the Processor is closed. The caller calls p.opening.Done when the
+// Open returns.
+func (p *Processor) beginOpen() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false
+	}
+	p.opening.Add(1)
+	return true
 }
 
 // register records src as open, and reports false if the Processor is closed.

@@ -390,7 +390,7 @@ func (s *Source) dropKeptExcept(idx []int) {
 }
 
 // syncKept stores keptBytes for KeptBytes. Every change to s.kept ends in it,
-// under s.mu.
+// holding the gate.
 func (s *Source) syncKept() { s.keptTotal.Store(s.keptBytes()) }
 
 // keptBytes is the disk the kept decodes and their profiles hold.
