@@ -2,7 +2,7 @@
   description = "winnow-media - media processing library and its pinned tool closure";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   };
 
   outputs = { self, nixpkgs }:
@@ -146,9 +146,7 @@
 
           buildGoModule = pkgs.buildGoModule.override { go = pkgs.go_1_26; };
 
-          # golangci-lint pins buildGo125Module; rebuild it against go_1_26 so
-          # it accepts this module's go directive.
-          golangci-lint = pkgs.golangci-lint.override { buildGo125Module = buildGoModule; };
+          inherit (pkgs) golangci-lint;
 
           src = lib.cleanSource ./.;
 

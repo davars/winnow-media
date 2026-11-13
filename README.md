@@ -119,7 +119,7 @@ links a binary to them:
 
 ```nix
 {
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   inputs.winnow-media.url = "github:davars/winnow-media";
   # Do not add: inputs.winnow-media.inputs.nixpkgs.follows = "nixpkgs";
 

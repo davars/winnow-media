@@ -2,9 +2,6 @@
 #
 # Enforced by `nix flake check` (flake.nix `checks.<system>.lint`) and runnable
 # in the devShell with `golangci-lint run` / `golangci-lint fmt`.
-#
-# The flake's golangci-lint is rebuilt with go_1_26; the stock nixpkgs build
-# (go1.25) refuses a go 1.26 module.
 version: "2"
 
 linters:

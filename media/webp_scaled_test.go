@@ -919,7 +919,8 @@ func TestWebPStillOrientationAgreesWithImageMagick(t *testing.T) {
 		{"Interop pointer before the orientation", webpWithEXIF(t, simple, w, h, true, ifd0(ifdEntry(0xA005, 4, 1, 0), ifdEntry(0x0112, 3, 1, 6))), false, 0},
 		{"entries of every type 1 to 12 before the orientation", webpWithEXIF(t, simple, w, h, true, ifd0(
 			ifdEntry(0x0100, 1, 1, 0), ifdEntry(0x0101, 2, 1, 0), ifdEntry(0x0102, 5, 1, 0), ifdEntry(0x0103, 12, 1, 0),
-			ifdEntry(0x0104, 7, 1, 0), ifdEntry(0x0105, 9, 1, 0), ifdEntry(0x0112, 3, 1, 6))), true, 6},
+			ifdEntry(0x0104, 7, 1, 0), ifdEntry(0x0105, 9, 1, 0), ifdEntry(0x0112, 3, 1, 6),
+		)), true, 6},
 		{"xmp chunk", writeFile(t, "xmp.webp", mustReadFile(t, filepath.Join("testdata", "orient", "xmp.webp"))), false, 0},
 		{"not a webp", writeFile(t, "x.webp", []byte("RIFF....WAVEfmt ")), false, 0},
 	} {

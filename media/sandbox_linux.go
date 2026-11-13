@@ -610,7 +610,8 @@ func filterProgram() []sockFilter {
 		// A match skips the checks after it and the allow, to the denial.
 		prog = append(prog, sockFilter{code: bpfJeq, jt: uint8(len(deniedSyscalls) - i), k: nr})
 	}
-	return append(prog,
+	return append(
+		prog,
 		sockFilter{code: bpfRet, k: retAllow},
 		sockFilter{code: bpfRet, k: retErrno | uint32(syscall.EPERM)},
 	)

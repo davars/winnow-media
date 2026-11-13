@@ -6,6 +6,10 @@ that are projections, not measurements, are marked as such.
 
 ## How to read this
 
+The figures were measured on the nixos-25.11 tool closure (ImageMagick
+7.1.2-18, ffmpeg 8.0, libheif 1.20.2, Go 1.26.1), not re-measured on the
+nixos-26.05 closure the flake now pins.
+
 The numbers are of two sorts.
 
 **The library's constants** hold for every `Processor`: the ceilings and fixed

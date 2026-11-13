@@ -156,7 +156,8 @@ func ExampleSource_Encode() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	images, usage, err := src.Encode(ctx, dir, media.Select{},
+	images, usage, err := src.Encode(
+		ctx, dir, media.Select{},
 		media.Encoding{Format: media.WebP, MaxEdge: 2048},
 		media.Encoding{MaxEdge: 256, Quality: 80}, // a JPEG
 	)
