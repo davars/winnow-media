@@ -529,7 +529,7 @@ func TestReuseFirstEncodeSettlesTheSize(t *testing.T) {
 	path := writeFile(t, "content", mustRead(t, filepath.Join("testdata", "orient", "exif-after-idat.png")))
 	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
 	if src.Info().Upright {
-		t.Skip("the fixture's size is settled at Open")
+		t.Fatal("the fixture's size is settled at Open, so the test does not exercise the first encode")
 	}
 	encodeAll(t, src, Select{}, Encoding{Format: PNG, MaxEdge: 16})
 	info := src.Info()

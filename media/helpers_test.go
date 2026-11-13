@@ -21,7 +21,7 @@ import (
 
 // testEnv runs the real tools, resolved through the tool package, directly
 // and without the sandbox, under the default Resources and the measured caps.
-// A test that needs a tool skips when it cannot be found.
+// A test that needs a tool fails when it cannot be found.
 func testEnv(t *testing.T) toolEnv {
 	t.Helper()
 	return toolEnv{
@@ -47,13 +47,14 @@ func testEnv(t *testing.T) toolEnv {
 	}
 }
 
-// requireTools skips the test unless every named tool resolves, and returns
-// testEnv.
+// requireTools fails the test unless every named tool resolves, and returns
+// testEnv. A missing pinned tool means the tests are not running under nix
+// develop.
 func requireTools(t *testing.T, names ...string) toolEnv {
 	t.Helper()
 	for _, name := range names {
 		if _, err := tool.Resolve(name); err != nil {
-			t.Skip(name + " not available")
+			t.Fatal(name + " is not available; run the tests under nix develop")
 		}
 	}
 	return testEnv(t)
@@ -62,7 +63,7 @@ func requireTools(t *testing.T, names ...string) toolEnv {
 func requireMagick(t *testing.T) toolEnv { return requireTools(t, "magick") }
 
 // requireProcessor returns a Processor over the real tools, closed when the
-// test ends, and skips the test when a tool cannot be found.
+// test ends, and fails the test when a tool cannot be found.
 func requireProcessor(t *testing.T) *Processor {
 	t.Helper()
 	return requireProcessorWith(t, Config{})

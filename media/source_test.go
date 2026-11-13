@@ -952,7 +952,10 @@ func TestProcessorCloseClosesItsSources(t *testing.T) {
 	t.Parallel()
 	p, err := NewProcessor(context.Background(), Config{Dir: t.TempDir()})
 	if err != nil {
-		t.Skip(err)
+		if sandboxAvailable() != nil {
+			t.Skip(err)
+		}
+		t.Fatal(err)
 	}
 	a, _, err := p.Open(context.Background(), heicFixtureFile(t, "adobe-64x32"), OpenOptions{})
 	if err != nil {

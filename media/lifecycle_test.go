@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -162,6 +163,32 @@ func TestOpenAfterCloseIsErrClosed(t *testing.T) {
 	}
 }
 
+// A closed Source reports ErrClosed whatever the output directory holds.
+func TestEncodeAfterCloseIsErrClosedForAnyOutputDirectory(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	src, _, err := p.Open(context.Background(), heicFixtureFile(t, "adobe-64x32"), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Close(); err != nil {
+		t.Fatal(err)
+	}
+	nonEmpty := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nonEmpty, "existing"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{
+		"empty":     t.TempDir(),
+		"non-empty": nonEmpty,
+		"missing":   filepath.Join(t.TempDir(), "absent"),
+	} {
+		if _, _, err := src.Encode(context.Background(), dir, Select{}, Encoding{Format: PNG}); !errors.Is(err, ErrClosed) {
+			t.Errorf("Encode after Close into a %s directory: err = %v, want ErrClosed", name, err)
+		}
+	}
+}
+
 // Close waits for an Open already running, which then fails with ErrClosed
 // instead of leaving a Source over a removed directory.
 func TestCloseWaitsForAnOpenInProgress(t *testing.T) {
@@ -177,7 +204,7 @@ func TestCloseWaitsForAnOpenInProgress(t *testing.T) {
 	select {
 	case <-started:
 	case err := <-opened:
-		t.Skipf("Open ran no tool (err = %v)", err)
+		t.Fatalf("Open ran no tool (err = %v)", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("Open did not start a tool")
 	}

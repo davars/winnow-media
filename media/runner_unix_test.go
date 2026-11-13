@@ -18,12 +18,12 @@ import (
 func TestDirectRunner(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
-		t.Skip("no sh")
+		t.Fatal("sh is not available; run the tests under nix develop")
 	}
 	// The runs have no PATH.
 	sleep, err := exec.LookPath("sleep")
 	if err != nil {
-		t.Skip("no sleep")
+		t.Fatal("sleep is not available; run the tests under nix develop")
 	}
 	run := func(ctx context.Context, env []string, script string) (string, toolResult, error) {
 		var out, errOut strings.Builder
@@ -98,7 +98,7 @@ func TestDirectRunner(t *testing.T) {
 	t.Run("output still held after the group is killed is an error", func(t *testing.T) {
 		setsid, err := exec.LookPath("setsid")
 		if err != nil {
-			t.Skip("no setsid")
+			t.Fatal("setsid is not available; run the tests under nix develop")
 		}
 		old := drainTimeout
 		drainTimeout = 200 * time.Millisecond

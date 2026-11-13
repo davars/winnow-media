@@ -79,7 +79,7 @@ func fusedFixtures() []fusedFixture {
 			return path
 		}},
 		{"cmyk jpeg profiled", "jpeg", func(t *testing.T, env toolEnv, dir string) string {
-			cmyk := findCMYKProfile(t)
+			cmyk := writeCMYKProfile(t)
 			path := filepath.Join(dir, "fixture.jpg")
 			magick(t, env, "-size", "64x48", "gradient:#0020ff-#ffb000", "-colorspace", "CMYK", "-profile", cmyk, "-quality", "95", path)
 			return path
@@ -174,20 +174,4 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-// findCMYKProfile returns a CMYK ICC profile installed on the machine, or
-// skips the test.
-func findCMYKProfile(t *testing.T) string {
-	t.Helper()
-	for _, pattern := range []string{
-		"/usr/share/color/icc/*/*CMYK*", "/usr/share/color/icc/*CMYK*", "/usr/share/ghostscript/*/iccprofiles/default_cmyk.icc",
-		"/nix/store/*-source/config/cmyk.icm",
-	} {
-		if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
-			return matches[0]
-		}
-	}
-	t.Skip("no CMYK ICC profile installed")
-	return ""
 }

@@ -197,7 +197,7 @@ func TestJXLStillIsConvertedFromItsProfile(t *testing.T) {
 	withExtension := filepath.Join(dir, "wide.jxl")
 	magick(t, env, "-size", "256x96", "gradient:#0020ff-#ffb000", "-profile", destination, "-profile", adobe, withExtension)
 	if !profileListHasICC(string(magick(t, env, "identify", "-format", "%[profiles]", withExtension))) {
-		t.Skip("this ImageMagick does not write an ICC profile into JXL")
+		t.Fatal("this ImageMagick does not write an ICC profile into JXL")
 	}
 	input := stage(t, withExtension)
 

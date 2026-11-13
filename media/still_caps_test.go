@@ -235,7 +235,7 @@ func losslessJPEG(t *testing.T, w, h int) string {
 	t.Helper()
 	cjpeg, err := exec.LookPath("cjpeg")
 	if err != nil {
-		t.Skip("cjpeg not available")
+		t.Fatal("cjpeg is not available; run the tests under nix develop")
 	}
 	pgm := flatImage(t, "in.pgm", w, h)
 	path := filepath.Join(t.TempDir(), "lossless.jpg")
@@ -279,7 +279,7 @@ func TestPingedDecodeSizeAgreesWithDecodedSize(t *testing.T) {
 	real := requireMagick(t)
 	cjpeg, err := exec.LookPath("cjpeg")
 	if err != nil {
-		t.Skip("cjpeg not available")
+		t.Fatal("cjpeg is not available; run the tests under nix develop")
 	}
 	dir := t.TempDir()
 	flavours := map[string]func(path string){

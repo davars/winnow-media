@@ -238,7 +238,7 @@ func TestHeaderReadDeclaresWhatTheDecoderDoes(t *testing.T) {
 			path := filepath.Join(dir, c.name)
 			args := append([]string{"-size", "64x48", "gradient:red-blue"}, c.args...)
 			if out, err := env.run(ctx, "magick", append(args, path)...); err != nil {
-				t.Skipf("cannot write %s: %v %s", c.name, err, out.Stdout)
+				t.Fatalf("cannot write %s: %v %s", c.name, err, out.Stdout)
 			}
 			ref := path + "[0]"
 			scenes, err := identifyHeaders(ctx, env, ref, true)

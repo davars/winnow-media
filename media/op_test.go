@@ -12,6 +12,7 @@ import (
 	"image/color"
 	"image/gif"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -21,8 +22,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/davars/winnow-media/tool"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden argv files")
@@ -64,8 +63,8 @@ func record(p *Processor) *recorder {
 
 func requireExiftool(t *testing.T) {
 	t.Helper()
-	if _, err := tool.Resolve("exiftool"); err != nil {
-		t.Skip("exiftool not available")
+	if _, err := exec.LookPath("exiftool"); err != nil {
+		t.Fatal("exiftool is not available; run the tests under nix develop")
 	}
 }
 
@@ -88,13 +87,19 @@ func writeHEIC(t *testing.T) string {
 	return heicFixture(t, "gradient-righttop")
 }
 
-func exiftool(t *testing.T, env toolEnv, args ...string) string {
+// exiftool runs the test-only exiftool program, which is not in the tool
+// closure and so is found on PATH.
+func exiftool(t *testing.T, _ toolEnv, args ...string) string {
 	t.Helper()
-	res, err := env.run(context.Background(), "exiftool", args...)
+	path, err := exec.LookPath("exiftool")
+	if err != nil {
+		t.Fatal("exiftool is not available; run the tests under nix develop")
+	}
+	out, err := exec.CommandContext(context.Background(), path, args...).Output()
 	if err != nil {
 		t.Fatalf("exiftool %q: %v", args, err)
 	}
-	return string(res.Stdout)
+	return string(out)
 }
 
 // addMetadata writes EXIF, GPS and XMP fields into path.
@@ -542,7 +547,7 @@ func TestStillConvertsProfiledInputToSRGB(t *testing.T) {
 	srgb := writeSRGBProfile(t)
 	heic := heicFixtureFile(t, "adobe-256x96")
 	if got := strings.TrimSpace(string(magick(t, env, "identify", "-format", "%[profiles]", heic))); !strings.Contains(got, "icc") {
-		t.Skipf("magick wrote no ICC profile into the HEIC (profiles %q)", got)
+		t.Fatalf("magick wrote no ICC profile into the HEIC (profiles %q)", got)
 	}
 	reference := filepath.Join(dir, "reference.png")
 	magick(t, env, heic, "-auto-orient", "-profile", srgb, reference)
@@ -579,10 +584,10 @@ func TestStillConvertsTheFirstFrameOfAProfiledMultiFrameJXL(t *testing.T) {
 	magick(t, env, "-delay", "10", "-size", "64x48", "gradient:#0020ff-#ffb000", "-profile", srgb, "-profile", adobe,
 		"(", "+clone", "-negate", ")", path)
 	if n := strings.Count(string(magick(t, env, "identify", "-ping", "-format", "%m\n", path)), "JXL"); n < 2 {
-		t.Skipf("magick wrote a JXL of %d images", n)
+		t.Fatalf("magick wrote a JXL of %d images", n)
 	}
 	if got := string(magick(t, env, "identify", "-format", "%[profiles]", path+"[0]")); !strings.Contains(got, "icc") {
-		t.Skipf("magick wrote no ICC profile into the JXL (profiles %q)", got)
+		t.Fatalf("magick wrote no ICC profile into the JXL (profiles %q)", got)
 	}
 	rec := record(p)
 	stillInto(t, p, stage(t, path), Encoding{Format: PNG})
@@ -607,7 +612,7 @@ func TestSourceCompletesTheProfileOfALaterFrameOfAMultiFrameJXL(t *testing.T) {
 	path := filepath.Join(dir, "wide.jxl")
 	magick(t, env, "-delay", "10", "-size", "64x48", "gradient:#0020ff-#ffb000", "(", "+clone", "-negate", ")", path)
 	if n := strings.Count(string(magick(t, env, "identify", "-ping", "-format", "%m\n", path)), "JXL"); n < 2 {
-		t.Skipf("magick wrote a JXL of %d images", n)
+		t.Fatalf("magick wrote a JXL of %d images", n)
 	}
 	src := openSourceOn(t, p, path, OpenOptions{})
 	rec := record(p)

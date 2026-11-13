@@ -683,7 +683,7 @@ func TestUnsandboxedRunsToolsWithoutTheSandbox(t *testing.T) {
 	t.Cleanup(func() { _ = p.Close() })
 	sh, err := exec.LookPath("sh")
 	if err != nil {
-		t.Skip("no sh")
+		t.Fatal("sh is not available; run the tests under nix develop")
 	}
 	var out strings.Builder
 	if _, err := base(context.Background(), runSpec{Tool: sh, Args: []string{"-c", `while read -r l; do case "$l" in "Max address space"*) echo "$l";; esac; done </proc/self/limits`}, Env: []string{}, Dir: t.TempDir()}, &out, io.Discard); err != nil {
@@ -720,7 +720,7 @@ func TestSandboxHandsTheToolTheInputOnDescriptorThree(t *testing.T) {
 	t.Parallel()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
-		t.Skip("no sh")
+		t.Fatal("sh is not available; run the tests under nix develop")
 	}
 	f, err := os.CreateTemp(t.TempDir(), "input")
 	if err != nil {

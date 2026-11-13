@@ -19,17 +19,17 @@ import (
 	"github.com/davars/winnow-media/tool"
 )
 
-// requireWebPBuilders skips the test unless cwebp and webpmux, which build
+// requireWebPBuilders fails the test unless cwebp and webpmux, which build
 // the animated WebPs the tests need, and the webp-frames tool are available.
 func requireWebPBuilders(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{"cwebp", "webpmux"} {
 		if _, err := exec.LookPath(name); err != nil {
-			t.Skip(name + " not available")
+			t.Fatal(name + " is not available; run the tests under nix develop")
 		}
 	}
 	if _, err := tool.Resolve(webpFramesTool); err != nil {
-		t.Skip(webpFramesTool + " not available")
+		t.Fatal(webpFramesTool + " is not available; run the tests under nix develop")
 	}
 }
 
