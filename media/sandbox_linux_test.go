@@ -769,18 +769,18 @@ func TestToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 	if !errors.As(err, &te) || (te.Signal != syscall.SIGKILL && te.Signal != syscall.SIGXCPU) || te.ExitCode != -1 {
 		t.Errorf("err = %#v, want a *ToolError killed by SIGKILL or SIGXCPU", err)
 	}
-	if res.Usage == nil || res.Usage.CPU < time.Second-cpuSlack(time.Second) {
+	if res.Usage == nil || res.Usage.CPU < time.Second-50*time.Millisecond {
 		t.Errorf("usage = %+v, want at least the 1 s limit", res.Usage)
 	}
 }
 
 // A multi-threaded tool killed at the CPU limit is attributed to ErrTimeLimit
 // like a single-threaded one. With as many busy threads as the host has CPUs
-// or more, the run's measured CPU time lands within tens of milliseconds
-// either side of the limit the kernel enforced: on a 12-CPU host against 2 s,
-// from 9 ms over to 45 ms short, more than 10 ms short in anywhere from 2% to
-// most of the kills depending on the host's state. The test kills 40 times so
-// that a slack too tight to cover that spread shows.
+// or more, the run's measured CPU time lands either side of the limit the
+// kernel enforced: on a 12-CPU host against 2 s, from 9 ms over to 45 ms
+// short, more than 10 ms short in anywhere from 2% to most of the kills
+// depending on the host's state. The test kills 40 times so that a slack too
+// tight to cover that spread shows.
 func TestMultiThreadedToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 	for _, threads := range []int{runtime.NumCPU(), 2 * runtime.NumCPU()} {
 		for range 20 {
@@ -793,6 +793,53 @@ func TestMultiThreadedToolKilledAtTheCPULimitIsErrTimeLimit(t *testing.T) {
 			if !errors.Is(err, ErrTimeLimit) {
 				t.Errorf("%d threads: err = %v, measured CPU %v, want ErrTimeLimit", threads, err, cpu)
 			}
+		}
+	}
+}
+
+// A kill at a longer CPU limit, on a host with other work, is attributed too.
+// The test saturates every CPU for about 10 s, so it is not parallel.
+// The kernel checks RLIMIT_CPU against tick-sampled CPU time, which charges a
+// spinning tool for whole ticks it shared with short bursts of other work,
+// while the run's measured CPU is its precise run time, so the shortfall
+// grows with the limit: 290 to 450 ms at 30 s with 12 threads on a loaded
+// 12-CPU host, more than 1% of the limit. The test makes that load itself.
+func TestMultiThreadedToolKilledAtALongerCPULimitOnABusyHostIsErrTimeLimit(t *testing.T) {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	for range runtime.NumCPU() {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				for start := time.Now(); time.Since(start) < 200*time.Microsecond; {
+				}
+				time.Sleep(300 * time.Microsecond)
+			}
+		}()
+	}
+	defer func() {
+		close(stop)
+		for range runtime.NumCPU() {
+			<-done
+		}
+	}()
+	const limit = 30 * time.Second
+	for range 3 {
+		p := fakeProcessorWith(t, Resources{CPUTime: limit})
+		res, err := runFake(t, p, "spin", strconv.Itoa(runtime.NumCPU()))
+		var cpu time.Duration
+		if res.Usage != nil {
+			cpu = res.Usage.CPU
+		}
+		if !errors.Is(err, ErrTimeLimit) {
+			t.Errorf("err = %v, measured CPU %v (%v short of the limit), want ErrTimeLimit", err, cpu, limit-cpu)
+		} else {
+			t.Logf("attributed, measured CPU %v (%v short of the limit)", cpu, limit-cpu)
 		}
 	}
 }
@@ -817,6 +864,28 @@ func TestNewProcessorWiresCPUTimeToTheAttribution(t *testing.T) {
 	p.tools["tool"] = self
 	if _, err := runFake(t, p, "spin"); !errors.Is(err, ErrTimeLimit) {
 		t.Errorf("err = %v, want ErrTimeLimit", err)
+	}
+}
+
+// The slack is bounded from above: a SIGKILL well short of the limit is not
+// ErrTimeLimit, and one inside the slack is.
+func TestReachedCPULimitBoundsItsSlack(t *testing.T) {
+	kill := func(cpu time.Duration) toolResult {
+		return toolResult{Signal: int(syscall.SIGKILL), Usage: &Usage{CPU: cpu}}
+	}
+	for _, c := range []struct {
+		limit, cpu time.Duration
+		want       bool
+	}{
+		{time.Second, 700 * time.Millisecond, false},
+		{time.Second, time.Second - cpuSlack(time.Second) - time.Millisecond, false},
+		{time.Second, time.Second - cpuSlack(time.Second), true},
+		{1200 * time.Second, 1200*time.Second - 59*time.Second, true},
+		{1200 * time.Second, 1080 * time.Second, false},
+	} {
+		if got := reachedCPULimit(kill(c.cpu), c.limit); got != c.want {
+			t.Errorf("limit %v, CPU %v: reachedCPULimit = %v, want %v", c.limit, c.cpu, got, c.want)
+		}
 	}
 }
 

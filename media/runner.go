@@ -71,13 +71,14 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 }
 
 // cpuSlack is how far short of the CPU limit a killed run's measured CPU time
-// may fall and still count as having reached it: the larger of 250 ms and 1%
-// of the limit. The kernel's CPU accounting, which triggers the kill, and the
-// rusage read afterwards differ by tens of milliseconds when many threads are
-// busy; a SIGKILL from anything else that close to the budget is not a
-// realistic confusion.
+// may fall and still count as having reached it: the larger of 250 ms and 5%
+// of the limit. The kernel enforces RLIMIT_CPU on tick-sampled CPU time while
+// wait4 reports precise run time, so a killed run's measured time can fall
+// short by a share of the limit that grows with load and thread count. A
+// SIGKILL from anything else within the last 5% of the budget is reported as
+// ErrTimeLimit.
 func cpuSlack(limit time.Duration) time.Duration {
-	return max(250*time.Millisecond, limit/100)
+	return max(250*time.Millisecond, limit/20)
 }
 
 // reachedCPULimit reports whether a run ended because it reached the
