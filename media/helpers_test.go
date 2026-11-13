@@ -193,11 +193,11 @@ var measuredCaps = caps{
 
 // measuredCapsConfig are the measured caps, as a Config takes them.
 var measuredCapsConfig = Caps{
-	MaxInputBytes:     maxInputBytes,
-	MaxFramePixels:    maxFramePixels,
-	MaxReturnedPixels: maxReturnedPixels,
-	MaxDecodedPixels:  maxDecodedPixels,
-	MaxFrames:         maxAnimationFrames,
+	MaxInputBytes:      maxInputBytes,
+	MaxFramePixels:     maxFramePixels,
+	MaxReturnedPixels:  maxReturnedPixels,
+	MaxDecodedPixels:   maxDecodedPixels,
+	MaxAnimationFrames: maxAnimationFrames,
 }
 
 func defaultResources() Resources { return Resources{}.withDefaults() }

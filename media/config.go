@@ -38,24 +38,31 @@ type Config struct {
 // deployment's choice. A zero field is the library ceiling; a negative field,
 // or one above its ceiling, is an error from NewProcessor. The ceilings are
 // what the library can bear, not values measured for any host: a deployment
-// for hostile input sets its own. Independently of Caps, a frame or stream
-// wider or taller than 16384 pixels, a video container with more than 32
-// streams and a video stream longer than six hours are refused.
+// for hostile input sets its own. Each field says which kinds of Source it
+// covers. Independently of Caps, a frame or stream wider or taller than 16384
+// pixels, a video container with more than 32 streams and a video stream
+// longer than six hours are refused.
 type Caps struct {
-	// MaxInputBytes is the largest input file, inclusive. No ceiling.
+	// MaxInputBytes is the largest input file, inclusive; it covers every
+	// kind. No ceiling.
 	MaxInputBytes int64
-	// MaxFramePixels is the most pixels of one frame, or of an animation's
-	// canvas; a still counts as it is decoded, after any reduction. Ceiling:
-	// 16384 squared (268,435,456), the most a side limit of 16384 admits.
+	// MaxFramePixels is the most pixels of one frame; it covers every kind. A
+	// still counts as it is decoded, after any reduction; an animation is
+	// judged by its canvas and by each frame it holds; a video by its stored
+	// size, which rotation leaves the product of. Ceiling: 16384 squared
+	// (268,435,456), the most a side limit of 16384 admits.
 	MaxFramePixels int64
 	// MaxReturnedPixels bounds the frames an animation call returns times the
-	// canvas area. No ceiling.
+	// canvas area; it covers animations only. No ceiling.
 	MaxReturnedPixels int64
 	// MaxDecodedPixels bounds all the frames of an animation times its canvas
-	// area, which are decoded whatever the call returns. No ceiling.
+	// area, which are decoded whatever the call returns; it covers animations
+	// only. No ceiling.
 	MaxDecodedPixels int64
-	// MaxFrames is the most frames an animation may hold. Ceiling: 2000.
-	MaxFrames int
+	// MaxAnimationFrames is the most frames an animation may hold; it covers
+	// animations only, not the images of a still or the frames of a video.
+	// Ceiling: 2000.
+	MaxAnimationFrames int
 }
 
 // caps is Caps resolved: no field is zero.
@@ -87,7 +94,7 @@ func (c Caps) resolve() (caps, error) {
 		{"MaxFramePixels", c.MaxFramePixels, ceilingCaps.framePixels, &out.framePixels},
 		{"MaxReturnedPixels", c.MaxReturnedPixels, ceilingCaps.returnedPixels, &out.returnedPixels},
 		{"MaxDecodedPixels", c.MaxDecodedPixels, ceilingCaps.decodedPixels, &out.decodedPixels},
-		{"MaxFrames", int64(c.MaxFrames), int64(ceilingCaps.frames), nil},
+		{"MaxAnimationFrames", int64(c.MaxAnimationFrames), int64(ceilingCaps.frames), nil},
 	} {
 		switch {
 		case f.v < 0:

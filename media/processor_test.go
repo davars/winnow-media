@@ -295,13 +295,13 @@ func TestCheckSceneHeaders(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrTooLarge = %v", c.name, err, c.tooLarge)
 		}
 	}
-	if err := checkVideoSize(maxDimension, maxDimension); err != nil {
+	if err := checkVideoInfo(videoInfo{streams: 1, width: maxDimension, height: maxDimension}, ceilingCaps); err != nil {
 		t.Errorf("video at cap: %v", err)
 	}
-	if err := checkVideoSize(maxDimension+1, 1); !errors.Is(err, ErrTooLarge) {
+	if err := checkVideoInfo(videoInfo{streams: 1, width: maxDimension + 1, height: 1}, ceilingCaps); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("wide video: err = %v", err)
 	}
-	if err := checkVideoSize(1, maxDimension+1); !errors.Is(err, ErrTooLarge) {
+	if err := checkVideoInfo(videoInfo{streams: 1, width: 1, height: maxDimension + 1}, ceilingCaps); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("tall video: err = %v", err)
 	}
 }

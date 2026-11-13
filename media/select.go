@@ -39,7 +39,7 @@ func All() FrameSelection { return FrameSelection{kind: framesAll} }
 // Even selects n frames evenly spaced over the Source, or all of them when it
 // has fewer. An animation or still takes frames i*count/n counting from the
 // first; a video takes samples at the centres of n equal intervals of its
-// duration. n must be at least 1, and a video refuses one above 64.
+// duration. n must be at least 1, and a video refuses one above MaxVideoSamples.
 func Even(n int) FrameSelection { return FrameSelection{kind: framesEven, n: n} }
 
 // Indices selects the frames of an animation, or the images of a still, with
@@ -52,7 +52,7 @@ func Indices(i ...int) FrameSelection {
 // Times selects, at each of the given times, the frame an animation shows then
 // (by its display delays), or the first frame of a video at or after it. Each
 // time is truncated to whole milliseconds. The times may repeat and come in
-// any order, and a video refuses more than 64. A time must be 0 or inside the
+// any order, and a video refuses more than MaxVideoSamples. A time must be 0 or inside the
 // duration. A still refuses it.
 func Times(t ...time.Duration) FrameSelection {
 	return FrameSelection{kind: framesTimes, times: slices.Clone(t)}
@@ -84,8 +84,10 @@ func durMS(d time.Duration) int64 {
 	return -1
 }
 
-// maxVideoSamples is the most samples one call reads from a video.
-const maxVideoSamples = maxMaxFrames
+// MaxVideoSamples is the most frames one Encode call reads from a video: the
+// most Even takes samples, Times takes times and Consecutive takes frames
+// for a video. A larger count is refused with ErrInvalidRequest.
+const MaxVideoSamples = 64
 
 // indexList returns the ascending distinct indices f holds, each below n.
 func (f FrameSelection) indexList(n int, owner, what string) ([]int, error) {
@@ -187,8 +189,8 @@ func (f FrameSelection) animation(starts []int64, total int64) ([]int, error) {
 // consecutive frames.
 func (f FrameSelection) video(info videoInfo) (times []int64, run *frameRun, err error) {
 	count := func(n int, what string) error {
-		if n < 1 || n > maxVideoSamples {
-			return invalid("%d %s is outside 1..%d", n, what, maxVideoSamples)
+		if n < 1 || n > MaxVideoSamples {
+			return invalid("%d %s is outside 1..%d", n, what, MaxVideoSamples)
 		}
 		return nil
 	}

@@ -81,7 +81,6 @@ func (r Region) internal() region { return region{r.X, r.Y, r.Width, r.Height} }
 
 const (
 	defaultQuality = 90
-	maxMaxFrames   = 64
 
 	// The ranges of Encoding.MaxEdge and MaxArea; zero is the top of the
 	// range.

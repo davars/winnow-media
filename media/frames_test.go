@@ -275,7 +275,7 @@ func TestEncodeTimes(t *testing.T) {
 	t.Run("refuses more than the maximum after the probe", func(t *testing.T) {
 		rec := record(p)
 		defer func() { p.run = rec.inner }()
-		times := make([]int64, maxMaxFrames+1)
+		times := make([]int64, MaxVideoSamples+1)
 		for i := range times {
 			times[i] = int64(i)
 		}
@@ -292,7 +292,7 @@ func TestEncodeTimes(t *testing.T) {
 		p.run = func(context.Context, *os.File, string, ...string) (runResult, error) {
 			return runResult{}, errors.New("tool run")
 		}
-		times := make([]int64, maxMaxFrames)
+		times := make([]int64, MaxVideoSamples)
 		for i := range times {
 			times[i] = int64(i)
 		}
@@ -430,7 +430,7 @@ func TestEncodeRun(t *testing.T) {
 	}{
 		"zero count":         {0, 0, 1, "is outside"},
 		"negative count":     {0, -1, 1, "is outside"},
-		"over the maximum":   {0, maxMaxFrames + 1, 1, "is outside"},
+		"over the maximum":   {0, MaxVideoSamples + 1, 1, "is outside"},
 		"negative start":     {-1, 1, 1, "is negative"},
 		"start at the end":   {4000, 1, 1, "is not inside the video"},
 		"start past the end": {99_000, 1, 1, "is not inside the video"},
@@ -537,12 +537,12 @@ func TestEncodeIndices(t *testing.T) {
 	})
 
 	t.Run("accepts an index for every frame of a long animation", func(t *testing.T) {
-		indices := make([]int, maxMaxFrames)
+		indices := make([]int, MaxVideoSamples)
 		for i := range indices {
 			indices[i] = i
 		}
-		images, _, err := p.encodeIndices(ctx, writeGIF(t, solid, maxMaxFrames), Encoding{}, indices, t.TempDir())
-		if err != nil || len(images) != maxMaxFrames {
+		images, _, err := p.encodeIndices(ctx, writeGIF(t, solid, MaxVideoSamples), Encoding{}, indices, t.TempDir())
+		if err != nil || len(images) != MaxVideoSamples {
 			t.Errorf("%d images, err %v", len(images), err)
 		}
 	})

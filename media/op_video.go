@@ -186,7 +186,7 @@ func probeDetected(ctx context.Context, env toolEnv, formats, path string) (vide
 	if err != nil {
 		return videoInfo{}, err
 	}
-	return info, checkVideoInfo(info)
+	return info, checkVideoInfo(info, env.caps)
 }
 
 func runProbe(ctx context.Context, env toolEnv, entries string, input []string) (videoInfo, error) {
@@ -363,7 +363,7 @@ func (e toolEnv) probeChecked(ctx context.Context, dec decoder, inputPath string
 	if err != nil {
 		return videoInfo{}, err
 	}
-	return info, checkVideoInfo(info)
+	return info, checkVideoInfo(info, e.caps)
 }
 
 // newVideoPlan decides how the frames of a probed video are sized. They are

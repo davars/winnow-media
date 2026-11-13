@@ -754,7 +754,7 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 	video := openSourceOn(t, p, sdrClip(t, env, "160x120", 10, 2), OpenOptions{})
 	anim := openSourceOn(t, p, writeGIF(t, solid, 4), OpenOptions{})
 	forbidCompositor(t, p)
-	overMax := make([]time.Duration, maxVideoSamples+1)
+	overMax := make([]time.Duration, MaxVideoSamples+1)
 	for i := range overMax {
 		overMax[i] = msec(i)
 	}
@@ -774,8 +774,8 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 		{"a negative time", video, Select{Frames: Times(-time.Millisecond)}},
 		{"Even(0)", anim, Select{Frames: Even(0)}},
 		{"more times of a video than the maximum", video, Select{Frames: Times(overMax...)}},
-		{"more even samples of a video than the maximum", video, Select{Frames: Even(maxVideoSamples + 1)}},
-		{"a run of a video longer than the maximum", video, Select{Frames: Consecutive(0, maxVideoSamples+1)}},
+		{"more even samples of a video than the maximum", video, Select{Frames: Even(MaxVideoSamples + 1)}},
+		{"a run of a video longer than the maximum", video, Select{Frames: Consecutive(0, MaxVideoSamples+1)}},
 		{"a run of no frames of a video", video, Select{Frames: Consecutive(0, 0)}},
 		{"no times", video, Select{Frames: Times()}},
 		{"a negative index", anim, Select{Frames: Indices(1, -1)}},

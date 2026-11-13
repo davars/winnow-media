@@ -668,7 +668,7 @@ func TestCheckSeekTime(t *testing.T) {
 func TestCheckVideoInfo(t *testing.T) {
 	t.Parallel()
 	ok := videoInfo{streams: maxStreams, durationMS: maxDurationMS, width: maxDimension, height: maxDimension}
-	if err := checkVideoInfo(ok); err != nil {
+	if err := checkVideoInfo(ok, ceilingCaps); err != nil {
 		t.Fatalf("limits are inclusive: %v", err)
 	}
 	cases := map[string]videoInfo{
@@ -677,7 +677,7 @@ func TestCheckVideoInfo(t *testing.T) {
 		"width":    {streams: 1, width: maxDimension + 1, height: 1},
 	}
 	for name, v := range cases {
-		if err := checkVideoInfo(v); !errors.Is(err, ErrTooLarge) {
+		if err := checkVideoInfo(v, ceilingCaps); !errors.Is(err, ErrTooLarge) {
 			t.Errorf("%s: err = %v, want ErrTooLarge", name, err)
 		}
 	}

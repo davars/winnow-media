@@ -211,20 +211,20 @@ func TestConfigCaps(t *testing.T) {
 	requireTools(t, "magick", "ffmpeg", "ffprobe")
 	ctx := context.Background()
 	bad := map[string]Caps{
-		"MaxInputBytes negative":     {MaxInputBytes: -1},
-		"MaxFramePixels negative":    {MaxFramePixels: -1},
-		"MaxFramePixels over":        {MaxFramePixels: ceilingCaps.framePixels + 1},
-		"MaxReturnedPixels negative": {MaxReturnedPixels: -1},
-		"MaxDecodedPixels negative":  {MaxDecodedPixels: -1},
-		"MaxFrames negative":         {MaxFrames: -1},
-		"MaxFrames over":             {MaxFrames: maxAnimationFrames + 1},
+		"MaxInputBytes negative":      {MaxInputBytes: -1},
+		"MaxFramePixels negative":     {MaxFramePixels: -1},
+		"MaxFramePixels over":         {MaxFramePixels: ceilingCaps.framePixels + 1},
+		"MaxReturnedPixels negative":  {MaxReturnedPixels: -1},
+		"MaxDecodedPixels negative":   {MaxDecodedPixels: -1},
+		"MaxAnimationFrames negative": {MaxAnimationFrames: -1},
+		"MaxAnimationFrames over":     {MaxAnimationFrames: maxAnimationFrames + 1},
 	}
 	for name, c := range bad {
 		if _, err := NewProcessor(ctx, Config{Caps: c}); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	ceiling := Caps{MaxFramePixels: ceilingCaps.framePixels, MaxFrames: maxAnimationFrames, MaxInputBytes: 1 << 62}
+	ceiling := Caps{MaxFramePixels: ceilingCaps.framePixels, MaxAnimationFrames: maxAnimationFrames, MaxInputBytes: 1 << 62}
 	p, err := NewProcessor(ctx, Config{Caps: ceiling})
 	if err != nil {
 		t.Fatal(err)
@@ -278,8 +278,8 @@ func TestCapsAreEnforcedAtTheirLimit(t *testing.T) {
 			func(c *Caps, n int64) { c.MaxFramePixels = n }, animation,
 		},
 		{
-			"MaxFrames", func(t *testing.T) (string, int64) { return writeGIF(t, solid, 5), 5 },
-			func(c *Caps, n int64) { c.MaxFrames = int(n) }, animation,
+			"MaxAnimationFrames", func(t *testing.T) (string, int64) { return writeGIF(t, solid, 5), 5 },
+			func(c *Caps, n int64) { c.MaxAnimationFrames = int(n) }, animation,
 		},
 		{
 			"MaxDecodedPixels", func(t *testing.T) (string, int64) { return writeGIF(t, solid, 5), 5 * 64 * 48 },

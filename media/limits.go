@@ -155,21 +155,20 @@ func checkReturnedPixels(count, cw, ch int, c caps) error {
 }
 
 // checkVideoInfo refuses a probed video that has more streams, a longer
-// duration or a larger stored size than the caps allow.
-func checkVideoInfo(v videoInfo) error {
+// duration or a larger stored size than the caps allow. Rotation leaves the
+// pixel count alone, so the stored size is judged.
+func checkVideoInfo(v videoInfo, c caps) error {
 	if v.streams > maxStreams {
 		return tooLarge("container has %d streams, the limit is %d", v.streams, maxStreams)
 	}
 	if v.durationMS > maxDurationMS {
 		return tooLarge("video lasts %d ms, the limit is %d", v.durationMS, int64(maxDurationMS))
 	}
-	return checkVideoSize(v.width, v.height)
-}
-
-// checkVideoSize refuses a stream whose stored size exceeds maxDimension.
-func checkVideoSize(width, height int) error {
-	if width > maxDimension || height > maxDimension {
-		return tooLarge("video is %dx%d, the limit is %d on each side", width, height, maxDimension)
+	if v.width > maxDimension || v.height > maxDimension {
+		return tooLarge("video is %dx%d, the limit is %d on each side", v.width, v.height, maxDimension)
+	}
+	if px := int64(v.width) * int64(v.height); px > c.framePixels {
+		return tooLarge("video is %dx%d, %d pixels, the limit is %d", v.width, v.height, px, c.framePixels)
 	}
 	return nil
 }

@@ -393,6 +393,39 @@ func TestProbeCapsRefuseWithErrTooLargeBeforeAnyDecode(t *testing.T) {
 	}
 }
 
+// MaxFramePixels covers a video's stored size, inclusively, whether a probe
+// named the type or the bytes did.
+func TestVideoFramePixelsCapIsAppliedAtOpen(t *testing.T) {
+	t.Parallel()
+	for name, head := range map[string][]byte{
+		"named by a probe":   aviHead,
+		"named by the bytes": ftypBox("isom", "isom", "mp42"),
+	} {
+		for _, c := range []struct {
+			cap     int64
+			refused bool
+		}{{20_000, false}, {19_999, true}} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				p := requireProcessorWith(t, Config{Caps: Caps{MaxFramePixels: c.cap}})
+				p.run = func(_ context.Context, _ *os.File, tool string, _ ...string) (runResult, error) {
+					if tool != "ffprobe" {
+						return runResult{}, errors.New("unexpected tool " + tool)
+					}
+					return runResult{Stdout: probeOutput(200, 100, 1)}, nil
+				}
+				src, _, err := p.Open(context.Background(), writeFile(t, "input", head), OpenOptions{})
+				if src != nil {
+					_ = src.Close()
+				}
+				if got := errors.Is(err, ErrTooLarge); got != c.refused || (err != nil && !got) {
+					t.Errorf("200x100 against a cap of %d: err = %v, want ErrTooLarge = %v", c.cap, err, c.refused)
+				}
+			})
+		}
+	}
+}
+
 func TestProbeFailuresThatSayNothingOfTheFileAreNotRefusals(t *testing.T) {
 	t.Parallel()
 	for name, probeErr := range map[string]error{
