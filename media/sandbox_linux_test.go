@@ -900,6 +900,21 @@ func TestCPUBackstopAndFallbackAttribution(t *testing.T) {
 	}
 }
 
+func TestOnlyTheWatchersOwnKillIsTheCPULimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, c := range []struct {
+		sig  syscall.Signal
+		want bool
+	}{{syscall.SIGKILL, true}, {syscall.SIGSEGV, false}, {syscall.SIGABRT, false}} {
+		res := toolResult{Signal: int(c.sig), CPULimit: true, Usage: &Usage{}}
+		err := runError(ctx, "tool", res, nil, nil, 10*time.Second)
+		if got := errors.Is(err, ErrTimeLimit); got != c.want {
+			t.Errorf("watcher flag with %v: ErrTimeLimit = %v, want %v (%v)", c.sig, got, c.want, err)
+		}
+	}
+}
+
 // The helper itself stops a tool at the budget, on the tool's process-wide
 // CPU clock, well before the kernel's backstop a second later: this proves
 // that clock is readable by the helper under the sandbox's filter and that the

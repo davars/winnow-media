@@ -100,7 +100,9 @@ func runError(ctx context.Context, name string, res toolResult, err error, tail 
 		return fmt.Errorf("%s: %s", name, res.Err)
 	case res.Signal != 0:
 		te := &ToolError{Tool: name, ExitCode: -1, Signal: syscall.Signal(res.Signal), Stderr: tail}
-		if res.CPULimit || reachedCPULimit(res, cpuLimit) {
+		// The watcher can read the budget as reached just after the tool died
+		// of something else; only its own kill, a SIGKILL, counts.
+		if (res.CPULimit && syscall.Signal(res.Signal) == syscall.SIGKILL) || reachedCPULimit(res, cpuLimit) {
 			return fmt.Errorf("%w: %w", ErrTimeLimit, te)
 		}
 		return te

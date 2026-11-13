@@ -359,9 +359,13 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	} else {
 		close(watched)
 	}
-	waitErr := cmd.Wait()
+	// The watcher names the tool by pid, so it must stop before the tool is
+	// reaped: an unreaped tool keeps its pid, a reaped one can lend it to an
+	// unrelated process.
+	awaitExit(cmd.Process.Pid)
 	close(stopWatch)
 	<-watched
+	waitErr := cmd.Wait()
 	var res helperResult
 	res.CPULimit = cpuLimit.Load()
 	var exitErr *exec.ExitError
@@ -384,6 +388,24 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	}
 	res.Usage = usage
 	return res
+}
+
+// awaitExit blocks until process pid has exited, without reaping it (waitid
+// with WNOWAIT). It returns at once on an error other than EINTR; the caller's
+// Wait then reports it.
+func awaitExit(pid int) {
+	const (
+		pPID    = 1
+		wExited = 4
+		wNoWait = 0x1000000
+	)
+	var info [128]byte // siginfo_t
+	for {
+		_, _, e := syscall.Syscall6(syscall.SYS_WAITID, pPID, uintptr(pid), uintptr(unsafe.Pointer(&info[0])), wExited|wNoWait, 0, 0)
+		if e != syscall.EINTR {
+			return
+		}
+	}
 }
 
 // cpuPollInterval is how often the helper compares the tool's CPU time with
