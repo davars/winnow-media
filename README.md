@@ -145,7 +145,8 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
 `x86_64-darwin` and `aarch64-darwin`; `checks` and `devShells` are Linux only.
 
 - `packages.<system>.<tool>` for each of `ffmpeg`, `imagemagick` and
-  `webp-frames`; the first two are taken unmodified from this flake's pinned
+  `webp-frames`. `ffmpeg` is nixpkgs' `ffmpeg-headless` (ffmpeg and ffprobe
+  only) and `imagemagick` is unmodified, both from this flake's pinned
   nixpkgs.
 - `packages.<system>.default`: a directory containing every program of all
   the tools, flat (`<dir>/magick`, not `<dir>/bin/magick`).

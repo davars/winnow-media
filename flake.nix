@@ -36,7 +36,9 @@
       };
 
       toolPackages = pkgs: nixpkgs.lib.genAttrs toolNames (name:
-        if ownTools ? ${name} then ownTools.${name} pkgs else pkgs.${name});
+        if ownTools ? ${name} then ownTools.${name} pkgs
+        else if name == "ffmpeg" then pkgs.ffmpeg-headless
+        else pkgs.${name});
 
       # Programs the tests use to build and inspect inputs; they are not part
       # of the tool closure.
