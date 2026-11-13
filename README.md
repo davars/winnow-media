@@ -150,6 +150,8 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
   nixpkgs.
 - `packages.<system>.default`: a directory containing every program of all
   the tools, flat (`<dir>/magick`, not `<dir>/bin/magick`).
+- `lib.version`: the release version. The commit tagged `vX.Y.Z` carries
+  `X.Y.Z`; the next commit moves it to a `-dev` value.
 - `lib.toolDir { system, tools }`: the same kind of directory built from a
   named subset, e.g. `tools = [ "imagemagick" "ffmpeg" ]`. An unknown name
   fails evaluation.
@@ -215,10 +217,10 @@ separate contents list.
 The Go module version in `go.mod` and the flake input in `flake.lock` must
 name the same commit. `lib.assertGoModPin` reads a `go.mod` and compares the
 12-hex-digit commit suffix of its `github.com/davars/winnow-media`
-pseudo-version with the revision this flake was locked at. It returns `true`
-on a match and throws, naming both values, on a mismatch, a missing
-requirement, a tagged (non-pseudo) version, or a `replace` directive for the
-module. When the input has no revision (a dirty or `path:` override) it prints
+pseudo-version with the revision this flake was locked at; a tagged
+version must equal `v` plus `lib.version`. It returns `true` on a match and
+throws, naming both values, on a mismatch, a missing requirement, a tag other
+than `v` plus `lib.version`, or a `replace` directive for the module. When the input has no revision (a dirty or `path:` override) it prints
 a warning and returns `true`.
 
 Wire it into the evaluation of the package and of your CI check:

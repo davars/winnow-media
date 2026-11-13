@@ -63,6 +63,11 @@
           '') (map pick tools)}
         '';
 
+      # The release version, exported as lib.version. The commit that is
+      # tagged vX.Y.Z carries version "X.Y.Z"; the next commit moves it to a
+      # "-dev" value, so an untagged commit never matches a tag.
+      version = "0.0.0-dev";
+
       modulePath = "github.com/davars/winnow-media";
 
       # The commit suffix of a pseudo-version, in any of Go's three forms
@@ -72,7 +77,8 @@
         in if m == null then null else builtins.elemAt m 1;
 
       # Returns true when go.mod's requirement of this module names the
-      # commit `rev`; throws otherwise, so a mismatch fails evaluation.
+      # commit `rev` (a pseudo-version) or is the tag "v" + version; throws
+      # otherwise, so a mismatch fails evaluation.
       checkGoModPin = { goModText, rev }:
         let
           lines = nixpkgs.lib.splitString "\n" goModText;
@@ -81,8 +87,8 @@
           isReplace = line:
             builtins.match ".*${nixpkgs.lib.escapeRegex modulePath}([[:space:]].*)?=>.*" line != null;
           reqs = builtins.filter (m: m != null) (map reqOf lines);
-          version = builtins.elemAt (builtins.head reqs) 1;
-          suffix = pseudoSuffix version;
+          goModVersion = builtins.elemAt (builtins.head reqs) 1;
+          suffix = pseudoSuffix goModVersion;
           want = builtins.substring 0 12 rev;
         in
         if builtins.any isReplace lines then
@@ -90,7 +96,8 @@
         else if reqs == [ ] then
           throw "winnow-media: go.mod has no requirement for ${modulePath}"
         else if suffix == null then
-          throw "winnow-media: go.mod requires ${modulePath} ${version}, which is not a pseudo-version; only pseudo-versions are supported"
+          if goModVersion == "v${version}" then true
+          else throw "winnow-media: go.mod requires ${modulePath} ${goModVersion}, which is neither a pseudo-version nor this flake's version v${version}; move go.mod and flake.lock together"
         else if suffix != want then
           throw "winnow-media: go.mod pins ${modulePath} at ${suffix} but flake.lock locks ${want}; move go.mod and flake.lock together"
         else true;
@@ -118,7 +125,10 @@
           { name = "next-patch pseudo-version"; want = true; text = "require ${modulePath} v1.2.4-0.20261103230040-104cc9a7f5f4\n"; }
           { name = "mismatched hash"; want = false; text = "require ${modulePath} v0.0.0-20261103230040-aaaaaaaaaaaa\n"; }
           { name = "missing requirement"; want = false; text = "module x\n\nrequire github.com/other/y v1.0.0\n"; }
-          { name = "tag version"; want = false; text = "require ${modulePath} v1.2.3\n"; }
+          { name = "tag equal to the flake version"; want = true; text = "require ${modulePath} v${version}\n"; }
+          { name = "tag equal to the flake version, indirect"; want = true; text = "require (\n\t${modulePath} v${version} // indirect\n)\n"; }
+          { name = "tag other than the flake version"; want = false; text = "require ${modulePath} v${version}.1\n"; }
+          { name = "older tag"; want = false; text = "require ${modulePath} v1.2.3\n"; }
           { name = "replace directive"; want = false; text = "require ${modulePath} ${good}\n\nreplace ${modulePath} => ../winnow-media\n"; }
           { name = "replace directive in block"; want = false; text = "require ${modulePath} ${good}\n\nreplace (\n\t${modulePath} => ../winnow-media\n)\n"; }
         ];
@@ -259,7 +269,7 @@
         };
       });
 
-      lib = { inherit toolDir ldflags checkGoModPin assertGoModPin; };
+      lib = { inherit version toolDir ldflags checkGoModPin assertGoModPin; };
 
       checks = nixpkgs.lib.genAttrs systems (system:
         let s = perSystem system; in
