@@ -10,7 +10,7 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       toolSystems = systems ++ [ "x86_64-darwin" "aarch64-darwin" ];
 
-      toolNames = [ "exiftool" "file" "ffmpeg" "imagemagick" "poppler-utils" "pandoc" "catdoc" "lynx" "webp-frames" ];
+      toolNames = [ "ffmpeg" "imagemagick" "webp-frames" ];
 
       # Tools this repository builds. webp-frames links the pinned libwebp,
       # the build ImageMagick links, so it adds no store path of its own
@@ -38,9 +38,9 @@
       toolPackages = pkgs: nixpkgs.lib.genAttrs toolNames (name:
         if ownTools ? ${name} then ownTools.${name} pkgs else pkgs.${name});
 
-      # Programs the tests use to build inputs; they are not part of the tool
-      # closure.
-      testToolPackages = pkgs: [ pkgs.libwebp ];
+      # Programs the tests use to build and inspect inputs; they are not part
+      # of the tool closure.
+      testToolPackages = pkgs: [ pkgs.libwebp pkgs.exiftool ];
 
       # Unknown names fail evaluation rather than being skipped.
       toolDir = { system, tools }:

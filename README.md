@@ -1,7 +1,7 @@
 # winnow-media
 
 A Go library and Nix flake for running external media tools (ImageMagick,
-FFmpeg, Poppler, pandoc and friends) from a pinned, reproducible tool
+FFmpeg and webp-frames) from a pinned, reproducible tool
 closure. Licensed under AGPL-3.0.
 
 The module has two packages and a flake:
@@ -144,9 +144,9 @@ request per 1536Mi pod (see [the measurements](docs/measurements.md#memory-profi
 Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
 `x86_64-darwin` and `aarch64-darwin`; `checks` and `devShells` are Linux only.
 
-- `packages.<system>.<tool>` for each of `exiftool`, `file`, `ffmpeg`,
-  `imagemagick`, `poppler-utils`, `pandoc`, `catdoc` and `lynx`, taken
-  unmodified from this flake's pinned nixpkgs.
+- `packages.<system>.<tool>` for each of `ffmpeg`, `imagemagick` and
+  `webp-frames`; the first two are taken unmodified from this flake's pinned
+  nixpkgs.
 - `packages.<system>.default`: a directory containing every program of all
   the tools, flat (`<dir>/magick`, not `<dir>/bin/magick`).
 - `lib.toolDir { system, tools }`: the same kind of directory built from a
@@ -158,7 +158,7 @@ Systems: `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`,
   see [the pin check](#the-pin-check).
 - `checks.<system>`: `test` (go test, with all the tools on `PATH` so the
   tool-dependent tests run instead of skipping; the WebP tests also use
-  `cwebp` and `webpmux` from libwebp, on the test `PATH` only), `lint`
+  `cwebp` and `webpmux` from libwebp and exiftool, on the test `PATH` only), `lint`
   (golangci-lint), `gofumpt`, `pin` (the fixtures for the pin check) and
   `closure`, which builds a small probe binary the way a consumer would and
   asserts that it resolves `magick` and `webp-frames` from the injected
