@@ -41,8 +41,9 @@
         else pkgs.${name});
 
       # Programs the tests use to build and inspect inputs; they are not part
-      # of the tool closure.
-      testToolPackages = pkgs: [ pkgs.libwebp pkgs.exiftool ];
+      # of the tool closure. cjpeg is in libjpeg-turbo's bin output, setsid in
+      # util-linux.
+      testToolPackages = pkgs: [ pkgs.libwebp pkgs.exiftool pkgs.libjpeg_turbo.bin pkgs.util-linux ];
 
       # Unknown names fail evaluation rather than being skipped.
       toolDir = { system, tools }:
