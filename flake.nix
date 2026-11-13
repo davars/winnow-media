@@ -67,7 +67,7 @@
       # The release version, exported as lib.version. The commit that is
       # tagged vX.Y.Z carries version "X.Y.Z"; the next commit moves it to a
       # "-dev" value, so an untagged commit never matches a tag.
-      version = "1.0.0-dev";
+      version = "1.0.0";
 
       modulePath = "github.com/davars/winnow-media";
 
