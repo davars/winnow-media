@@ -428,8 +428,8 @@ func reducedTIFF() []byte {
 	return out
 }
 
-// ImageMagick names a camera raw file a TIFF and decodes its preview without
-// error; the decoder reports the directory it read as a reduced-resolution
+// ImageMagick names a camera raw file other than a DNG, or a DNG when only
+// TIFF is configured, a TIFF and decodes its preview without error; the decoder reports the directory it read as a reduced-resolution
 // image (%[tiff:subfiletype] is REDUCEDIMAGE), so the call must not succeed
 // with that preview as the file's first image.
 func TestReducedResolutionTIFFIsNotDecodedAsTheImage(t *testing.T) {

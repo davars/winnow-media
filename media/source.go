@@ -36,7 +36,8 @@ const (
 type OpenOptions struct {
 	// Type, when set, is the media type of the input, in place of the one
 	// its bytes name. It must be in Config.Types. It is how a file whose
-	// bytes identify no type (see Types) is read.
+	// bytes identify no type, or none that Config.Types lets the library
+	// identify (see Types), is read.
 	Type string
 	// Orientation, 1 to 8 as in EXIF, is the orientation of a still or
 	// animation whose header reports none; 0 leaves the file's own. It is

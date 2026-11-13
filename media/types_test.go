@@ -15,8 +15,8 @@ import (
 type typeFixture struct {
 	build func(t *testing.T) string
 	// named is set for a type whose bytes no sniff or ImageMagick detection
-	// names (TGA, ICO, G3) or names as another type (DNG, a TIFF): its
-	// fixture decodes only when the caller names the type.
+	// names (TGA, ICO, G3): its fixture decodes only when the caller names
+	// the type.
 	named bool
 	// w and h are the size of the decoded first image.
 	w, h int
@@ -177,7 +177,8 @@ var typeFixtures = map[string]typeFixture{
 	"image/g3fax":              {build: gradient(".g3"), named: true, w: 2592, h: 24},
 	"image/x-adobe-dng": {
 		build: func(t *testing.T) string { return writeFile(t, "raw.dng", dngBytes()) },
-		named: true, w: 128, h: 128,
+		w:     128,
+		h:     128,
 	},
 
 	"video/mp4": {build: func(t *testing.T) string { return sdrClip(t, requireFFmpeg(t), "160x120", 10, 1) }},

@@ -142,8 +142,10 @@ func (p *Processor) detectedType(formatName string, preferMOV bool) (typ, demuxe
 
 // coderTypes maps the %m ImageMagick reports for content its own detection
 // names to the type, for the types that sniff does not name. Content of TGA,
-// ICO, G3 and DNG is never named this way: ImageMagick cannot identify TGA,
-// ICO or G3 from their bytes, and calls a DNG a TIFF.
+// ICO and G3 is never named this way: ImageMagick cannot identify them from
+// their bytes. DNG content is reached through the TIFF reader, which hands it
+// to the DNG coder, so it is named this way only when the TIFF coder is
+// allowed too.
 var coderTypes = func() map[string]string {
 	m := map[string]string{}
 	for typ, e := range typeTable {
@@ -165,11 +167,12 @@ var coderTypes = func() map[string]string {
 // those can run other programs or open other files. WMV is the ASF type
 // (video/x-ms-asf).
 //
-// Four of the types are not identified from a file's bytes and are read only
+// Three of the types are not identified from a file's bytes and are read only
 // when OpenOptions.Type names them: image/x-tga, image/vnd.microsoft.icon
-// (ICO and CUR), image/g3fax and image/x-adobe-dng. A TIFF whose first image
-// is a reduced-resolution preview, as in a camera raw file, is likewise
-// refused unless its type is named.
+// (ICO and CUR) and image/g3fax. A DNG is identified from its bytes only when
+// image/tiff is also among Config.Types; otherwise it must be named. A TIFF
+// whose first image is a reduced-resolution preview, as in a camera raw file,
+// is refused unless its type is named.
 //
 // A type is read by the tools found at run time: an ImageMagick or ffmpeg
 // build other than the flake's may lack the decoder for one.

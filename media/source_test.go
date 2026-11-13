@@ -799,16 +799,42 @@ func TestSelectsThatDoNotApplyAreRefusedBeforeAnyToolRuns(t *testing.T) {
 	}
 }
 
+func TestDNGIsIdentifiedFromItsBytes(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	src := openSourceOn(t, p, typeFixtures["image/x-adobe-dng"].build(t), OpenOptions{})
+	if info := src.Info(); info.Type != "image/x-adobe-dng" || info.Kind != Still {
+		t.Fatalf("Info = %+v, want a still of type image/x-adobe-dng", info)
+	}
+}
+
+// A DNG is reached through ImageMagick's TIFF reader, so without image/tiff
+// among the types no coder reads its bytes and it must be named.
+func TestDNGWithoutTIFFMustBeNamed(t *testing.T) {
+	t.Parallel()
+	p := requireProcessorWith(t, Config{Types: []string{"image/x-adobe-dng"}})
+	path := typeFixtures["image/x-adobe-dng"].build(t)
+	if src, _, err := p.Open(context.Background(), path, OpenOptions{}); !errors.Is(err, ErrUnsupportedType) {
+		if err == nil {
+			_ = src.Close()
+		}
+		t.Fatalf("err = %v, want ErrUnsupportedType", err)
+	}
+	src := openSourceOn(t, p, path, OpenOptions{Type: "image/x-adobe-dng"})
+	if info := src.Info(); info.Type != "image/x-adobe-dng" || info.Kind != Still {
+		t.Fatalf("Info = %+v, want a still of type image/x-adobe-dng", info)
+	}
+}
+
 func TestOpenTypeReadsWhatNoSniffNames(t *testing.T) {
 	t.Parallel()
 	p := requireProcessor(t)
 	ctx := context.Background()
-	for _, typ := range []string{"image/x-tga", "image/vnd.microsoft.icon", "image/g3fax", "image/x-adobe-dng"} {
+	for _, typ := range []string{"image/x-tga", "image/vnd.microsoft.icon", "image/g3fax"} {
 		t.Run(typ, func(t *testing.T) {
 			t.Parallel()
 			f := typeFixtures[typ]
 			path := f.build(t)
-			// ImageMagick names a DNG a TIFF; the others it cannot name.
 			if src, _, err := p.Open(ctx, path, OpenOptions{}); err == nil {
 				defer func() { _ = src.Close() }()
 				if src.Info().Type == typ {
