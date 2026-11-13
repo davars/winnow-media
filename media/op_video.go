@@ -29,8 +29,8 @@ const hdrToneMap = "zscale=t=linear:npl=203,format=gbrpf32le,zscale=p=bt709," +
 // image.
 //
 // HDR is scaled before it is tone-mapped: the tone-map runs in 32-bit float
-// and its memory grows with the frame, so it is cheaper on the small target.
-// The scale writes 4:4:4 because the target size can be odd, and zscale
+// and its memory grows with the frame, so it is cheaper on the small encoding.
+// The scale writes 4:4:4 because the encoding size can be odd, and zscale
 // rejects a chroma-subsampled frame whose dimensions are not even; the 16-bit
 // format keeps precision for the linearization. A cropped frame can have odd
 // dimensions whatever its scale, so an HDR frame with a crop always takes that
@@ -63,9 +63,9 @@ func cropFilter(r region) string {
 		r.x+r.width, r.y+r.height, r.width, r.height, r.x, r.y)
 }
 
-// videoReductionMargin is how many times the largest target, in each
+// videoReductionMargin is how many times the largest encoding, in each
 // dimension, ffmpeg's reduced decode of an SDR frame covers. HDR is reduced to
-// the target itself, because its tone map holds floats. It is the 2x margin
+// the encoding itself, because its tone map holds floats. It is the 2x margin
 // the pipeline plan chose for every decode-stage reduction, from measuring
 // the loss in similarity against a full decode.
 const videoReductionMargin = 2

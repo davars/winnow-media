@@ -44,7 +44,7 @@ type videoSource struct {
 
 // videoFromProbe makes the source of the samples the request names of a video
 // with the given probe. It decodes nothing, since the size to decode at depends
-// on the targets of the encode.
+// on the encodings of the encode.
 func (e toolEnv) videoFromProbe(req openRequest, info videoInfo) (*frameSource, error) {
 	v := &videoSource{dec: req.dec, path: req.path, info: info, run: req.video.run}
 	var err error
@@ -76,7 +76,7 @@ func (s *frameSource) setSamples(n int) {
 
 // decodeVideo samples the video at the size the encodes of encs need, unless
 // the samples already decoded serve them. A source decoded for a smaller
-// target is decoded again. A failed decode leaves no samples.
+// encoding is decoded again. A failed decode leaves no samples.
 func (s *frameSource) decodeVideo(ctx context.Context, r region, encs []encoding) error {
 	v := s.video
 	w, h := v.info.upright()

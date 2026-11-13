@@ -24,7 +24,8 @@ var (
 	// than a Processor accepts, and when a header read reaches ImageMagick's
 	// list length ceiling (2048 scenes). Retrying the same call on the same
 	// Processor cannot succeed; a smaller selection or a Processor with
-	// higher Caps may.
+	// higher Caps, or with a larger Resources.Disk where a refusal depends on
+	// it, may.
 	ErrTooLarge = errors.New("input too large")
 
 	// ErrTimeLimit is returned, wrapped with the *ToolError of the run, when it failed, when a

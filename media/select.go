@@ -60,7 +60,7 @@ func Times(t ...time.Duration) FrameSelection {
 
 // Consecutive selects n consecutive frames starting at the one shown at start,
 // as Times reads a time; fewer when the end is reached. A video reads them in
-// one decode and refuses more than 64. A still refuses it.
+// one decode and refuses more than MaxVideoSamples. A still refuses it.
 func Consecutive(start time.Duration, n int) FrameSelection {
 	return FrameSelection{kind: framesConsecutive, start: start, n: n}
 }
@@ -84,9 +84,9 @@ func durMS(d time.Duration) int64 {
 	return -1
 }
 
-// MaxVideoSamples is the most frames one Encode call reads from a video: the
-// most Even takes samples, Times takes times and Consecutive takes frames
-// for a video. A larger count is refused with ErrInvalidRequest.
+// MaxVideoSamples is the most frames one Encode call reads from a video, so
+// the largest n of Even and Consecutive and the most times Times may give; a
+// larger count is refused with ErrInvalidRequest.
 const MaxVideoSamples = 64
 
 // indexList returns the ascending distinct indices f holds, each below n.

@@ -527,11 +527,11 @@ func (s *Source) encode(ctx context.Context, dir string, sel Select, encodings [
 		return nil, m.usage, err
 	}
 	defer s.unlock()
-	if err := requireEmptyDir(dir); err != nil {
-		return nil, m.usage, err
-	}
 	if s.closed {
 		return nil, m.usage, fmt.Errorf("source: %w", ErrClosed)
+	}
+	if err := requireEmptyDir(dir); err != nil {
+		return nil, m.usage, err
 	}
 	if err := s.checkIdentity(); err != nil {
 		return nil, m.usage, err

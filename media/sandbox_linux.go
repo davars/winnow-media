@@ -415,8 +415,9 @@ func readProbe(base uint64, limits rlimits) *probeReport {
 		_ = syscall.Close(fds[1])
 	}
 	// A null parameter block: a call that is allowed fails with EFAULT or
-	// ENOSYS, never EPERM, and one that is denied by the filter never reaches
-	// the kernel.
+	// ENOSYS, or with EPERM when io_uring is disabled by sysctl or a container
+	// profile, where it is unusable anyway; one denied by the filter never
+	// reaches the kernel.
 	if _, _, e := syscall.RawSyscall(sysIoUringSetup, 1, 0, 0); e != 0 {
 		r.IoUringSetupErrno = int(e)
 	}

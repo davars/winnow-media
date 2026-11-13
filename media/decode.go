@@ -39,7 +39,7 @@ func orientationNumber(name string) (int, error) {
 	return 0, fmt.Errorf("unknown orientation %q", name)
 }
 
-// decodeMargin is how many times the largest target a reduced decode of a
+// decodeMargin is how many times the largest encoding a reduced decode of a
 // JPEG or a still WebP covers in each dimension.
 const decodeMargin = 2
 
@@ -201,7 +201,7 @@ type frameSource struct {
 	// first encode.
 	video *videoSource
 	// webp is set for a still WebP, which webp-frames decodes whatever the
-	// targets. exif is the name of the orientation ImageMagick applies to it,
+	// encodings. exif is the name of the orientation ImageMagick applies to it,
 	// "" for none, once exifKnown; the orientation OpenOptions gives replaces
 	// it. webp-frames applies none.
 	webp      bool
@@ -556,7 +556,7 @@ func (s *frameSource) storedSizes(sizes [][2]int) [][2]int {
 }
 
 // webpDecodeSize returns the size a still WebP is decoded at for encodes at
-// encs: the stored size, or a reduction when every target needs a resize and
+// encs: the stored size, or a reduction when every encoding needs a resize and
 // twice the largest is at most 7/8 of the stored size on both sides, the
 // smallest step a JPEG reduction takes (a smaller reduction is not worth the
 // scaler's different upsampling). libwebp scales to any size, so a reduction
@@ -587,7 +587,7 @@ func (s *frameSource) webpDecodeSize(encs []encoding) [2]int {
 	return decoded
 }
 
-// encodeStills runs the still encode for the targets and returns what each
+// encodeStills runs the still encode for the encodings and returns what each
 // reported: one ImageMagick run for all of them, except for a WebP.
 func (s *frameSource) encodeStills(ctx context.Context, r region, encs []encoding, paths []string) ([]encodedFrame, error) {
 	if s.webp {
