@@ -25,6 +25,14 @@ var heicFixtures = map[string]func(t *testing.T, env toolEnv, path string){
 	"tenbit-64x32": func(t *testing.T, env toolEnv, path string) {
 		magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000", "-depth", "10", "-quality", "100", path)
 	},
+	// A 64x48 red-blue gradient, opaque and at half alpha.
+	"rgb-64x48": func(t *testing.T, env toolEnv, path string) {
+		magick(t, env, "-size", "64x48", "gradient:red-blue", path)
+	},
+	"alpha-64x48": func(t *testing.T, env toolEnv, path string) {
+		magick(t, env, "-size", "64x48", "gradient:red-blue",
+			"-alpha", "set", "-channel", "A", "-evaluate", "set", "50%", "+channel", path)
+	},
 	// A gradient whose alpha runs from opaque to transparent.
 	"alpha-64x32": func(t *testing.T, env toolEnv, path string) {
 		magick(t, env, "-size", "64x32", "gradient:#0020ff-#ffb000",
@@ -59,8 +67,8 @@ func TestRegenerateHEICFixtures(t *testing.T) {
 	}
 }
 
-// heicFixture copies the named committed fixture and stages the copy.
-func heicFixture(t *testing.T, name string) string {
+// heicFixtureData returns the bytes of the named committed fixture.
+func heicFixtureData(t *testing.T, name string) []byte {
 	t.Helper()
 	if _, ok := heicFixtures[name]; !ok {
 		t.Fatalf("no HEIC fixture %q", name)
@@ -69,6 +77,13 @@ func heicFixture(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+// heicFixture copies the named committed fixture and stages the copy.
+func heicFixture(t *testing.T, name string) string {
+	t.Helper()
+	data := heicFixtureData(t, name)
 	path := filepath.Join(t.TempDir(), name+".heic")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)

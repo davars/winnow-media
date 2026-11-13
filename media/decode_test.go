@@ -236,9 +236,16 @@ func TestHeaderReadDeclaresWhatTheDecoderDoes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(dir, c.name)
-			args := append([]string{"-size", "64x48", "gradient:red-blue"}, c.args...)
-			if out, err := env.run(ctx, "magick", append(args, path)...); err != nil {
-				t.Fatalf("cannot write %s: %v %s", c.name, err, out.Stdout)
+			if fixture, ok := heicFixtureOf(c.name); ok {
+				// Not every platform's ImageMagick can encode HEIC.
+				if err := os.WriteFile(path, heicFixtureData(t, fixture), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				args := append([]string{"-size", "64x48", "gradient:red-blue"}, c.args...)
+				if out, err := env.run(ctx, "magick", append(args, path)...); err != nil {
+					t.Fatalf("cannot write %s: %v %s", c.name, err, out.Stdout)
+				}
 			}
 			ref := path + "[0]"
 			scenes, err := identifyHeaders(ctx, env, ref, true)
@@ -273,6 +280,18 @@ func TestHeaderReadDeclaresWhatTheDecoderDoes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// heicFixtureOf names the committed HEIC fixture that stands for the case
+// file name, when it is one of the HEIC cases.
+func heicFixtureOf(name string) (string, bool) {
+	switch name {
+	case "rgb.heic":
+		return "rgb-64x48", true
+	case "alpha.heic":
+		return "alpha-64x48", true
+	}
+	return "", false
 }
 
 // pngDeclaresSoft reads the IHDR colour type and the chunk list: palette,
