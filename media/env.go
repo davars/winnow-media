@@ -143,8 +143,10 @@
 // once in a probe mode that tries socket, socketpair and io_uring_setup under
 // the filter and reads the limits back; it requires the calls denied and every
 // limit set. The sandbox needs
-// Linux 5.11 or later on amd64 or arm64; elsewhere, and on an older kernel,
-// NewProcessor returns an error unless Config.Unsandboxed is set. That runs each
+// Linux 5.11 or later on amd64 or arm64; elsewhere on Linux or macOS, and on
+// an older kernel, NewProcessor returns an error unless Config.Unsandboxed is
+// set. The package builds on Linux and macOS only: on any other GOOS the
+// build fails. That runs each
 // tool directly, in a process group that is killed with the call and when the
 // tool exits, with no seccomp filter, rlimits or subreaper; the gate, caps,
 // environment, policy and the Resources values that reach the policy and the
