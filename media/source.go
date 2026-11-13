@@ -15,7 +15,9 @@ import (
 	"time"
 )
 
-// Kind is how a Source's frames are read.
+// Kind is how a Source's frames are read; the package documentation's Kinds
+// section describes each. Later versions may add kinds, so a switch over a
+// Kind needs a default case.
 type Kind string
 
 // The kinds of Source.
@@ -23,67 +25,69 @@ const (
 	// Still is an image file, possibly of several images (TIFF pages, icon
 	// sizes).
 	Still Kind = "still"
-	// Animation is a GIF or animated WebP.
+	// Animation is a GIF, whatever its frame count, or an animated WebP.
 	Animation Kind = "animation"
 	// Video is a video file.
 	Video Kind = "video"
 )
 
-// OpenOptions are what Open cannot learn from the file's bytes.
+// OpenOptions are what Open cannot learn from the file's bytes, and what the
+// Source is to keep.
 type OpenOptions struct {
-	// Type, when set, is the media type of the input: it must be in
-	// Config.Types, and the decoder is pinned to it, replacing the type the
-	// bytes and ImageMagick's detection name. It is how a file with no
-	// signature (TGA, ICO and CUR, G3) or one detection names differently
-	// (DNG) is read.
+	// Type, when set, is the media type of the input, in place of the one
+	// its bytes name. It must be in Config.Types. It is how a file whose
+	// bytes identify no type (see Types) is read.
 	Type string
 	// Orientation, 1 to 8 as in EXIF, is the orientation of a still or
-	// animation whose header read reports none; 0 leaves the file's own. It
-	// is an error for a video.
+	// animation whose header reports none; 0 leaves the file's own. It is
+	// refused for a video.
 	Orientation int
-	// KeepDecode keeps a full-size decode of a still between Encode calls, in
-	// the Source's private scratch, up to half of Resources.Disk for each
-	// Source (the other half is room for the copy a later Encode reads). Only
-	// the images the latest Encode selected stay kept. A later Encode of a
-	// kept image reads the region it needs from the decode and writes the
-	// bytes an Encode from a full-size decode would, which are not those of
-	// an Encode without KeepDecode that decodes a JPEG or a still WebP reduced.
-	// The Source never decodes a KeepDecode still reduced, so its frame and pixel
-	// caps judge the full decode; an image over them is encoded as without
-	// KeepDecode, as is a type or image whose kept decode would not be exact (more
-	// than 16 bits a channel, floating-point samples, a colorspace a PAM
-	// does not carry) or that does not fit. Animations and videos ignore
-	// KeepDecode. Source.KeptBytes reports what is held.
+	// KeepDecode keeps a full-size decode of a still on disk, so that later
+	// Encodes of the same image skip the decode: set it for a still that will
+	// be encoded more than once, such as an overview and then regions of it.
+	// Animations and videos ignore it, so it may be set whatever the file.
+	//
+	// A kept decode takes up to 10 bytes a pixel under Config.Dir, and one
+	// Source keeps at most half of Resources.Disk; Source.KeptBytes reports
+	// the total. Only the images the latest Encode selected stay kept. An
+	// image that cannot be kept, because its format has no exact kept form,
+	// it does not fit, or its full-size decode is over the caps, is encoded
+	// as it would be without KeepDecode. With KeepDecode, the output bytes of
+	// a JPEG or still WebP can differ from those without it.
 	KeepDecode bool
 }
 
-// Info describes a Source. It is a snapshot: a later Encode can settle a size
-// it left open.
+// Info describes a Source. It is a snapshot: an Encode can settle a still's
+// size (see Upright).
 type Info struct {
 	// Type is the media type the input was read as.
 	Type string
+	// Kind says which of Images, Animation and Video describes the Source.
 	Kind Kind
-	// Width and Height are the size of the first frame or image as shown:
-	// upright when Upright, else as stored.
+	// Width and Height are the size of the first frame or image: as shown
+	// when Upright is set, else as stored.
 	Width, Height int
-	// Upright says Width and Height are upright; otherwise they are the size
-	// as stored, and an Encode of that image settles them.
+	// Upright says that Width and Height are the size as shown, after the
+	// orientation or rotation. It is always set for an animation or video. A
+	// still can leave it unset: when neither its header nor OpenOptions gives
+	// an orientation, only a decode shows whether the picture is turned, and
+	// Upright is set once an Encode has decoded the image. A Region is in
+	// upright pixels: to choose one for such a still, encode the whole image
+	// first and read Image.Region.
 	Upright bool
-	// Orientation is the EXIF orientation 1 to 8 the header read reported or
-	// OpenOptions gave; 0 when neither did.
+	// Orientation is the EXIF orientation, 1 to 8, that the header reported
+	// or OpenOptions gave; 0 when neither did.
 	Orientation int
 	// OrientationGiven is set when Orientation is the one OpenOptions gave,
-	// the file's header having reported none; it is false when the file's own
-	// orientation applies or neither exists.
+	// the file's header having reported none.
 	OrientationGiven bool
-	// Images describes each image of a Still, in the order Indices selects
-	// them; its length is the number of images. It is nil unless Kind is
-	// Still.
+	// Images describes each image of a Still, in the order Indices numbers
+	// them. It is nil unless Kind is Still.
 	Images []ImageInfo
-	// Animation is the animation's facts when Kind is Animation; the zero
-	// value otherwise.
+	// Animation describes an Animation; it is the zero value for any other
+	// Kind.
 	Animation AnimationInfo
-	// Video is the video's facts when Kind is Video; the zero value otherwise.
+	// Video describes a Video; it is the zero value for any other Kind.
 	Video VideoInfo
 }
 
@@ -91,8 +95,8 @@ type Info struct {
 type AnimationInfo struct {
 	// Frames is the number of frames.
 	Frames int
-	// Delays is the display delay of each frame, a delay below 20 ms counting
-	// as 100 ms, as browsers display it.
+	// Delays is how long each frame is displayed. A stored delay below 20 ms
+	// counts as 100 ms, as browsers display it.
 	Delays []time.Duration
 	// Duration is the sum of Delays.
 	Duration time.Duration
@@ -100,12 +104,13 @@ type AnimationInfo struct {
 
 // VideoInfo describes a video.
 type VideoInfo struct {
-	// Duration is the video's duration, 0 when unknown.
+	// Duration is the video's duration, or 0 when unknown. A video of
+	// unknown duration can be read only from time 0.
 	Duration time.Duration
-	// FrameRate is the base frame rate, 0 when unknown.
+	// FrameRate is the base frame rate, or 0 when unknown.
 	FrameRate float64
-	// DeclaredFrames is the frame count the container declares, 0 when it
-	// declares none.
+	// DeclaredFrames is the frame count the container declares, or 0 when it
+	// declares none. It is not verified: choose samples by time.
 	DeclaredFrames int
 	// Rotation is the display rotation: 0, 90, 180 or 270 degrees.
 	Rotation int
@@ -117,8 +122,8 @@ type VideoInfo struct {
 	HasAudio bool
 }
 
-// ImageInfo describes one image of a still. Width and Height are as for
-// Info.
+// ImageInfo describes one image of a still. Width and Height are as for Info:
+// upright once an Encode has decoded the image, else as stored.
 type ImageInfo struct {
 	Width, Height int
 	// Auxiliary is set for an image the decoder reports as a reduced-resolution
@@ -132,10 +137,10 @@ func (i Info) clone() Info {
 	return i
 }
 
-// Source is an input file the Processor opened, from which Encode writes
-// images. It holds no process between calls, and the input file open until
-// Close. Calls on one Source are serialised; Sources run in parallel. A Source
-// is safe for concurrent use.
+// Source is one input file a Processor admitted, from which Encode writes
+// images. It is safe for concurrent use; its Encode calls run one at a time.
+// Until Close it holds the input file open and a scratch directory, and
+// between calls no process.
 type Source struct {
 	p *Processor
 	// gate serialises calls and guards every field below up to imu: a call
@@ -189,30 +194,25 @@ type Source struct {
 	info Info
 }
 
-// Open admits the file at path and reads what Encode needs to know of it,
-// without decoding any pixel: the header of a still or animation, or one
-// ffprobe of a video. The gate and the caps of the Processor apply: an input
-// that is not a regular file within Caps.MaxInputBytes, of a type outside
-// Config.Types (or opts.Type), or over a cap is refused: a path that is not a
-// regular file with an error wrapping ErrInvalidRequest, the others with
-// ErrUnsupportedType or ErrTooLarge. The Usage covers the tool runs of the
-// call, also when it fails.
+// Open admits the file at path, which may be relative, and returns a Source
+// for it. It reads only what Encode needs to know: the headers of a still or
+// animation, or one probe of a video. No pixel is decoded. The package
+// documentation's Admission section says what is checked.
+// A path that is not a regular file is refused with an error wrapping
+// ErrInvalidRequest.
 //
-// Open opens the file once. The checks and Go's reads use that descriptor; on
-// Linux so do the tools', so a file put at path afterwards is not read.
-// Elsewhere a tool reads through a link to the path, and only the per-Encode
-// identity check guards it.
+// The Usage covers the tool runs of the call, also when it fails. On an error
+// no Source is returned and nothing needs closing; otherwise the caller must
+// Close the Source or the Processor.
 //
-// Open on a closed Processor returns ErrClosed without touching the file. An
-// Open in progress when the Processor is closed returns either ErrClosed or a
-// Source that Close then closes. Errors wrap ErrUnsupportedType, ErrTooLarge, ErrTimeLimit,
-// ErrInputChanged, ErrClosed or ErrInvalidRequest (an OpenOptions.Orientation
-// out of range, or given for a video) as the cause is, or are a *ToolError for
-// a tool that failed. Retrying the same file cannot succeed after
-// ErrUnsupportedType, ErrTooLarge or ErrInvalidRequest; it can after
-// ErrTimeLimit or ErrInputChanged, and may after a *ToolError.
-//
-// The caller must Close the Source, or close the Processor.
+// Errors wrap ErrUnsupportedType or ErrTooLarge for a file the Processor does
+// not accept, ErrInvalidRequest for an opts.Orientation that is out of range
+// or given for a video, ErrInputChanged for a file replaced during the call,
+// ErrTimeLimit, ErrClosed for a closed Processor, or ctx's error; or they are
+// a *ToolError. A path that cannot be opened, or is not a regular file, gives
+// an error wrapping none of these; errors.Is(err, fs.ErrNotExist) holds for a
+// missing file. An Open in progress when the Processor is closed returns
+// ErrClosed or a Source that Close then closes.
 func (p *Processor) Open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {
 	if !p.beginOpen() {
 		return nil, Usage{}, fmt.Errorf("open: processor: %w", ErrClosed)
@@ -402,12 +402,10 @@ func (s *Source) Info() Info {
 	return s.info.clone()
 }
 
-// KeptBytes returns the bytes on disk the Source holds in the decodes
-// OpenOptions.KeepDecode keeps: their PAM files and ICC profile files, the figure
-// the disk budget counts. It is 0 for a Source opened without KeepDecode, before
-// the first Encode, once a kept decode is dropped and after Close. It is safe
-// to call at any time and does not wait for an Encode that is running: it
-// reports the total as of the last completed change to what is kept.
+// KeptBytes returns the bytes on disk the Source holds for
+// OpenOptions.KeepDecode. It is 0 for a Source opened without KeepDecode,
+// before the first Encode, when nothing could be kept and after Close. It is
+// safe to call at any time and does not wait for a running Encode.
 func (s *Source) KeptBytes() int64 {
 	return s.keptTotal.Load()
 }
@@ -428,11 +426,10 @@ func (s *Source) lock(ctx context.Context) error {
 
 func (s *Source) unlock() { <-s.gate }
 
-// Close closes the input and removes the Source's scratch. It is idempotent.
-// It waits for a call that is running, which it does not interrupt: cancel
-// that call's context first to end it sooner. Images already written are not
-// affected, and a call that was waiting its turn when Close ran returns
-// ErrClosed.
+// Close closes the input and removes the Source's scratch; files Encode wrote
+// stay. It waits for a running call, which it does not interrupt: cancel that
+// call's context first to end it sooner. An Encode that was waiting its turn
+// returns ErrClosed. Close is safe to call more than once.
 func (s *Source) Close() error {
 	s.gate <- struct{}{}
 	defer s.unlock()
@@ -461,32 +458,32 @@ func (s *Source) checkIdentity() error {
 	return nil
 }
 
-// Encode reads the frames and region sel selects and writes one file per
-// frame into dir for each of encodings, or with an Animate encoding one
-// animated file; a frame identical to the one before it after resizing is
-// dropped from an encoding's files. The files are named NNN.<ext>, numbered
-// across the call in encoding order, then frame order; the Images are returned in the same order.
-// Each output is upright, converted to sRGB when its source carries a profile,
-// and carries no metadata, as Encoding says.
+// Encode reads the frames and region sel selects and writes them into dir:
+// for each of encodings, one file per frame, or one animated file when the
+// Encoding sets Animate. Encoding says what every output has in common.
 //
-// dir must exist and be empty; on failure it is emptied again. The Source is
-// checked against the file it was opened on first: if that file changed, the
-// call is refused. A rename over the path, an unlink or a new link changes the
-// file's status-change time, so it counts as a change. A Select that does not apply to the Source's kind, or a
-// region outside a frame whose size is settled, is refused before any tool
-// runs. A video call whose sampled frames, held together in uncompressed form,
-// would exceed Resources.Disk is refused with ErrTooLarge before any frame is
-// decoded. The Usage covers the tool runs of this call alone, also when it fails.
+// dir, which may be relative, must exist and be empty, so every call needs a
+// directory of its own. The files are named NNN.jpg, NNN.webp or NNN.png,
+// numbered from 000 across the call in encoding order, then frame order, and
+// the Images are returned in the same order. A call can write fewer files
+// than it selected frames: a frame of an animation or video that is identical,
+// once resized, to the one before it is dropped, and a time past a video's
+// last frame gives none. Image.Frames says what each file shows.
+// A video call whose sampled frames, held together uncompressed, would
+// exceed Resources.Disk is refused with ErrTooLarge before any frame is
+// decoded.
 //
-// Calls on one Source run one at a time. A call waiting for the one before it
-// returns ctx's error, without running, if ctx ends first. Cancelling ctx
-// during a run kills its tools and returns an error wrapping ctx's. A call
-// that fails or is cancelled leaves the Source usable and dir empty, though
-// what the Source keeps between calls (see OpenOptions.KeepDecode and the
-// package documentation) may have been dropped. Errors wrap ErrInvalidRequest
-// for a request that is wrong whatever the file (retrying the call cannot
-// succeed), ErrInputChanged when the file is not the one opened, ErrClosed
-// when the Source is closed, ErrTooLarge, ErrTimeLimit, or a *ToolError.
+// The Usage covers the tool runs of this call alone, also when it fails.
+//
+// Calls on one Source run one at a time. A call waiting for another returns
+// ctx's error, without running, if ctx ends first. Cancelling ctx during a
+// run kills its tools and returns an error wrapping ctx's. A call that fails
+// or is cancelled leaves dir as it was, empty, and the Source usable, though
+// the Source may have dropped what it keeps between calls.
+//
+// Errors wrap ErrInvalidRequest, ErrInputChanged, ErrClosed, ErrTooLarge or
+// ErrTimeLimit, or are a *ToolError. An Encoding or FrameSelection that cannot
+// be honoured is refused before any tool runs.
 func (s *Source) Encode(ctx context.Context, dir string, sel Select, encodings ...Encoding) ([]Image, Usage, error) {
 	images, usage, err := s.encode(ctx, dir, sel, encodings, numbered)
 	if err != nil {

@@ -157,14 +157,21 @@ var coderTypes = func() map[string]string {
 	return m
 }()
 
-// Types returns the media types the library has a pinned decoder for, sorted:
-// every type of the table, which is the default of Config.Types. SVG, MVG,
-// MSL, PostScript, EPS, PDF and text are never among them. WMV is the ASF
-// type. TGA, ICO and CUR (one type), G3 and DNG are not identified from
-// content: they are decoded only when the caller names the type in
-// OpenOptions.Type. A TIFF whose first
-// image is a reduced-resolution preview, as in a camera raw file, is likewise
+// Types returns the media types the library can read, sorted. It is what a
+// nil Config.Types accepts. Later versions may add types.
+//
+// SVG, MVG, MSL, PostScript, EPS, PDF and text are never among them: reading
+// those can run other programs or open other files. WMV is the ASF type
+// (video/x-ms-asf).
+//
+// Four of the types are not identified from a file's bytes and are read only
+// when OpenOptions.Type names them: image/x-tga, image/vnd.microsoft.icon
+// (ICO and CUR), image/g3fax and image/x-adobe-dng. A TIFF whose first image
+// is a reduced-resolution preview, as in a camera raw file, is likewise
 // refused unless its type is named.
+//
+// A type is read by the tools found at run time: an ImageMagick or ffmpeg
+// build other than the flake's may lack the decoder for one.
 func Types() []string {
 	out := make([]string, 0, len(typeTable))
 	for typ := range typeTable {

@@ -19,11 +19,11 @@ const (
 
 // FrameSelection says which frames or images of a Source an Encode call reads.
 // Build one with All, Even, Indices, Times or Consecutive; the zero value is
-// the first frame or image. A FrameSelection that does not apply to the
-// Source's kind is refused before any tool runs.
+// the first frame or image. Encode refuses, with ErrInvalidRequest and before
+// any tool runs, a selection that does not apply to the Source's kind, selects
+// nothing, or names a frame or time the Source does not have.
 //
-// A time in a selection is read to the millisecond: it is truncated to whole
-// milliseconds.
+// A time in a selection is truncated to whole milliseconds.
 type FrameSelection struct {
 	kind  framesKind
 	n     int
@@ -36,10 +36,12 @@ type FrameSelection struct {
 // refuses it.
 func All() FrameSelection { return FrameSelection{kind: framesAll} }
 
-// Even selects n frames evenly spaced over the Source, or all of them when it
-// has fewer. An animation or still takes frames i*count/n counting from the
-// first; a video takes samples at the centres of n equal intervals of its
-// duration. n must be at least 1, and a video refuses one above MaxVideoSamples.
+// Even selects n frames evenly spaced over the Source, or every frame when it
+// has no more than n. An animation or still takes frames i*count/n, counting
+// from the first, so its last frame is selected only when all are. A video
+// takes samples at the centres of n equal intervals of its duration, or its
+// first frame alone when the duration is unknown. n must be at least 1, and
+// at most MaxVideoSamples for a video.
 func Even(n int) FrameSelection { return FrameSelection{kind: framesEven, n: n} }
 
 // Indices selects the frames of an animation, or the images of a still, with
@@ -50,17 +52,17 @@ func Indices(i ...int) FrameSelection {
 }
 
 // Times selects, at each of the given times, the frame an animation shows then
-// (by its display delays), or the first frame of a video at or after it. Each
-// time is truncated to whole milliseconds. The times may repeat and come in
-// any order, and a video refuses more than MaxVideoSamples. A time must be 0 or inside the
-// duration. A still refuses it.
+// (by its display delays), or the first frame of a video at or after it. The
+// times may repeat and come in any order; each frame is read once, in
+// ascending order. A time must be 0 or inside the duration. A video takes at
+// most MaxVideoSamples times. A still refuses it.
 func Times(t ...time.Duration) FrameSelection {
 	return FrameSelection{kind: framesTimes, times: slices.Clone(t)}
 }
 
 // Consecutive selects n consecutive frames starting at the one shown at start,
-// as Times reads a time; fewer when the end is reached. A video reads them in
-// one decode and refuses more than MaxVideoSamples. A still refuses it.
+// as Times reads a time; fewer when the end is reached. n must be at least 1,
+// and at most MaxVideoSamples for a video. A still refuses it.
 func Consecutive(start time.Duration, n int) FrameSelection {
 	return FrameSelection{kind: framesConsecutive, start: start, n: n}
 }
@@ -84,9 +86,8 @@ func durMS(d time.Duration) int64 {
 	return -1
 }
 
-// MaxVideoSamples is the most frames one Encode call reads from a video, so
-// the largest n of Even and Consecutive and the most times Times may give; a
-// larger count is refused with ErrInvalidRequest.
+// MaxVideoSamples is the most frames one Encode call reads from a video: the
+// largest n of Even and Consecutive, and the most times Times may give.
 const MaxVideoSamples = 64
 
 // indexList returns the ascending distinct indices f holds, each below n.

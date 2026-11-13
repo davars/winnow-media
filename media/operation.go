@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 )
 
-// Format is the encoding of an output image.
+// Format is the file format of an output image. Later versions may add
+// formats.
 type Format string
 
 // The output formats. The zero Format is JPEG.
@@ -16,36 +17,31 @@ const (
 	PNG  Format = "png"
 )
 
-// Encoding is how an operation sizes and encodes each output image. The
-// output satisfies both size bounds with one resample, each side rounded down
-// (a 4000x3001 image at MaxEdge 2048 is 2048x1536), and is never upscaled, so
-// the zero Encoding writes the source's size (the region's, when one is
-// given) up to the largest values the bounds take; it
-// is upright, converted to sRGB when the source carries an ICC profile (an
-// image without one is left as it is), has transparency flattened onto white
-// for JPEG or when Opaque is set, carries no metadata (the converted profile
-// is not embedded) and is written at 8 bits per channel whatever the depth of
-// the source. The sRGB profile is embedded in the library and exists as a
-// temporary dot-file in the output directory only while a tool runs. The zero
-// Format and Quality take the defaults documented at their fields.
+// Encoding is how Encode sizes and encodes each output image. The zero
+// Encoding is a JPEG of quality 90 at the source's size, as far as the largest
+// MaxEdge and MaxArea allow.
 //
-// The size is the largest within both bounds with the source's aspect ratio,
-// and is the size of the picture actually produced whatever orientation the
-// file's header does or does not report. The resize filter follows what the
-// source frame declares: Mitchell when it is palette-based (GIF, PNG8) or
-// declares alpha, Lanczos for opaque truecolour and video, whichever way the
-// pixels reached the encode.
+// Every output is upright, has 8 bits per channel and carries no metadata. A
+// source with an ICC profile is converted to sRGB, and the profile is not
+// embedded; a source without one is left as it is. Transparency is flattened
+// onto white for a JPEG, or when Opaque is set.
+//
+// The size is the largest within MaxEdge and MaxArea that keeps the aspect
+// ratio of the upright frame, or of the Region when one is given, each side
+// rounded down: a 4000x3001 image at MaxEdge 2048 is 2048x1536. An output is
+// never larger than its source.
 type Encoding struct {
-	// Format defaults to JPEG.
+	// Format is the file format; the zero value is JPEG.
 	Format Format
-	// Quality is the encoder quality, 1 to 100; the default is 90.
+	// Quality is the encoder's quality setting, 1 to 100; zero means 90. A
+	// PNG is lossless whatever the value.
 	Quality int
-	// MaxEdge bounds the longest side in pixels, 16 to 16384; zero is the
-	// largest allowed value, 16384. WebP holds at most 16383 a side, so a
-	// WebP output is clamped to that, whether MaxEdge is zero or 16384.
+	// MaxEdge bounds the longest side in pixels, 16 to 16384; zero means
+	// 16384. A WebP holds at most 16383 a side, so a WebP output is held to
+	// that.
 	MaxEdge int
-	// MaxArea bounds the pixel count, 256 to 100000000; zero is the largest
-	// allowed value, 100000000.
+	// MaxArea bounds the pixel count, 256 to 100,000,000; zero means
+	// 100,000,000.
 	MaxArea int
 	// Animate writes every selected frame into one animated file instead of
 	// one file per frame. The Format must be WebP when more than one frame is
@@ -56,25 +52,28 @@ type Encoding struct {
 	Opaque bool
 }
 
-// Image describes one output file a call wrote.
+// Image describes one output file an Encode call wrote.
 type Image struct {
-	// Name is the file's name relative to the output directory.
+	// Name is the file's name within the output directory.
 	Name string
-	// Encoding is the index of the Encoding that produced the file.
+	// Encoding is the index, among the call's encodings, of the one that
+	// produced the file.
 	Encoding      int
 	Width, Height int
 	// Frames are the frames of the source the file shows, in order: one for
-	// a plain image, one per scene for an animated file.
+	// a plain image, one per scene of an animated file.
 	Frames []Frame
 	// Region is the part of the frame the file shows, in upright pixels of
-	// the source: the region asked for, or the whole frame.
+	// the source: the Region asked for, or the whole frame. The whole frame's
+	// Region is the upright size of the source, also for a still whose Info
+	// did not have it.
 	Region Region
 }
 
-// Region is a rectangle of a frame in upright pixels of the frame as shown:
-// after a still's orientation and a video's display rotation, on an
-// animation's canvas. X, Y is its top-left corner. The zero Region is the
-// whole frame; any other has sides of at least 1 and lies inside the frame.
+// Region is a rectangle of a frame, in pixels of the frame as shown: after a
+// still's orientation and a video's display rotation, and on an animation's
+// canvas. X, Y is its top-left corner. The zero Region is the whole frame; any
+// other must have sides of at least 1 and lie inside the frame.
 type Region struct{ X, Y, Width, Height int }
 
 func (r Region) internal() region { return region{r.X, r.Y, r.Width, r.Height} }

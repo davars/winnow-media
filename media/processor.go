@@ -21,18 +21,14 @@ const (
 	stderrTail = 4 << 10
 )
 
-// Processor opens input files as Sources and runs the tools that read them.
-// Every tool runs in the sandbox described at NewProcessor, unless
-// Config.Unsandboxed is set. It owns the tools it runs, the ImageMagick policy
-// those runs obey and a private directory for both; it refuses to be created unless ImageMagick reports that
-// policy as the only one in effect. A Processor is safe for concurrent use.
+// Processor opens input files as Sources and runs the tools that read them,
+// in the sandbox unless Config.Unsandboxed is set. It is safe for concurrent
+// use, and does not limit how many calls run at once. The package
+// documentation states what it guarantees.
 //
-// The paths a call takes, path and dir, may be relative. A call moves no bytes
-// beyond reading the source and writing into its dir, where hidden
-// intermediates (dot-files) exist while a call runs and are removed before it
-// returns. The library sets no deadline on a whole call: a caller that wants
-// one passes a context. The guarantees that span the calls (the gate, the
-// caps, the sandbox, the policy) are in the package documentation.
+// A call reads its input and writes only into its output directory and the
+// Processor's scratch. The library sets no deadline on a call: a caller that
+// wants one passes a context with it.
 type Processor struct {
 	dir  string
 	res  Resources
@@ -66,29 +62,20 @@ type Processor struct {
 	sources map[*Source]struct{}
 }
 
-// NewProcessor resolves magick, ffmpeg, ffprobe and webp-frames with the tool
-// package, checks that the sandbox every tool run goes through is in force,
-// creates a private directory with os.MkdirTemp under cfg.Dir, installs a
-// generated ImageMagick policy there and reads it back with
-// "magick -list policy" and "-list resource". It returns an error, after
-// removing the directory, unless the first policy file listed is the
-// installed one with exactly the rules written, no other file contributes a
-// rule and no resource limit reads back above the ceiling written
-// (ImageMagick may lower one, such as threads to the host's CPUs). Call Close
+// NewProcessor returns a Processor for cfg. It needs the magick, ffmpeg,
+// ffprobe and webp-frames programs, whatever cfg.Types is, found as package
+// tool finds them, and, unless cfg.Unsandboxed is set, a host the sandbox
+// supports (see the package documentation). It checks, within ctx, that the
+// sandbox and the generated ImageMagick policy are in force, and returns an
+// error rather than a Processor that would run without either. Call Close
 // when done.
 //
-// The sandbox is a helper process that limits the tool's resources and denies
-// it socket creation (socket, socketpair and io_uring, which can create one),
-// and kills whatever the tool leaves running. NewProcessor
-// refuses to return unless the helper reports the sandbox applied, with the
-// limits derived from cfg.Resources. It returns an error on platforms other
-// than Linux on amd64 or arm64, unless cfg.Unsandboxed is set.
-//
-// It is an error if cfg.Resources has a negative field or a TimeLimit or
+// It is also an error if cfg.Resources has a negative field or a TimeLimit or
 // CPUTime that is not a whole number of seconds of at least one, if cfg.Caps
-// has a negative field or one above its ceiling, if cfg.Types names a type
-// Types does not list, or if cfg.Dir is not an existing directory. These
-// configuration errors wrap no sentinel.
+// has a negative field or one above its ceiling, if cfg.Types is empty but
+// not nil, names a type Types does not list or names only some of the HEIC,
+// HEIF and AVIF types, or if cfg.Dir is not an existing directory.
+// NewProcessor's errors wrap no sentinel.
 func NewProcessor(ctx context.Context, cfg Config) (*Processor, error) {
 	return newProcessor(ctx, cfg, nil)
 }
@@ -177,12 +164,11 @@ func (p *Processor) install(rules []policyRule) error {
 func (p *Processor) tmpDir() string { return filepath.Join(p.dir, "tmp") }
 
 // Close closes every Source the Processor opened that is still open and
-// removes the Processor's directory. It waits for the Open calls in progress,
+// removes the Processor's scratch. It waits for the Open calls in progress,
 // each of which returns ErrClosed or a Source that Close then closes, and for
-// the calls running on the Sources; it interrupts none of them, so cancel
-// their contexts first to end them sooner.
-// Open after Close began returns ErrClosed. Close is safe to call more than
-// once.
+// the calls running on the Sources. It interrupts none of them: cancel their
+// contexts first to end them sooner. Open after Close has begun returns
+// ErrClosed. Close is safe to call more than once.
 func (p *Processor) Close() error {
 	p.mu.Lock()
 	p.closed = true

@@ -5,17 +5,16 @@ import (
 	"time"
 )
 
-// Frame is one frame of an encoded output and the frame of the ORIGINAL media
-// it came from. The slice index of a Frame is its position in the encoded
-// sequence.
+// Frame says which frame of the source one frame of an output shows. In
+// Image.Frames, a Frame's position is its position in the output.
 type Frame struct {
-	// Index is the frame's index in the original media: 0 for a still and
-	// for a video, whose samples have no frame index.
+	// Index is the frame's index in an animation, or the image's index in a
+	// still. It is 0 for a video, whose samples have no index.
 	Index int
-	// Time is the time the frame is shown in the original, to the
-	// millisecond: the sum of the display delays of the frames before it in
-	// an animation (a stored delay below 20 ms counts as 100 ms, as browsers
-	// display it), or the time a video was sampled at; 0 for a still.
+	// Time is when the source shows the frame, to the millisecond: the sum of
+	// the display delays of the frames before it in an animation (see
+	// AnimationInfo.Delays), or the time a video was sampled at. It is 0 for
+	// a still.
 	Time time.Duration
 }
 

@@ -7,60 +7,63 @@ import (
 	"time"
 )
 
-// Config configures a Processor.
+// Config configures a Processor. The zero Config works, and accepts every
+// type and the largest sizes the library can handle: a deployment for hostile
+// input sets Types and Caps.
 type Config struct {
-	// Types are the media types the Processor accepts, each listed by
-	// Types(); naming any other is an error, as is an empty non-nil slice.
-	// Nil means every type in Types(). An input of another type is refused
-	// with ErrUnsupportedType, and the generated ImageMagick policy allows no
-	// coder that reads one, except those the library reads itself (the
-	// ICC and PAM intermediates). image/heic, image/heif and image/avif are
-	// all named or none, since one decoder reads all three.
+	// Types are the media types the Processor accepts, each one that Types()
+	// lists; naming any other is an error, as is an empty non-nil slice. Nil
+	// means every type Types() lists, a set that later versions may extend.
+	// image/heic, image/heif and image/avif are all named or none, since one
+	// decoder reads all three.
 	Types []string
-	// Caps turn away inputs that are too large; the zero value is the
-	// library ceilings, which suit a deployment for trusted input only.
+	// Caps turn away inputs that are too large. The zero value is the
+	// library's ceilings.
 	Caps Caps
-	// Resources bounds the tools a Processor runs; the zero value uses the
-	// defaults documented at Resources.
+	// Resources bounds each tool run. The zero value is the defaults.
 	Resources Resources
-	// Dir is the existing directory under which the Processor makes its
-	// private directory (os.MkdirTemp, "media-processor-"). Empty means
-	// os.TempDir().
+	// Dir is an existing directory for scratch: the tools' temporary files
+	// and what Sources keep between calls (the package documentation's Sizing
+	// section says how much). The Processor works in a subdirectory of it
+	// named media-processor-*, which Close removes; a process that ends
+	// without Close leaves it behind. Empty means os.TempDir().
 	Dir string
-	// Unsandboxed runs tools directly, for hosts the sandbox does not support
-	// (it needs Linux 5.11 or later on amd64 or arm64): with no seccomp
-	// filter, rlimits or subreaper. The gate, caps, environment, policy and
-	// Resources' policy values and tool flags still apply.
+	// Unsandboxed runs the tools without the sandbox, which is the only way
+	// to run them on a host the sandbox does not support. It is not for
+	// hostile input: the package documentation says what still holds.
 	Unsandboxed bool
 }
 
-// Caps are the limits that turn an input away with ErrTooLarge, each the
-// deployment's choice. A zero field is the library ceiling; a negative field,
-// or one above its ceiling, is an error from NewProcessor. The ceilings are
-// what the library can bear, not values measured for any host: a deployment
-// for hostile input sets its own. Each field says which kinds of Source it
-// covers. Independently of Caps, a frame or stream wider or taller than 16384
-// pixels, a video container with more than 32 streams and a video stream
-// longer than six hours are refused.
+// Caps are the limits that turn an input away with ErrTooLarge. A zero field
+// is the library's ceiling for it; a negative field, or one above its ceiling,
+// is an error from NewProcessor. The ceilings are what the library can handle,
+// not what any host can bear.
+//
+// Whatever Caps says, these are refused too: a frame or video wider or taller
+// than 16384 pixels, a still of more than 2048 images, a video container of
+// more than 32 streams and a video longer than six hours.
 type Caps struct {
-	// MaxInputBytes is the largest input file, inclusive; it covers every
-	// kind. No ceiling.
+	// MaxInputBytes is the largest input file, in bytes, of any kind. No
+	// ceiling.
 	MaxInputBytes int64
-	// MaxFramePixels is the most pixels of one frame; it covers every kind. A
-	// still counts as it is decoded, after any reduction; an animation is
-	// judged by its canvas and by each frame it holds; a video by its stored
-	// size, which rotation leaves the product of. Ceiling: 16384 squared
-	// (268,435,456), the most a side limit of 16384 admits.
+	// MaxFramePixels is the most pixels one frame may have, for every kind:
+	// the canvas and each frame of an animation, the stored frame of a video,
+	// and each image of a still as stored (the first at Open, another when it
+	// is encoded). A JPEG is the exception: it is judged at Encode by the
+	// size it is decoded at, which is below the stored size when every
+	// Encoding of the call is small enough and the call has no Region. Open
+	// can therefore admit a JPEG that an Encode refuses. Ceiling: 16384 x
+	// 16384.
 	MaxFramePixels int64
-	// MaxReturnedPixels bounds the frames an animation call returns times the
-	// canvas area; it covers animations only. No ceiling.
+	// MaxReturnedPixels bounds the frames one Encode selects from an
+	// animation, times its canvas area. Animations only. No ceiling.
 	MaxReturnedPixels int64
-	// MaxDecodedPixels bounds all the frames of an animation times its canvas
-	// area, which are decoded whatever the call returns; it covers animations
+	// MaxDecodedPixels bounds the frames an animation holds, times its canvas
+	// area: a call may decode every frame, whatever it returns. Animations
 	// only. No ceiling.
 	MaxDecodedPixels int64
-	// MaxAnimationFrames is the most frames an animation may hold; it covers
-	// animations only, not the images of a still or the frames of a video.
+	// MaxAnimationFrames is the most frames an animation may hold. Animations
+	// only: it does not count the images of a still or the frames of a video.
 	// Ceiling: 2000.
 	MaxAnimationFrames int
 }
@@ -111,38 +114,37 @@ func (c Caps) resolve() (caps, error) {
 	return out, nil
 }
 
-// Resources bounds what a Processor's tools may use. A zero field means the
-// library default; a negative field is an error, and there is no upper
-// ceiling. The values reach the generated ImageMagick policy and the -limit
-// flags of every magick run, ffmpeg's and ffprobe's thread counts, the frame
-// compositor's wait for a consumed frame, and the sandbox's resource limits.
-// A tool that reaches a time limit fails with an error wrapping ErrTimeLimit.
+// Resources bounds each tool run of a Processor, not the Processor: calls on
+// different Sources run at once, and each may use this much. The package
+// documentation's Sizing section says what that asks of the host. A zero field
+// means the default; a negative field is an error from NewProcessor, and
+// there is no ceiling.
 type Resources struct {
-	// Memory and Map are ImageMagick's memory and map limits in bytes, between
-	// which its pixel cache spills (memory, then map, then disk). Defaults
-	// 1 GiB and 2 GiB.
+	// Memory and Map bound ImageMagick's pixel cache, in bytes: it uses
+	// memory up to Memory, then memory-mapped files up to Map, then disk.
+	// They do not bound a tool's other memory. Defaults 1 GiB and 2 GiB.
 	Memory, Map int64
-	// Disk is ImageMagick's disk limit in bytes. It also bounds the scratch
-	// the frames of one Encode call take together where they are all held on
-	// disk at once: the sampled frames of a video, which are uncompressed at
-	// the size the largest Encoding needs (up to the source's own size), and
-	// the composited frames of an animation. A call over it is refused with
-	// ErrTooLarge before any frame is decoded; an animation that only
-	// exceeds it is written a batch at a time instead. Default 4 GiB.
+	// Disk bounds, in bytes, ImageMagick's pixel cache on disk, what a Source
+	// keeps between calls, and the frames one Encode call holds on disk at
+	// once: a video's sampled frames, uncompressed at the size the largest
+	// Encoding needs, and an animation's composited frames. A video call over
+	// it is refused with ErrTooLarge before any frame is decoded; an animation
+	// over it is written a batch at a time. Default 4 GiB.
 	Disk int64
 	// Threads is the thread count of ImageMagick, ffmpeg and ffprobe; ffmpeg
 	// uses at most two for a source above 4096x2160 whatever Threads is.
 	// Default 4.
 	Threads int
-	// TimeLimit is ImageMagick's per-image time limit and how long a frame
-	// compositor waits for a frame to be consumed: both are wall-clock time.
-	// It must be a whole number of seconds, at least one. Default 300 s.
+	// TimeLimit is the wall-clock time ImageMagick may work on one image, and
+	// how long a frame compositor waits for a frame it wrote to be consumed.
+	// It is not a deadline for a call, which may process many images. It must
+	// be a whole number of seconds, at least one. Default 300 s.
 	TimeLimit time.Duration
-	// CPUTime is the CPU time one tool run may use, summed over its threads;
-	// the sandbox enforces it as the tool's CPU-time limit, which has no effect
-	// with Config.Unsandboxed. It must be a whole number of seconds, at least
-	// one. Zero is TimeLimit times Threads, each after its default: 1200 s at
-	// the defaults.
+	// CPUTime is the CPU time one tool run may use, summed over its threads.
+	// The sandbox enforces it, so it has no effect with Config.Unsandboxed.
+	// It must be a whole number of seconds, at least one. Zero means
+	// TimeLimit times Threads, each after its default: 1200 s at the
+	// defaults.
 	CPUTime time.Duration
 }
 
