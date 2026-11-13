@@ -896,7 +896,7 @@ func TestGoldenArgv(t *testing.T) {
 		{"frames-gif-default", func() string { return writeGIF(t, solid, 20) }, frames(Encoding{}, defaultFrames)},
 		{
 			"frames-gif-webp-bounded", func() string { return writeGIF(t, solid, 10) },
-			frames(Encoding{Format: WebP, MaxEdge: 32}, 3),
+			frames(Encoding{Format: WebP, MaxEdge: 32, MaxArea: 3_750_000}, 3),
 		},
 	}
 	for _, c := range cases {

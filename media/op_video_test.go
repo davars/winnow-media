@@ -527,11 +527,11 @@ func TestVideoEncodeGoldenArgv(t *testing.T) {
 		input func() string
 		enc   Encoding
 	}{
-		{"video-frames-sdr-h264", func() string { return sdrClip(t, env, "320x240", 10, 4) }, Encoding{MaxEdge: 160}},
+		{"video-frames-sdr-h264", func() string { return sdrClip(t, env, "320x240", 10, 4) }, Encoding{MaxEdge: 160, MaxArea: 3_750_000}},
 		{"video-frames-hlg-hevc", func() string {
 			return hlgClip(t, env, testsrc("320x240", 10, 4))
 		}, Encoding{Format: WebP}},
-		{"video-frames-rotated", func() string { return rotatedClip(t, env) }, Encoding{MaxEdge: 80}},
+		{"video-frames-rotated", func() string { return rotatedClip(t, env) }, Encoding{MaxEdge: 80, MaxArea: 3_750_000}},
 	}
 	for _, path := range []struct {
 		name  string

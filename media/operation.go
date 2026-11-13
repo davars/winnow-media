@@ -18,14 +18,16 @@ const (
 
 // Encoding is how an operation sizes and encodes each output image. The
 // output satisfies both size bounds with one resample, each side rounded down
-// (a 4000x3001 image at MaxEdge 2048 is 2048x1536), and is never upscaled; it
+// (a 4000x3001 image at MaxEdge 2048 is 2048x1536), and is never upscaled, so
+// the zero Encoding writes the source's size (the region's, when one is
+// given) up to the largest values the bounds take; it
 // is upright, converted to sRGB when the source carries an ICC profile (an
 // image without one is left as it is), has transparency flattened onto white
 // for JPEG or when Opaque is set, carries no metadata (the converted profile
 // is not embedded) and is written at 8 bits per channel whatever the depth of
 // the source. The sRGB profile is embedded in the library and exists as a
-// temporary dot-file in the output directory only while a tool runs. Zero
-// fields take defaults.
+// temporary dot-file in the output directory only while a tool runs. The zero
+// Format and Quality take the defaults documented at their fields.
 //
 // The size is the largest within both bounds with the source's aspect ratio,
 // and is the size of the picture actually produced whatever orientation the
@@ -38,11 +40,12 @@ type Encoding struct {
 	Format Format
 	// Quality is the encoder quality, 1 to 100; the default is 90.
 	Quality int
-	// MaxEdge bounds the longest side in pixels, 16 to 16384; the default
-	// is 2576.
+	// MaxEdge bounds the longest side in pixels, 16 to 16384; zero is the
+	// largest allowed value, 16384. WebP holds at most 16383 a side, so a
+	// WebP output is clamped to that, whether MaxEdge is zero or 16384.
 	MaxEdge int
-	// MaxArea bounds the pixel count, 256 to 100000000; the default is
-	// 3750000.
+	// MaxArea bounds the pixel count, 256 to 100000000; zero is the largest
+	// allowed value, 100000000.
 	MaxArea int
 	// Animate writes every selected frame into one animated file instead of
 	// one file per frame. The Format must be WebP when more than one frame is
@@ -78,10 +81,28 @@ func (r Region) internal() region { return region{r.X, r.Y, r.Width, r.Height} }
 
 const (
 	defaultQuality = 90
-	defaultMaxEdge = 2576
-	defaultMaxArea = 3_750_000
 	maxMaxFrames   = 64
+
+	// The ranges of Encoding.MaxEdge and MaxArea; zero is the top of the
+	// range.
+	edgeFloor   = 16
+	edgeCeiling = maxDimension
+	areaFloor   = 256
+	areaCeiling = 100_000_000
+
+	// webpMaxEdge is the largest side the WebP format holds. JPEG (65535) and
+	// PNG (2^31-1) hold more than edgeCeiling, the largest frame the library
+	// decodes, so for them edgeCeiling is the limit.
+	webpMaxEdge = 16383
 )
+
+// edgeLimit is the largest side an output of format f has.
+func edgeLimit(f Format) int {
+	if f == WebP {
+		return webpMaxEdge
+	}
+	return edgeCeiling
+}
 
 // outputFormats maps each Format to the extension of its files.
 var outputFormats = map[Format]string{
@@ -156,10 +177,11 @@ func (e Encoding) resolve() (encoding, error) {
 	if out.quality, err = resolveInt("quality", e.Quality, defaultQuality, 1, 100); err != nil {
 		return encoding{}, err
 	}
-	if out.maxEdge, err = resolveInt("max edge", e.MaxEdge, defaultMaxEdge, 16, 16384); err != nil {
+	if out.maxEdge, err = resolveInt("max edge", e.MaxEdge, edgeCeiling, edgeFloor, edgeCeiling); err != nil {
 		return encoding{}, err
 	}
-	if out.maxArea, err = resolveInt("max area", e.MaxArea, defaultMaxArea, 256, 100_000_000); err != nil {
+	out.maxEdge = min(out.maxEdge, edgeLimit(out.format))
+	if out.maxArea, err = resolveInt("max area", e.MaxArea, areaCeiling, areaFloor, areaCeiling); err != nil {
 		return encoding{}, err
 	}
 	return out, nil
