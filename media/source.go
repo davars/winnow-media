@@ -77,13 +77,14 @@ type Info struct {
 	// orientation applies or neither exists.
 	OrientationGiven bool
 	// Images describes each image of a Still, in the order Indices selects
-	// them; its length is the number of images. It is nil for an animation
-	// or a video.
+	// them; its length is the number of images. It is nil unless Kind is
+	// Still.
 	Images []ImageInfo
-	// Animation is set when Kind is Animation, and nil otherwise.
-	Animation *AnimationInfo
-	// Video is set when Kind is Video, and nil otherwise.
-	Video *VideoInfo
+	// Animation is the animation's facts when Kind is Animation; the zero
+	// value otherwise.
+	Animation AnimationInfo
+	// Video is the video's facts when Kind is Video; the zero value otherwise.
+	Video VideoInfo
 }
 
 // AnimationInfo describes an animation.
@@ -127,15 +128,7 @@ type ImageInfo struct {
 
 func (i Info) clone() Info {
 	i.Images = slices.Clone(i.Images)
-	if i.Animation != nil {
-		a := *i.Animation
-		a.Delays = slices.Clone(a.Delays)
-		i.Animation = &a
-	}
-	if i.Video != nil {
-		v := *i.Video
-		i.Video = &v
-	}
+	i.Animation.Delays = slices.Clone(i.Animation.Delays)
 	return i
 }
 
@@ -369,7 +362,7 @@ func (s *Source) openAnimation(env toolEnv) error {
 	s.info = Info{
 		Type: s.typ, Kind: Animation, Width: s.upright[0], Height: s.upright[1], Upright: true,
 		Orientation: orientation, OrientationGiven: given,
-		Animation: &AnimationInfo{Frames: count, Delays: delays, Duration: total},
+		Animation: AnimationInfo{Frames: count, Delays: delays, Duration: total},
 	}
 	return nil
 }
@@ -391,7 +384,7 @@ func (s *Source) openVideo(ctx context.Context, env toolEnv, opts OpenOptions) e
 	w, h := info.upright()
 	s.info = Info{
 		Type: s.typ, Kind: Video, Width: w, Height: h, Upright: true,
-		Video: &VideoInfo{
+		Video: VideoInfo{
 			Duration: time.Duration(info.durationMS) * time.Millisecond, FrameRate: info.rate,
 			DeclaredFrames: info.declared, Rotation: info.rotation,
 			HDR: isHDRTransfer(info.transfer), Codec: info.codec, HasAudio: info.hasAudio,

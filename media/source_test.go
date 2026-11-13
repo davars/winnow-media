@@ -244,19 +244,6 @@ func TestInfoIsASnapshot(t *testing.T) {
 	}
 }
 
-func TestInfoOfAVideoIsASnapshot(t *testing.T) {
-	t.Parallel()
-	env := requireFFmpeg(t)
-	p := requireProcessor(t)
-	src := openSourceOn(t, p, sdrClip(t, env, "160x120", 10, 2), OpenOptions{})
-	info := src.Info()
-	info.Video.Codec = "changed"
-	info.Video.Rotation = 90
-	if got := src.Info().Video; got.Codec != "h264" || got.Rotation != 0 {
-		t.Errorf("a caller changed the Source's video info to %+v", got)
-	}
-}
-
 func TestTimesAreTruncatedToTheMillisecond(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

@@ -47,7 +47,10 @@ func main() {
 	}
 	defer src.Close()
 	info := src.Info()
-	log.Printf("%s %dx%d, %s", info.Kind, info.Width, info.Height, info.Video.Duration)
+	log.Printf("%s %dx%d", info.Kind, info.Width, info.Height)
+	if info.Kind == media.Video {
+		log.Printf("duration %s", info.Video.Duration)
+	}
 
 	dir, err := os.MkdirTemp("", "frames") // must exist and be empty
 	if err != nil {
