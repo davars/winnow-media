@@ -88,8 +88,11 @@ func (e *ToolError) Error() string {
 	return fmt.Sprintf("%s: exit status %d", e.Tool, e.ExitCode)
 }
 
-// stderrOf returns the standard error of the tool run err wraps, or nil.
-func stderrOf(err error) []byte {
+// Stderr returns the standard error of the failed tool run err wraps (the
+// Stderr of its *ToolError), or nil when err wraps none. The bytes can quote
+// the input, so a caller that shows them to anyone but an operator should
+// leave them out.
+func Stderr(err error) []byte {
 	var te *ToolError
 	if errors.As(err, &te) {
 		return te.Stderr

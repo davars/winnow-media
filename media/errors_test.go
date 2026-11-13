@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -73,5 +74,19 @@ func errText(err error) string {
 	if err == nil {
 		return ""
 	}
-	return err.Error() + ": " + string(stderrOf(err))
+	return err.Error() + ": " + string(Stderr(err))
+}
+
+func TestStderrReturnsTheWrappedToolErrorsStderr(t *testing.T) {
+	t.Parallel()
+	te := &ToolError{Tool: "magick", ExitCode: 1, Stderr: []byte("what the tool said")}
+	if got := string(Stderr(fmt.Errorf("encoding: %w", te))); got != "what the tool said" {
+		t.Errorf("Stderr(wrapped ToolError) = %q", got)
+	}
+	if got := Stderr(errors.New("no tool ran")); got != nil {
+		t.Errorf("Stderr(plain error) = %q, want nil", got)
+	}
+	if got := Stderr(nil); got != nil {
+		t.Errorf("Stderr(nil) = %q, want nil", got)
+	}
 }

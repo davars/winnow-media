@@ -538,7 +538,7 @@ func (p *Processor) inputDir() (dir string, release func(), err error) {
 func (p *Processor) detectType(ctx context.Context, m *meter, f *os.File, ref string) (typ, coder string, scenes []sceneHeader, err error) {
 	scenes, err = identifyHeadersAs(ctx, p.env(m, f), ref+stillScenes, true, gateHeaderFormat)
 	if err != nil {
-		if stderr := string(stderrOf(err)); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
+		if stderr := string(Stderr(err)); !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrTimeLimit) &&
 			(strings.Contains(stderr, "security policy") || strings.Contains(stderr, "no decode delegate")) {
 			return "", "", nil, unrecognized("content no supported coder reads")
 		}
