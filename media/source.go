@@ -170,7 +170,7 @@ type Source struct {
 	reuse bool
 	kept  map[int]*keptDecode
 	// keptTotal is keptBytes, stored at each change to kept for KeptBytes to
-	// read without mu.
+	// read without the gate.
 	keptTotal atomic.Int64
 	// noKeep holds the images no later call could keep.
 	noKeep map[int]bool
@@ -209,12 +209,14 @@ type Source struct {
 // Elsewhere a tool reads through a link to the path, and only the per-Encode
 // identity check guards it.
 //
-// Open on a closed Processor returns ErrClosed without touching the file, and
-// a Processor closed while Open runs waits for it, and the Open that has not
-// finished by then returns ErrClosed. Errors wrap ErrUnsupportedType, ErrTooLarge, ErrTimeLimit or
-// ErrInvalidRequest (an OpenOptions.Orientation out of range, or given for a
-// video) as the cause is; none can succeed on a retry of the same file except
-// ErrTimeLimit.
+// Open on a closed Processor returns ErrClosed without touching the file; an
+// Open that has not yet returned its Source when the Processor is closed also
+// returns ErrClosed. Errors wrap ErrUnsupportedType, ErrTooLarge, ErrTimeLimit,
+// ErrInputChanged, ErrClosed or ErrInvalidRequest (an OpenOptions.Orientation
+// out of range, or given for a video) as the cause is, or are a *ToolError for
+// a tool that failed. Retrying the same file cannot succeed after
+// ErrUnsupportedType, ErrTooLarge or ErrInvalidRequest; it can after
+// ErrTimeLimit or ErrInputChanged, and may after a *ToolError.
 //
 // The caller must Close the Source, or close the Processor.
 func (p *Processor) Open(ctx context.Context, path string, opts OpenOptions) (*Source, Usage, error) {

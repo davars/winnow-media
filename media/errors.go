@@ -27,7 +27,7 @@ var (
 	// higher Caps may.
 	ErrTooLarge = errors.New("input too large")
 
-	// ErrTimeLimit is returned, wrapped with what the tool reported, when a
+	// ErrTimeLimit is returned, wrapped with the *ToolError of the run, when it failed, when a
 	// tool run reached a time limit: ImageMagick's per-image limit
 	// (Resources.TimeLimit), the sandbox's CPU-time limit
 	// (Resources.CPUTime), or a frame compositor waiting longer than
@@ -41,10 +41,11 @@ var (
 	// Retrying cannot succeed; open a new Source or create a new Processor.
 	ErrClosed = errors.New("closed")
 
-	// ErrInputChanged is returned by Source.Encode, and by Open when the file
-	// changes while it is opened, when the file is not the one that was
-	// opened. Retrying the same Source cannot succeed; opening the file
-	// again can.
+	// ErrInputChanged is returned when the file is not the one that was
+	// opened: by Source.Encode, and by Processor.Open when the file is
+	// replaced while it is being opened. It is the expected result when a file
+	// is replaced under a long-lived Source. Retrying the same Source cannot
+	// succeed; opening the file again can.
 	ErrInputChanged = errors.New("input changed")
 
 	// ErrInvalidRequest is returned when the request is wrong rather than the

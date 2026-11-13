@@ -123,7 +123,7 @@ The values chosen, from those peaks:
 
 - CPU 210 s: the heaviest single process, 25 s, times 4.1 (the worst CPU
   ratio measured on a Raspberry Pi 5, 4K HEVC decode), times a safety margin
-  of 2, rounded up. The limit is the Processor's `TimeLimit`, 300 s by default,
+  of 2, rounded up. The limit is the Processor's `CPUTime`, 1200 s by default,
   which is looser than this figure.
 - Address space 8 GiB: 2.4 times the worst peak (3.2 GiB), leaving room for
   the per-thread arenas that grow with a host's CPU count. The limit is the
