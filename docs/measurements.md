@@ -1,9 +1,8 @@
 # Measurements
 
 The record behind the numbers in the `media` package: what was measured, how,
-and what each figure justified. The constants in `media/limits.go`,
-`media/sandbox_linux.go` and `media/op_video.go` link here. Figures that are
-projections, not measurements, are marked as such.
+and what each figure justified. The constants in `media/` link here. Figures
+that are projections, not measurements, are marked as such.
 
 ## How to read this
 
@@ -143,7 +142,18 @@ The values chosen, from those peaks:
   the measurement would be about 210 s (25 s, times 4.1 for the worst CPU ratio
   of the small host, times a margin of 2); a deployment that wants one sets
   `CPUTime`.
-- Address space 8 GiB: 2.4 times the worst peak (3.2 GiB), leaving room for
+- CPU enforcement: the helper enforces `CPUTime` itself. Every 50 ms it reads
+  the tool's CPU time, over all its threads, on the clock the kernel checks
+  `RLIMIT_CPU` against (PROF: tick-sampled user plus system time), and kills
+  the tool once that reaches `CPUTime`. The kernel's own limit is a backstop
+  behind it, at `CPUTime` plus a tenth of it or 1 s, whichever is more: 1320 s
+  at the defaults. A kill counts as the CPU limit (`ErrTimeLimit`) when the
+  helper made it, or when the tool was killed with its PROF clock at or past
+  the backstop. The margin is sized from how far PROF runs ahead of the
+  scheduler's run time (SCHED), which `Usage.CPU` reports: about 1.3% under
+  load on the reference host, 4.8% on 2 loaded CPUs, and 7 to 9% on CI
+  virtual machines (implied, not measured directly).
+- Address space 8 GiB: 2.5 times the worst peak (3.2 GiB), leaving room for
   the per-thread arenas that grow with a host's CPU count. The limit is the
   Processor's `Memory` plus `Map` plus 5 GiB, 8 GiB at the defaults; the file
   size limit is `Disk` plus a quarter, 5 GiB at the defaults.
@@ -154,9 +164,11 @@ The values chosen, from those peaks:
   the count when the helper starts and bounds forks only where the user has
   nothing else running, such as a container with its own uid; it is not
   enforced for root.
-- The helper's rusage includes the tool's, so `Usage` is the tool's: a 48 MP
-  HEIC measured 919 MiB and 12.7 s of CPU directly and the same through the
-  helper. The helper adds about 13 ms to a run.
+- The helper measures `Usage` from the tool's own rusage and that of the
+  descendants it reaps, not from its own, which starts at the calling
+  program's peak resident set. A 48 MP HEIC measured 919 MiB and 12.7 s of CPU
+  directly and the same through the helper. The helper adds about 13 ms to a
+  run.
 
 ## The small host's deployment
 

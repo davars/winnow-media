@@ -63,9 +63,10 @@ type limitSpec struct {
 // kernel checks the limit against tick-sampled CPU time, which runs ahead of
 // the run time by a share of it under contention, and the helper only polls
 // every cpuPollInterval; the margin keeps the kernel from firing first in
-// ordinary runs. A kernel kill is attributed by its own comparison (see
-// helperRun), so the margin is not what makes the attribution right. A zero
-// budget stays zero.
+// ordinary runs, and is sized from the gap measured between the two clocks
+// (docs/measurements.md). A kernel kill is attributed by its own comparison
+// (see helperRun), so the margin is not what makes the attribution right. A
+// zero budget stays zero.
 func (l rlimits) backstopCPU() uint64 {
 	if l.CPU == 0 {
 		return 0
