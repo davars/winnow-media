@@ -5,20 +5,24 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+# The update is pushed and its PR opened with FLAKE_LOCK_TOKEN, a
+# fine-grained token with contents and pull-requests write on this
+# repository: a PR opened with the workflow's own token starts no workflows,
+# so CI would never run on it.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   update:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: cachix/install-nix-action@v31.11.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - uses: DeterminateSystems/update-flake-lock@v29
+      - uses: DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3 # v29
         with:
+          token: ${{ secrets.FLAKE_LOCK_TOKEN }}
           pr-title: "Update flake.lock"
           pr-labels: dependencies
