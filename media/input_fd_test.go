@@ -461,8 +461,8 @@ func TestInputIsStatedBeforeItIsOpened(t *testing.T) {
 			t.Parallel()
 			p := requireProcessor(t)
 			opens := count(p)
-			if _, _, err := p.Open(context.Background(), path, OpenOptions{}); err == nil || !strings.Contains(err.Error(), "not a regular file") {
-				t.Errorf("err = %v, want a refusal that it is not a regular file", err)
+			if _, _, err := p.Open(context.Background(), path, OpenOptions{}); !errors.Is(err, ErrInvalidRequest) || !strings.Contains(err.Error(), "not a regular file") {
+				t.Errorf("err = %v, want ErrInvalidRequest for a file that is not regular", err)
 			}
 			if n := opens.Load(); n != 0 {
 				t.Errorf("%d opens of a non-regular file", n)

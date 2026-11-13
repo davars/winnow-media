@@ -193,7 +193,8 @@ type Source struct {
 // without decoding any pixel: the header of a still or animation, or one
 // ffprobe of a video. The gate and the caps of the Processor apply: an input
 // that is not a regular file within Caps.MaxInputBytes, of a type outside
-// Config.Types (or opts.Type), or over a cap is refused with an error wrapping
+// Config.Types (or opts.Type), or over a cap is refused: a path that is not a
+// regular file with an error wrapping ErrInvalidRequest, the others with
 // ErrUnsupportedType or ErrTooLarge. The Usage covers the tool runs of the
 // call, also when it fails.
 //

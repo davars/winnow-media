@@ -362,7 +362,7 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string
 		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	if !pre.Mode().IsRegular() {
-		return admitted{}, errors.New("source is not a regular file")
+		return admitted{}, invalid("source is not a regular file")
 	}
 	f, err := p.openInput(path)
 	if err != nil {
