@@ -124,6 +124,9 @@ func TestFusedStillEqualsMaterialisedStill(t *testing.T) {
 			if fx.name == "jpeg profiled oriented" && head.orientation != "RightTop" {
 				t.Fatalf("the fixture's orientation reads as %q", head.orientation)
 			}
+			if fx.name == "cmyk jpeg profiled" && !head.hasICC {
+				t.Fatal("the fixture's profile was not embedded")
+			}
 			w, h := uprightSize(head.width, head.height, head.orientation)
 			t.Logf("%dx%d upright %dx%d orientation %s profiled %v", head.width, head.height, w, h, head.orientation, head.hasICC)
 

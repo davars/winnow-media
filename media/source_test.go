@@ -244,6 +244,18 @@ func TestInfoIsASnapshot(t *testing.T) {
 	}
 }
 
+func TestInfoImagesAreASnapshot(t *testing.T) {
+	t.Parallel()
+	p := requireProcessor(t)
+	src := openSourceOn(t, p, writePNGFrame(t, 0), OpenOptions{})
+	want := src.Info().Images[0].Width
+	info := src.Info()
+	info.Images[0].Width = want + 1
+	if got := src.Info().Images[0].Width; got != want {
+		t.Errorf("a caller changed the Source's image width to %d", got)
+	}
+}
+
 func TestTimesAreTruncatedToTheMillisecond(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
