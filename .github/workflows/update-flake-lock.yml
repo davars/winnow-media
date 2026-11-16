@@ -29,7 +29,7 @@ jobs:
           BRANCH: update-flake-lock
         run: |
           set -euo pipefail
-          nix flake update 2> update.log
+          nix flake update 2> update.log || { cat update.log >&2; exit 1; }
           if git diff --quiet -- flake.lock; then
             echo "flake.lock is current"
             exit 0
@@ -44,8 +44,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
-          git commit -m "Update flake.lock" -F body.md -- flake.lock
+          { echo "Update flake.lock"; echo; cat body.md; } > message.txt
+          git commit --cleanup=whitespace -F message.txt -- flake.lock
           git push --force origin "$BRANCH"
           if [ "$(gh pr list --head "$BRANCH" --state open --json number -q length)" = 0 ]; then
             gh pr create --base main --head "$BRANCH" --title "Update flake.lock" --body-file body.md
+          else
+            gh pr edit "$BRANCH" --body-file body.md
           fi
