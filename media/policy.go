@@ -68,12 +68,10 @@ func policyCoders(types []string) map[string]coderRights {
 	return coders
 }
 
-// processorPolicy returns the rules of the policy a Processor with the
-// resolved resources r and the resolved types installs, in the order they are
-// written: resource ceilings, delegates denied, every coder denied and then
-// the used ones allowed, indirect reads denied.
-func processorPolicy(r Resources, types []string) []policyRule {
-	rules := []policyRule{
+// resourceRules are the resource ceilings of every policy the library
+// installs.
+func resourceRules(r Resources) []policyRule {
+	return []policyRule{
 		{domain: "resource", name: "memory", value: magickSize(r.Memory)},
 		{domain: "resource", name: "map", value: magickSize(r.Map)},
 		{domain: "resource", name: "disk", value: magickSize(r.Disk)},
@@ -83,9 +81,36 @@ func processorPolicy(r Resources, types []string) []policyRule {
 		{domain: "resource", name: "list-length", value: policyListLength},
 		{domain: "resource", name: "time", value: r.seconds()},
 		{domain: "resource", name: "thread", value: strconv.Itoa(r.Threads)},
-		{domain: "delegate", rights: "none", pattern: "*"},
-		{domain: "coder", rights: "none", pattern: "*"},
 	}
+}
+
+// svgPolicy returns the rules of the policy SVG renders run under: the
+// resource ceilings, no delegate, and one coder to read, librsvg's, with the
+// PNG, info and null sinks to write. ImageMagick's own SVG and MSVG coders can
+// run other programs or read other files, so none of them is allowed.
+func svgPolicy(r Resources) []policyRule {
+	rules := append(
+		resourceRules(r),
+		policyRule{domain: "delegate", rights: "none", pattern: "*"},
+		policyRule{domain: "coder", rights: "none", pattern: "*"},
+		policyRule{domain: "coder", rights: "read", pattern: "RSVG"},
+	)
+	for _, sink := range []string{"INFO", "NULL", "PNG"} {
+		rules = append(rules, policyRule{domain: "coder", rights: "write", pattern: sink})
+	}
+	return append(rules, policyRule{domain: "path", rights: "none", pattern: "@*"})
+}
+
+// processorPolicy returns the rules of the policy a Processor with the
+// resolved resources r and the resolved types installs, in the order they are
+// written: resource ceilings, delegates denied, every coder denied and then
+// the used ones allowed, indirect reads denied.
+func processorPolicy(r Resources, types []string) []policyRule {
+	rules := append(
+		resourceRules(r),
+		policyRule{domain: "delegate", rights: "none", pattern: "*"},
+		policyRule{domain: "coder", rights: "none", pattern: "*"},
+	)
 	coders := policyCoders(types)
 	names := make([]string, 0, len(coders))
 	for n := range coders {

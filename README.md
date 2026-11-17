@@ -63,8 +63,8 @@ is the reference, and its other
 (source: [`media/example_test.go`](media/example_test.go)) cover several
 encodings from one decode, samples of a video, an animation to one animated
 WebP, regions of a kept decode, naming a type, a configuration for hostile
-input, handling errors, extracting an embedded preview, and drawing the pages
-of a PDF.
+input, handling errors, extracting an embedded preview, drawing the pages
+of a PDF, and drawing an SVG.
 
 | Call | Does |
 |---|---|
@@ -73,6 +73,7 @@ of a PDF.
 | `Source.Info` | Describes the file: type, `Kind` (still, animation or video), size, orientation, and the facts of its kind. |
 | `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Consecutive`) and `Region` of a `Select` into an empty directory, once per `Encoding`: a file per frame, or one animated WebP. |
 | `Processor.OpenDocument`, `Document.Render` | Admits a PDF (with `Config.RenderTypes`) and draws the pages a `FrameSelection` selects, at a `PageScale`, as the renderer's own PNGs in an empty directory, for `Open` to read. |
+| `Processor.RenderSVG` | Draws an SVG (with `Config.RenderTypes`) as one PNG, opaque on white, reading nothing outside the file, for `Open` to read. |
 | `Processor.ExtractPreview` | Chooses the largest embedded JPEG among byte ranges the caller reports for a file, and copies it into an empty directory to be opened. |
 | `Source.KeptBytes` | Reports the disk a Source holds for `OpenOptions.KeepDecode`. |
 | `Source.Close`, `Processor.Close` | Release a Source's file and scratch; closing the Processor closes its Sources. |
@@ -88,7 +89,7 @@ Each point is stated in full in the package documentation.
 - **[Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).**
   The content cannot select a decoder outside `Config.Types`, and a tool
   cannot open a socket, gain privileges or leave a process behind. The sandbox
-  confines the files of a PDF render, and neither the files of other tools nor
+  confines the files of a render, and neither the files of other tools nor
   resident memory: a deployment supplies that, and sets `Config.Types` and
   `Config.Caps`.
 - **[Lifecycle](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Lifecycle_and_concurrency).**

@@ -171,6 +171,17 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 			return nil, fmt.Errorf("processor: %w", err)
 		}
 	}
+	if renders[typeSVG] {
+		rules := svgPolicy(res)
+		if err := p.installSVGPolicy(rules); err != nil {
+			_ = p.Close()
+			return nil, fmt.Errorf("processor: %w", err)
+		}
+		if err := p.verifySVGPolicy(ctx, rules); err != nil {
+			_ = p.Close()
+			return nil, fmt.Errorf("processor: %w", err)
+		}
+	}
 	return p, nil
 }
 

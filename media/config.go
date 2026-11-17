@@ -18,13 +18,13 @@ type Config struct {
 	// decoder reads all three.
 	Types []string
 	// RenderTypes are the types the Processor rasterizes through
-	// OpenDocument, each one that RenderTypes() lists; naming any other is an
-	// error from NewProcessor. Nil or empty renders none, which leaves the
-	// Processor as v1.0 made it. Rendering application/pdf needs the pdfinfo
-	// and pdftoppm programs, found as package tool finds the others. With the
-	// sandbox, rendering needs a host that can confine a tool's files (the
-	// package documentation's Rendering section), and NewProcessor fails
-	// without one.
+	// OpenDocument and RenderSVG, each one that RenderTypes() lists; naming any
+	// other is an error from NewProcessor. Nil or empty renders none, which
+	// leaves the Processor as v1.0 made it. Rendering application/pdf needs
+	// the pdfinfo and pdftoppm programs, found as package tool finds the
+	// others. With the sandbox, rendering needs a host that can confine a
+	// tool's files (the package documentation's Rendering section), and
+	// NewProcessor fails without one.
 	RenderTypes []string
 	// Caps turn away inputs that are too large. The zero value is the
 	// library's ceilings.

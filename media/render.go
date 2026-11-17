@@ -8,13 +8,14 @@ import (
 // Media types the renderers read.
 const (
 	typePDF = "application/pdf"
+	typeSVG = "image/svg+xml"
 )
 
 // RenderTypes returns the media types a Processor can render when
 // Config.RenderTypes names them, sorted. They are never among Types: Open
 // does not read them, and they are read only by the renderers, under limits
 // and confinement of their own. Later versions may add types.
-func RenderTypes() []string { return []string{typePDF} }
+func RenderTypes() []string { return []string{typePDF, typeSVG} }
 
 // resolveRenderTypes returns the set requested as a sorted list without
 // repeats; it is an error to name a type RenderTypes lacks. Nil and empty

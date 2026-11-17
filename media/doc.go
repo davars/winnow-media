@@ -86,22 +86,24 @@
 //
 // # Rendering
 //
-// A PDF is never opened as a [Source]: [Types] does not list it, and Open
-// refuses it. A caller that names application/pdf in [Config.RenderTypes]
-// reads it through [Processor.OpenDocument], which admits the file and reads
-// its page boxes, and [Document.Render], which draws the pages a
-// [FrameSelection] selects at a [PageScale] into an empty directory as PNGs
-// named 000.png and on. [RenderTypes] lists what can be named; a nil
-// Config.RenderTypes renders nothing and leaves the Processor as it was
-// before rendering existed.
+// A PDF or an SVG is never opened as a [Source]: [Types] does not list them,
+// and Open refuses them. A caller that names application/pdf in
+// [Config.RenderTypes] reads a PDF through [Processor.OpenDocument], which
+// admits the file and reads its page boxes, and [Document.Render], which draws
+// the pages a [FrameSelection] selects at a [PageScale] into an empty
+// directory as PNGs named 000.png and on. One that names image/svg+xml draws
+// an SVG with [Processor.RenderSVG], as one PNG named 000.png, opaque on
+// white. [RenderTypes] lists what can be named; a nil Config.RenderTypes
+// renders nothing and leaves the Processor as it was before rendering
+// existed.
 //
 // A render writes the renderer's own PNG, with no profile and no processing,
 // and the caller then opens it with Open like any other file. That puts what
 // the renderer made through the same gate, type and caps as any input, and
 // leaves the caller the PNG itself where that is what it needs.
 //
-// Text in a PDF whose fonts are not embedded is drawn with the host's fonts
-// (see Determinism).
+// Text in a PDF whose fonts are not embedded, and in an SVG, is drawn with the
+// host's fonts (see Determinism).
 //
 // # Lifecycle and concurrency
 //
@@ -169,7 +171,14 @@
 //     is killed.
 //
 // A PDF is read only by the renderer, [Document.Render], and is never given
-// to ImageMagick or ffmpeg. With the sandbox, every render run is also confined
+// to ImageMagick or ffmpeg. An SVG is read only by ImageMagick's rsvg: coder,
+// which draws it with librsvg, under a second policy that allows that coder
+// to read and PNG, info and null to write, and denies every delegate, so
+// ImageMagick's SVG and MSVG coders, which can run other programs and read
+// other files, never see it, and the content cannot choose a coder. A
+// data: URL inside an SVG is inline content and is drawn, its image decoded
+// by librsvg's own decoders, outside ImageMagick's policy. With the sandbox,
+// every render run is also confined
 // by Landlock: it can read the program and its libraries, the system's font
 // and locale files, process and CPU information, and the one input file, by
 // its descriptor, not a file beside it or one later put at its path, and
@@ -225,8 +234,9 @@
 // promised across library versions, tool builds or architectures.
 //
 // A render's bytes depend also on the host's fonts when the PDF names fonts it
-// does not embed: fontconfig reads the system's configuration and font
-// directories, and a render is the same only where those are the same. The
+// does not embed and when the SVG has text: fontconfig reads the system's
+// configuration and font directories, and a render is the same only where
+// those are the same. An SVG render writes no time into its PNG. The
 // library gives a render run no home directory, so a user's own fonts and
 // fontconfig files are never read.
 //
@@ -254,8 +264,9 @@
 //   - A rendered page: pdftoppm's memory is bounded only by the sandbox's
 //     address space limit, not by Resources.Memory and Map. A page of 16384 by
 //     16384 pixels holds 768 MiB of pixels, and measured 1.8 GiB at its peak
-//     with a full-page image to decode, beside the page's PNG on disk. Each
-//     render run also reads the host's fonts afresh.
+//     with a full-page image to decode, beside the page's PNG on disk. An SVG
+//     drawing takes ImageMagick's pixel cache as any image does. Each render
+//     run also reads the host's fonts afresh.
 //   - Time: Resources.TimeLimit is wall-clock time ImageMagick may spend on
 //     one image, and Resources.CPUTime the CPU time of one tool run over all
 //     its threads. Neither bounds a call, which may run many tools (see

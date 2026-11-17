@@ -118,6 +118,27 @@ func ExampleDocument_Render() {
 	fmt.Printf("page %d: %dx%d\n", rasters[0].Page, rasters[0].Width, rasters[0].Height)
 }
 
+// Drawing an SVG at twice its own size: the result is a PNG, opaque on white,
+// which Open reads like any other file.
+func ExampleProcessor_RenderSVG() {
+	ctx := context.Background()
+	p, err := media.NewProcessor(ctx, media.Config{RenderTypes: []string{"image/svg+xml"}})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer p.Close()
+
+	dir, err := os.MkdirTemp("", "svg")
+	if err != nil {
+		log.Fatal(err)
+	}
+	raster, _, err := p.RenderSVG(ctx, "logo.svg", dir, media.SVGRender{DPI: 192})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s: %dx%d\n", filepath.Join(dir, raster.Name), raster.Width, raster.Height)
+}
+
 // The types a Processor accepts when Config.Types is nil.
 func ExampleTypes() {
 	for _, t := range media.Types() {
