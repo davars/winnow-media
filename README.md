@@ -63,7 +63,7 @@ is the reference, and its other
 (source: [`media/example_test.go`](media/example_test.go)) cover several
 encodings from one decode, samples of a video, an animation to one animated
 WebP, regions of a kept decode, naming a type, a configuration for hostile
-input, and handling errors.
+input, handling errors, and extracting an embedded preview.
 
 | Call | Does |
 |---|---|
@@ -71,6 +71,7 @@ input, and handling errors.
 | `Processor.Open` | Admits one file by its bytes, type and size, without decoding a pixel, and returns a `Source`. |
 | `Source.Info` | Describes the file: type, `Kind` (still, animation or video), size, orientation, and the facts of its kind. |
 | `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Consecutive`) and `Region` of a `Select` into an empty directory, once per `Encoding`: a file per frame, or one animated WebP. |
+| `Processor.ExtractPreview` | Chooses the largest embedded JPEG among byte ranges the caller reports for a file, and copies it into an empty directory to be opened. |
 | `Source.KeptBytes` | Reports the disk a Source holds for `OpenOptions.KeepDecode`. |
 | `Source.Close`, `Processor.Close` | Release a Source's file and scratch; closing the Processor closes its Sources. |
 

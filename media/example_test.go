@@ -50,6 +50,39 @@ func Example() {
 	}
 }
 
+// Extracting the largest embedded JPEG of a camera raw file, from the byte
+// ranges an EXIF reader reported, and reading it like any other file.
+func ExampleProcessor_ExtractPreview() {
+	ctx := context.Background()
+	p, err := media.NewProcessor(ctx, media.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer p.Close()
+
+	dir, err := os.MkdirTemp("", "preview")
+	if err != nil {
+		log.Fatal(err)
+	}
+	candidates := []media.PreviewCandidate{{Offset: 1_048_576, Length: 2_097_152}, {Offset: 512, Length: 9_000}}
+	pv, _, err := p.ExtractPreview(ctx, "photo.nef", dir, candidates, media.PreviewOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if pv.Candidate < 0 {
+		fmt.Println("no embedded preview; read the file itself")
+		return
+	}
+	// The copy is an ordinary JPEG. If it records no orientation, OpenOptions
+	// gives it the original file's, here 6.
+	src, _, err := p.Open(ctx, filepath.Join(dir, pv.Name), media.OpenOptions{Orientation: 6})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer src.Close()
+	fmt.Printf("candidate %d, %dx%d\n", pv.Candidate, pv.Width, pv.Height)
+}
+
 // The types a Processor accepts when Config.Types is nil.
 func ExampleTypes() {
 	for _, t := range media.Types() {

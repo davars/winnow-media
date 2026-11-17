@@ -333,38 +333,15 @@ type admitted struct {
 // header read is the fallback if the probe refuses it. A type the caller names
 // is used as it is, with no sniff, probe or header read to name one.
 func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string) (in admitted, err error) {
-	path, err = filepath.Abs(path)
+	f, path, info, err := p.openRegular(path)
 	if err != nil {
 		return admitted{}, err
-	}
-	// The mode is judged before the open, which can have effects on a device;
-	// the descriptor must then be the file that was judged.
-	pre, err := os.Stat(path)
-	if err != nil {
-		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
-	}
-	if !pre.Mode().IsRegular() {
-		return admitted{}, invalid("source is not a regular file")
-	}
-	f, err := p.openInput(path)
-	if err != nil {
-		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
 	}
 	defer func() {
 		if err != nil {
 			_ = f.Close()
 		}
 	}()
-	info, err := f.Stat()
-	if err != nil {
-		return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
-	}
-	if a, b := idOf(pre), idOf(info); a.dev != b.dev || a.ino != b.ino || !info.Mode().IsRegular() || unlinked(info) {
-		return admitted{}, fmt.Errorf("source: %w while it was opened", ErrInputChanged)
-	}
-	if info.Size() > p.caps.inputBytes {
-		return admitted{}, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
-	}
 	typ := named
 	var lead leadBytes
 	if typ == "" {
@@ -404,6 +381,46 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string
 	}
 	in.typ, in.decoder = typ, typeTable[typ].decoderFor("")
 	return in, nil
+}
+
+// openRegular opens the file at path, which may be relative, for reading. The
+// file must be a regular file within Config.Caps.MaxInputBytes. It returns the
+// descriptor, which the caller closes, the absolute path and the descriptor's
+// file info, from which idOf gives the identity to check later. The mode is
+// judged before the open, which can have effects on a device; the descriptor
+// must then be the file that was judged.
+func (p *Processor) openRegular(path string) (f *os.File, abs string, info os.FileInfo, err error) {
+	abs, err = filepath.Abs(path)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	pre, err := os.Stat(abs)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("source: %w", withoutPath(err))
+	}
+	if !pre.Mode().IsRegular() {
+		return nil, "", nil, invalid("source is not a regular file")
+	}
+	f, err = p.openInput(abs)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("source: %w", withoutPath(err))
+	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+		}
+	}()
+	info, err = f.Stat()
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("source: %w", withoutPath(err))
+	}
+	if a, b := idOf(pre), idOf(info); a.dev != b.dev || a.ino != b.ino || !info.Mode().IsRegular() || unlinked(info) {
+		return nil, "", nil, fmt.Errorf("source: %w while it was opened", ErrInputChanged)
+	}
+	if info.Size() > p.caps.inputBytes {
+		return nil, "", nil, tooLarge("file is %d bytes, the limit is %d", info.Size(), p.caps.inputBytes)
+	}
+	return f, abs, info, nil
 }
 
 // leadBytes is what sniff made of the leading bytes of an input it named no

@@ -74,6 +74,16 @@
 // [ErrInputChanged] if it has. A file rewritten in place between that check
 // and a tool's read is not detected.
 //
+// # Embedded previews
+//
+// Many camera raw and TIFF files carry JPEG previews whose byte ranges an EXIF
+// reader reports. [Processor.ExtractPreview] takes those ranges as
+// [PreviewCandidate] hints, keeps those that hold a whole JPEG within the
+// caps, copies the one with the longest side into an empty directory, and
+// leaves the caller to [Processor.Open] the copy. The file's own type is not
+// judged and no tool reads it: only a candidate's bytes, after a marker check
+// in Go, reach ImageMagick, under the same policy as any other input.
+//
 // # Lifecycle and concurrency
 //
 // A Processor and its Sources are safe for concurrent use. Calls on one
