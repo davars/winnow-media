@@ -207,17 +207,20 @@ section says how to structure the tests.
 `packages` and `lib` cover `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`
 and `aarch64-darwin`; `checks`, `apps` and `devShells` are Linux only.
 
-- `packages.<system>.<tool>` for `ffmpeg`, `imagemagick` and `webp-frames`.
-  `ffmpeg` is nixpkgs' `ffmpeg-headless` (`ffmpeg` and `ffprobe`),
-  `imagemagick` is nixpkgs' build, and `webp-frames` is built here against the
-  libwebp that ImageMagick links.
+- `packages.<system>.<tool>` for `ffmpeg`, `imagemagick`, `poppler` and
+  `webp-frames`. `ffmpeg` is nixpkgs' `ffmpeg-headless` (`ffmpeg` and
+  `ffprobe`), `imagemagick` is nixpkgs' build, `poppler` is nixpkgs'
+  `poppler-utils`, and `webp-frames` is built here against the libwebp that
+  ImageMagick links.
 - `packages.<system>.default`: a directory holding every program of those
-  tools, flat (`<dir>/magick`, not `<dir>/bin/magick`).
+  tools, flat (`<dir>/magick`, not `<dir>/bin/magick`), except that of
+  `poppler` it holds `pdfinfo` and `pdftoppm` only.
 - `lib.toolDir { system, tools }`: the same kind of directory for the named
   tools. An unknown name fails evaluation.
 - `lib.ldflags { system, tools }`: the list of strings for `buildGoModule`'s
   `ldflags` that points the `tool` package at that directory and records the
-  flake revision. `media` needs all three tools.
+  flake revision. `media` needs `imagemagick`, `ffmpeg` and `webp-frames`;
+  `poppler` adds `pdfinfo` and `pdftoppm`.
 - `lib.version`: the release version, without the `v`.
 - `lib.assertGoModPin goModPath` and `lib.checkGoModPin { goModText, rev }`:
   see [the pin check](#the-pin-check).

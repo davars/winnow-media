@@ -10,7 +10,14 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       toolSystems = systems ++ [ "x86_64-darwin" "aarch64-darwin" ];
 
-      toolNames = [ "ffmpeg" "imagemagick" "webp-frames" ];
+      toolNames = [ "ffmpeg" "imagemagick" "poppler" "webp-frames" ];
+
+      # The programs of a tool that toolDir links, where that is fewer than
+      # all of its bin/*. poppler-utils has thirteen programs; the library
+      # runs two.
+      toolPrograms = {
+        poppler = [ "pdfinfo" "pdftoppm" ];
+      };
 
       # Tools this repository builds. webp-frames links the pinned libwebp,
       # the build ImageMagick links, so it adds no store path of its own
@@ -38,6 +45,7 @@
       toolPackages = pkgs: nixpkgs.lib.genAttrs toolNames (name:
         if ownTools ? ${name} then ownTools.${name} pkgs
         else if name == "ffmpeg" then pkgs.ffmpeg-headless
+        else if name == "poppler" then pkgs.poppler-utils
         else pkgs.${name});
 
       # Programs the tests use to build and inspect inputs; they are not part
@@ -52,16 +60,21 @@
           all = toolPackages pkgs;
           pick = name:
             all.${name} or (throw "winnow-media: unknown tool '${name}'; known tools: ${nixpkgs.lib.concatStringsSep ", " toolNames}");
+          link = name:
+            let bin = nixpkgs.lib.getBin (pick name); in
+            if toolPrograms ? ${name}
+            then nixpkgs.lib.concatMapStringsSep "\n" (prog: ''ln -s "${bin}/bin/${prog}" "$out/${prog}"'') toolPrograms.${name}
+            else ''
+              for f in ${bin}/bin/*; do
+                ln -s "$f" "$out/$(basename "$f")"
+              done
+            '';
         in
         # Flat: <dir>/<program>, not <dir>/bin/<program>. A name two tools
         # both provide fails the build instead of picking one.
         pkgs.runCommand "winnow-media-tools" { } ''
           mkdir -p $out
-          ${nixpkgs.lib.concatMapStringsSep "\n" (p: ''
-            for f in ${nixpkgs.lib.getBin p}/bin/*; do
-              ln -s "$f" "$out/$(basename "$f")"
-            done
-          '') (map pick tools)}
+          ${nixpkgs.lib.concatMapStringsSep "\n" link tools}
         '';
 
       # The release version, exported as lib.version. The commit that is
@@ -185,7 +198,7 @@
 
           # The measurement harness runs the Processor, which resolves
           # magick, ffmpeg and ffprobe, and generates inputs with the same tools.
-          measureTools = [ "imagemagick" "ffmpeg" "webp-frames" ];
+          measureTools = [ "imagemagick" "ffmpeg" "webp-frames" "poppler" ];
           measure = buildGoModule {
             pname = "measure";
             version = "0";
@@ -201,6 +214,16 @@
           probe = probeWith (ldflags { inherit system; tools = probeTools; });
 
           closure = pkgs.closureInfo { rootPaths = [ probe ]; };
+
+          # The same, built as a consumer that renders builds it.
+          renderTools = [ "imagemagick" "webp-frames" "poppler" ];
+          renderDir = toolDir { inherit system; tools = renderTools; };
+          renderProbe = probeWith (ldflags { inherit system; tools = renderTools; });
+          renderClosure = pkgs.closureInfo { rootPaths = [ renderProbe ]; };
+
+          poppler = tools.poppler;
+          popplerClosure = pkgs.closureInfo { rootPaths = [ poppler ]; };
+          ffmpegClosure = pkgs.closureInfo { rootPaths = [ tools.ffmpeg ]; };
 
           webpFrames = tools.webp-frames;
           webpFramesClosure = pkgs.closureInfo { rootPaths = [ webpFrames ]; };
@@ -244,6 +267,61 @@
 
             if ! grep -qxF ${pkgs.imagemagick} ${closure}/store-paths; then
               echo "imagemagick ${pkgs.imagemagick} missing from the probe's runtime closure" >&2
+              exit 1
+            fi
+
+            # A consumer that does not list poppler gets none of it.
+            for line in 4 5; do
+              got=$(${probe}/bin/toolprobe | sed -n ''${line}p)
+              if [ -n "$got" ]; then
+                echo "toolprobe without poppler resolved line $line as '$got', want none" >&2
+                exit 1
+              fi
+            done
+            if grep -q -- '-poppler-' ${closure}/store-paths; then
+              echo "the probe without poppler has poppler in its runtime closure" >&2
+              exit 1
+            fi
+
+            # With poppler: both programs resolve into the flat directory, and
+            # run.
+            for entry in "4 pdftoppm" "5 pdfinfo"; do
+              set -- $entry
+              got=$(${renderProbe}/bin/toolprobe | sed -n "$1p")
+              want=${renderDir}/$2
+              if [ "$got" != "$want" ]; then
+                echo "toolprobe resolved $2 as '$got', want '$want'" >&2
+                exit 1
+              fi
+              "$got" -v >/dev/null 2>&1
+            done
+            if ! grep -qxF ${poppler} ${renderClosure}/store-paths; then
+              echo "poppler-utils ${poppler} missing from the render probe's runtime closure" >&2
+              exit 1
+            fi
+
+            # One font and pixel stack: poppler links the build of each library
+            # that ImageMagick links, so both renderers read fonts through one
+            # fontconfig. A nixpkgs change that splits them fails here.
+            for lib in fontconfig freetype libpng-apng lcms2 libjpeg-turbo cairo; do
+              for path in $(grep -E -- "^/nix/store/[a-z0-9]{32}-$lib-[0-9]" ${popplerClosure}/store-paths); do
+                if ! grep -qxF "$path" ${imagemagickClosure}/store-paths; then
+                  echo "poppler links $path, which is not in ImageMagick's closure" >&2
+                  exit 1
+                fi
+              done
+              if ! grep -qE -- "^/nix/store/[a-z0-9]{32}-$lib-[0-9]" ${popplerClosure}/store-paths; then
+                echo "poppler's closure has no $lib; the check names a library it does not link" >&2
+                exit 1
+              fi
+            done
+
+            # What poppler adds beyond ImageMagick and ffmpeg is a known set.
+            extra=$(sort ${popplerClosure}/store-paths | comm -23 - <(sort -u ${imagemagickClosure}/store-paths ${ffmpegClosure}/store-paths) \
+              | grep -vE -- '^/nix/store/[a-z0-9]{32}-(poppler-utils|poppler-data|nss|nspr|sqlite)-[0-9]' || true)
+            if [ -n "$extra" ]; then
+              echo "poppler adds store paths beyond ImageMagick's and ffmpeg's closures, other than the expected ones:" >&2
+              echo "$extra" >&2
               exit 1
             fi
             touch $out

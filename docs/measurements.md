@@ -197,6 +197,26 @@ largest inputs admitted:
 The file-backed part is the pixel cache, which the kernel reclaims under the
 limit.
 
+## Tool closure
+
+What the poppler tool adds to a binary's runtime closure, measured on the
+nixpkgs revision `flake.lock` locked at the time (poppler 26.11.0, ImageMagick
+7.1.2-35, ffmpeg-headless 8.1.3), as the sum of `nix path-info` NAR sizes. The
+flake links only `pdfinfo` and `pdftoppm` from `poppler-utils`.
+
+| Closure | Paths | Size |
+|---|---|---|
+| ImageMagick and ffmpeg together | 155 | 373.9 MiB |
+| Added by `poppler-utils` | 5 | 29.3 MiB |
+
+The five are `poppler-utils` (6.8 MiB), `poppler-data` (12.4 MiB), `nss`
+(4.0 MiB), `sqlite` (5.7 MiB) and `nspr` (0.3 MiB). Everything else poppler
+links is already in ImageMagick's closure, among it the `fontconfig`,
+`freetype`, `libpng`, `lcms2`, `libjpeg-turbo` and `cairo` builds. The
+flake's closure check requires both: that the five are all that poppler adds,
+and that those libraries are ImageMagick's, so that the two read fonts through
+one fontconfig.
+
 ## Memory profiles
 
 The low-memory limits were measured on the small host. At the
