@@ -13,10 +13,10 @@ import (
 var (
 	// ErrUnsupportedType is returned by Open when the file's type, as its
 	// bytes or OpenOptions.Type name it, is not in Config.Types, or when its
-	// bytes are of no type the package recognizes; and by OpenDocument for a
-	// file that is not a PDF or a type Config.RenderTypes lacks. Retrying the
-	// same call cannot succeed; for a type its bytes do not identify (see Types),
-	// naming it in OpenOptions.Type can.
+	// bytes are of no type the package recognizes; and by OpenDocument and
+	// RenderSVG for a file that is not of a type Config.RenderTypes lists and
+	// names. Retrying the same call cannot succeed; for a type its bytes do not
+	// identify (see Types), naming it in OpenOptions.Type can.
 	ErrUnsupportedType = errors.New("unsupported media type")
 
 	// ErrTooLarge is returned when an input, or the work a call asks of it,
@@ -35,9 +35,10 @@ var (
 	// or on a less loaded host.
 	ErrTimeLimit = errors.New("time limit exceeded")
 
-	// ErrClosed is returned by Open and OpenDocument on a closed Processor and
-	// by Encode on a closed Source and Render on a closed Document. Retrying cannot succeed; open a new Source or create a
-	// new Processor.
+	// ErrClosed is returned by Open, OpenDocument and RenderSVG on a closed
+	// Processor, by Encode on a closed Source and by Render on a closed
+	// Document. Retrying cannot succeed; open a new Source or create a new
+	// Processor.
 	ErrClosed = errors.New("closed")
 
 	// ErrInputChanged is returned when the file is not the one that was
