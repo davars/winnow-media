@@ -32,8 +32,11 @@ import (
 type inputSpec struct {
 	name string
 	file string
-	op   string // "video", "still" or "animation"
+	op   string // "video", "still", "animation", "pdf", "svg" or "preview"
 	gen  func(ctx context.Context, path, work string) error
+	// do, when not nil, runs the operation in place of Open and Encode, into
+	// the empty directory out, and returns how many files it wrote.
+	do func(ctx context.Context, p *media.Processor, path, out string) (int, media.Usage, error)
 }
 
 type row struct {
@@ -135,7 +138,7 @@ func generate(ctx context.Context, dir string, specs []inputSpec) error {
 }
 
 func measure(ctx context.Context, dir string, specs []inputSpec, repeat int) ([]row, error) {
-	p, err := media.NewProcessor(ctx, media.Config{})
+	p, err := media.NewProcessor(ctx, media.Config{RenderTypes: media.RenderTypes()})
 	if err != nil {
 		return nil, err
 	}
@@ -175,8 +178,15 @@ func run(ctx context.Context, p *media.Processor, s inputSpec, path string, repe
 		if s.op == "video" || s.op == "animation" {
 			sel.Frames = media.Even(64)
 		}
-		imgs, usage, err := encodeFile(ctx, p, path, sel, out)
-		n := len(imgs)
+		var n int
+		var usage media.Usage
+		if s.do != nil {
+			n, usage, err = s.do(ctx, p, path, out)
+		} else {
+			var imgs []media.Image
+			imgs, usage, err = encodeFile(ctx, p, path, sel, out)
+			n = len(imgs)
+		}
 		wall := time.Since(start)
 		_ = os.RemoveAll(out)
 		r.Runs++

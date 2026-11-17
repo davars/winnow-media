@@ -57,6 +57,7 @@ func inputs(extra string) ([]inputSpec, error) {
 		animSpec("webp", 2000, 707, 707),
 		animSpec("webp", 1000, 1000, 1000),
 	}
+	specs = append(specs, renderSpecs()...)
 	for _, e := range strings.FieldsFunc(extra, func(r rune) bool { return r == ',' }) {
 		parts := strings.Split(e, ":")
 		var frames, w, h int

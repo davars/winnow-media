@@ -50,6 +50,9 @@ nix run .#measure -- -gen-only <dir>        # only generate
 nix run github:davars/winnow-media#measure -- -measure-only <dir>
 ```
 
+The rendering inputs (PDFs, an SVG and a candidate set for `ExtractPreview`)
+are generated the same way and listed by `-list`.
+
 `-measure-only` runs on another machine, such as an arm64 board, over a
 directory copied from the one `-gen-only` filled. `-only <name>` runs one
 input, `-repeat N` reports median wall time and CPU, and `-extra
@@ -216,6 +219,68 @@ links is already in ImageMagick's closure, among it the `fontconfig`,
 figures are a measurement, not a check: the flake's closure check asserts only
 which programs a consumer's binary resolves and that a tool it does not list
 is absent.
+
+## Rendering
+
+Measured with `internal/cmd/measure` on the reference host (12-CPU x86_64,
+Linux 6.8) at the default `Resources`, as medians of three runs, with
+poppler 26.11.0 and ImageMagick 7.1.2-35 from the flake's lock. The host was
+not idle: its load average was between 3 and 12. Each row is one call of the
+operation, opening included, under the sandbox and the file confinement.
+
+| Input | Operation | Wall | CPU | Peak RSS |
+|---|---|---|---|---|
+| 200-page vector PDF, 18.1 MiB, 1500 paths a page | `OpenDocument`, then page 0 at `LongEdge(2048)` | 3.42 s | 3.38 s | 33 MiB |
+| the same | `OpenDocument`, then page 100 at `Resolution(200, 0)` | 3.69 s | 3.65 s | 35 MiB |
+| one 16384 by 16384 point page holding a 16384 by 16384 RGB image, 3.0 MiB | `OpenDocument`, then `LongEdge(16384)` | 14.0 s | 14.0 s | 1809 MiB |
+| SVG of 4000 by 4000 pixels with 400 blurred and shadowed shapes, 27 KiB | `RenderSVG` | 33.7 s | 52.3 s | 525 MiB |
+| 16 JPEG candidates of 0.3 to 5 megapixels in a 17.7 MiB file | `ExtractPreview` | 0.56 s | 0.36 s | 26.5 MiB |
+
+The largest page raster is a 16384 by 16384 page, 768 MiB at 3 bytes a pixel
+in pdftoppm, and the run's peak is 1809 MiB with its image decoded. The
+`measure` harness generates these inputs (`-list` names them).
+
+**The page limit.** `maxDocumentPages` is 100,000: `pdfinfo -box` over a
+100,000-page file of 11 MB took 1.04 s and 208 MiB, and printed 35 MB, which
+`OpenDocument` holds. A document poppler accepts cannot declare more pages
+than it has objects, so the limit bounds the work, not a count a caller
+could be misled by. Projection: the cost grows linearly in pages.
+
+**The candidate limit.** `maxPreviewCandidates` is 16: the row above is the
+cost of 16 candidates of growing size, two header reads each, with one
+scratch copy alive beside the best. A camera raw file names four kinds of
+preview, so 16 is four times what one needs.
+
+**Fonts.** A render run has no home directory, so fontconfig reads no user
+cache and scans the host's font files each run. On the reference host, with 29
+font files, a `pdftoppm` run of a one-page text PDF took 191 ms that way,
+against 22 ms with the user's cache or with a cache directory of its own
+already warm (`XDG_CACHE_HOME` set): 170 ms of CPU for each run. The library
+builds no cache: the cost is small beside a render of any page that has
+content (the rows above) and beside what a consumer does with a page. It is a
+cost per run, so it grows with the host's font count, and a deployment
+that renders many small pages on a host with many fonts should measure it.
+Decision branch: if a rendering host shows more than about a second a run, add
+a read-only cache built once by `NewProcessor`.
+
+**Files a render run opens.** The confinement's lists
+(`renderReadPaths`, `renderWritePaths` and `systemLibraryPaths` in
+`media/sandbox.go`) come from `strace -f -e trace=openat,open,access,newfstatat,statx,readlink`
+of `pdftoppm` and `magick rsvg:` run under `env -i LC_ALL=C` on a text page and
+a text SVG. Outside the Nix store they opened: `/etc/fonts` (the configuration
+and its `conf.d`), `/usr/share/fontconfig/conf.avail`, `/usr/share/fonts`,
+`/usr/local/share/fonts`, and, only to find them absent, `/var/cache/fontconfig`
+(a cache in a format of another fontconfig build, which no run used here),
+`/.cache/fontconfig` and `/.config/fontconfig`. The last two are where
+fontconfig looks for a home directory's files when there is no home, the
+root. The confinement refuses all three, so a file there is never read; the
+rest of the lists are what the tools of the package documentation's Hostile
+input section need besides: `/proc`, `/sys/devices/system/cpu`, `/dev/urandom`,
+`/dev/null`, `/etc/localtime`, `/etc/ld.so.cache` and `/usr/lib/locale`, read
+by the C library and the OpenMP runtime. Of these, only the first group
+showed in the strace; the others are the library's allowance for what a host's
+C library reads, not measured. Tests run the renders confined with all of
+them, on Linux 6.8.
 
 ## Memory profiles
 

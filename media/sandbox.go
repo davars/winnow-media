@@ -43,7 +43,8 @@ type confinement struct {
 
 // The standing allowances of a render run, besides its program and what the
 // run is given: where fontconfig and the C library look for fonts and the
-// locale, the process and CPU information the runtime reads, and the devices.
+// locale, the process and CPU information the runtime reads, and the devices;
+// docs/measurements.md#rendering says how they were found.
 var (
 	renderReadPaths = []string{
 		"/etc/fonts", "/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fontconfig",

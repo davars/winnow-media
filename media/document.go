@@ -17,7 +17,8 @@ import (
 
 // The fixed limits of a rendered document.
 const (
-	// maxDocumentPages is the most pages a document may have.
+	// maxDocumentPages is the most pages a document may have; the cost of
+	// reading that many page boxes is in docs/measurements.md#rendering.
 	maxDocumentPages = 100_000
 	// pdfSniffBytes is how far into a file the PDF header may start, as
 	// poppler allows.

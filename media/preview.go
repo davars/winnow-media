@@ -10,7 +10,8 @@ import (
 )
 
 // maxPreviewCandidates is how many candidates one ExtractPreview call may
-// judge, which bounds the header reads and scratch copies of a call.
+// judge, which bounds the header reads and scratch copies of a call
+// (docs/measurements.md#rendering).
 const maxPreviewCandidates = 16
 
 // PreviewCandidate is a byte range of a file that may hold an embedded JPEG,
