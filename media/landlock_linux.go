@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -58,47 +57,6 @@ const (
 	// fileRights are the rights a rule on a file, not a directory, may carry.
 	fileRights = fsExecute | fsWriteFile | fsReadFile | fsTruncate
 )
-
-// The standing allowances of a render run, besides its program and what the
-// run is given: where fontconfig and the C library look for fonts and the
-// locale, the process and CPU information the runtime reads, and the devices.
-var (
-	renderReadPaths = []string{
-		"/etc/fonts", "/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fontconfig",
-		"/usr/lib/locale", "/etc/localtime", "/etc/ld.so.cache",
-		"/proc", "/sys/devices/system/cpu", "/dev/urandom",
-	}
-	renderWritePaths = []string{"/dev/null"}
-	// systemLibraryPaths hold the programs and libraries of a tool that is
-	// not in the Nix store.
-	systemLibraryPaths = []string{"/usr", "/lib", "/lib64"}
-)
-
-// nixStore is where the programs and libraries of the flake's tools are.
-const nixStore = "/nix/store"
-
-// renderConfinement returns the confinement of a run of the program tool
-// that reads one input and writes only into runDir; extraRead are further
-// directories it may read, such as the directory of a policy file. A tool
-// that resolves into the Nix store may execute the store, and any other the
-// system's library directories and its own.
-func renderConfinement(tool, runDir string, extraRead ...string) *confinement {
-	c := &confinement{
-		Read:  append(append([]string{}, renderReadPaths...), extraRead...),
-		Write: append([]string{runDir}, renderWritePaths...),
-		Input: true,
-	}
-	resolved, err := filepath.EvalSymlinks(tool)
-	if err != nil {
-		resolved = tool
-	}
-	if resolved == nixStore || strings.HasPrefix(resolved, nixStore+"/") {
-		c.Exec = []string{nixStore}
-	} else {
-		c.Exec = append([]string{filepath.Dir(resolved)}, systemLibraryPaths...)
-	}
-	return c
-}
 
 // landlockABI returns the Landlock ABI version of the kernel, at least 1, or
 // an error where Landlock is not built in or not enabled.

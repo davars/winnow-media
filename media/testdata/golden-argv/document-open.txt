@@ -1,0 +1,11 @@
+"pdfinfo"
+"/dev/fd/3"
+
+"pdfinfo"
+"-box"
+"-f"
+"1"
+"-l"
+"2"
+"/dev/fd/3"
+

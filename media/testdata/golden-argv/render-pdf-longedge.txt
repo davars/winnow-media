@@ -1,0 +1,10 @@
+"pdftoppm"
+"-png"
+"-f"
+"1"
+"-singlefile"
+"-scale-to"
+"2048"
+"/dev/fd/3"
+"p"
+

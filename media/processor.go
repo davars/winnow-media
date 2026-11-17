@@ -32,6 +32,8 @@ type Processor struct {
 	// types is the resolved Config.Types, sorted; accepts is it as a set.
 	types   []string
 	accepts map[string]bool
+	// renders is the resolved Config.RenderTypes as a set.
+	renders map[string]bool
 	// detect is the -format_whitelist of the probe that names a video the
 	// leading bytes do not: the demuxers of the detected types of types.
 	// Empty when there are none, which turns the probe off.
@@ -56,12 +58,16 @@ type Processor struct {
 	closed  bool
 	opening sync.WaitGroup
 	sources map[*Source]struct{}
+	// docs are the Documents OpenDocument made that are not yet closed.
+	docs map[*Document]struct{}
 }
 
 // NewProcessor returns a Processor for cfg. It needs the magick, ffmpeg,
 // ffprobe and webp-frames programs, whatever cfg.Types is, found as package
 // tool finds them, and, unless cfg.Unsandboxed is set, a host the sandbox
-// supports (see the package documentation). It checks, within ctx, that the
+// supports (see the package documentation). With cfg.RenderTypes naming
+// application/pdf it also needs pdfinfo and pdftoppm, and under the sandbox a
+// host that can confine a tool's files. It checks, within ctx, that the
 // sandbox and the generated ImageMagick policy are in force, and returns an
 // error rather than a Processor that would run without either. Call Close
 // when done.
@@ -91,12 +97,16 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
+	renderTypes, err := resolveRenderTypes(cfg.RenderTypes)
+	if err != nil {
+		return nil, fmt.Errorf("processor: %w", err)
+	}
 	start := runner(directRunner)
+	rl := rlimitsFor(res)
 	if !cfg.Unsandboxed {
 		if err := sandboxAvailable(); err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
 		}
-		rl := rlimitsFor(res)
 		if err := probeSandbox(ctx, rl); err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
 		}
@@ -106,7 +116,15 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 		start = wrap(start)
 	}
 	tools := map[string]string{}
-	for _, name := range []string{"magick", "ffmpeg", "ffprobe", webpFramesTool} {
+	names := []string{"magick", "ffmpeg", "ffprobe", webpFramesTool}
+	renders := make(map[string]bool, len(renderTypes))
+	for _, typ := range renderTypes {
+		renders[typ] = true
+	}
+	if renders[typePDF] {
+		names = append(names, "pdfinfo", "pdftoppm")
+	}
+	for _, name := range names {
 		path, err := tool.Resolve(name)
 		if err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
@@ -135,7 +153,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	for _, typ := range types {
 		accepts[typ] = true
 	}
-	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, detect: detectedDemuxers(types), tools: tools, start: start}
+	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, renders: renders, detect: detectedDemuxers(types), tools: tools, start: start}
 	p.run = p.runTool
 	p.compose = p.composeFrames
 	rules := processorPolicy(res, types)
@@ -146,6 +164,12 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	if err := p.verifyPolicy(ctx, rules); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
+	}
+	if len(renders) > 0 && !cfg.Unsandboxed {
+		if err := probeConfinement(ctx, p.dir, rl); err != nil {
+			_ = p.Close()
+			return nil, fmt.Errorf("processor: %w", err)
+		}
 	}
 	return p, nil
 }
@@ -159,8 +183,8 @@ func (p *Processor) install(rules []policyRule) error {
 
 func (p *Processor) tmpDir() string { return filepath.Join(p.dir, "tmp") }
 
-// Close closes every Source the Processor opened that is still open and
-// removes the Processor's scratch. It waits for the Open calls in progress,
+// Close closes every Source and Document the Processor opened that is still
+// open and removes the Processor's scratch. It waits for the Open calls in progress,
 // each of which returns ErrClosed or a Source that Close then closes, and for
 // the calls running on the Sources. It interrupts none of them: cancel their
 // contexts first to end them sooner. Open after Close has begun returns
@@ -172,10 +196,17 @@ func (p *Processor) Close() error {
 	for s := range p.sources {
 		open = append(open, s)
 	}
+	docs := make([]*Document, 0, len(p.docs))
+	for d := range p.docs {
+		docs = append(docs, d)
+	}
 	p.mu.Unlock()
 	p.opening.Wait()
 	for _, s := range open {
 		_ = s.Close()
+	}
+	for _, d := range docs {
+		_ = d.Close()
 	}
 	return os.RemoveAll(p.dir)
 }
@@ -207,6 +238,27 @@ func (p *Processor) register(src *Source) bool {
 	return true
 }
 
+// registerDocument records d as open, and reports false if the Processor is
+// closed.
+func (p *Processor) registerDocument(d *Document) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false
+	}
+	if p.docs == nil {
+		p.docs = map[*Document]struct{}{}
+	}
+	p.docs[d] = struct{}{}
+	return true
+}
+
+func (p *Processor) forgetDocument(d *Document) {
+	p.mu.Lock()
+	delete(p.docs, d)
+	p.mu.Unlock()
+}
+
 func (p *Processor) forget(src *Source) {
 	p.mu.Lock()
 	delete(p.sources, src)
@@ -225,9 +277,13 @@ func (p *Processor) runTempDir() (string, error) {
 // $HOME/.config/ImageMagick/policy.xml after the directory
 // MAGICK_CONFIGURE_PATH names, and the last matching rule wins, so inheriting
 // either variable would let the caller's files widen the policy.
-func (p *Processor) environ(tmp string) []string {
+func (p *Processor) environ(tmp string) []string { return p.environFor(tmp, p.dir) }
+
+// environFor is environ with ImageMagick reading its configuration from
+// policyDir.
+func (p *Processor) environFor(tmp, policyDir string) []string {
 	return []string{
-		"MAGICK_CONFIGURE_PATH=" + p.dir,
+		"MAGICK_CONFIGURE_PATH=" + policyDir,
 		"MAGICK_TEMPORARY_PATH=" + tmp,
 		"TMPDIR=" + tmp,
 		"LC_ALL=C",

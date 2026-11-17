@@ -84,6 +84,25 @@
 // judged and no tool reads it: only a candidate's bytes, after a marker check
 // in Go, reach ImageMagick, under the same policy as any other input.
 //
+// # Rendering
+//
+// A PDF is never opened as a [Source]: [Types] does not list it, and Open
+// refuses it. A caller that names application/pdf in [Config.RenderTypes]
+// reads it through [Processor.OpenDocument], which admits the file and reads
+// its page boxes, and [Document.Render], which draws the pages a
+// [FrameSelection] selects at a [PageScale] into an empty directory as PNGs
+// named 000.png and on. [RenderTypes] lists what can be named; a nil
+// Config.RenderTypes renders nothing and leaves the Processor as it was
+// before rendering existed.
+//
+// A render writes the renderer's own PNG, with no profile and no processing,
+// and the caller then opens it with Open like any other file. That puts what
+// the renderer made through the same gate, type and caps as any input, and
+// leaves the caller the PNG itself where that is what it needs.
+//
+// Text in a PDF whose fonts are not embedded is drawn with the host's fonts
+// (see Determinism).
+//
 // # Lifecycle and concurrency
 //
 // A Processor and its Sources are safe for concurrent use. Calls on one
@@ -98,8 +117,9 @@
 // dropped what it kept between calls.
 //
 // Close waits for running calls and does not interrupt them: to stop sooner,
-// cancel their contexts first. [Processor.Close] closes every Source still
-// open. Open and Encode after Close return [ErrClosed].
+// cancel their contexts first. [Processor.Close] closes every Source and
+// [Document] still open. Open, Encode, OpenDocument and Render after Close
+// return [ErrClosed].
 //
 // # Errors
 //
@@ -148,10 +168,26 @@
 //   - When a tool exits or its call is cancelled, every process it started
 //     is killed.
 //
+// A PDF is read only by the renderer, [Document.Render], and is never given
+// to ImageMagick or ffmpeg. With the sandbox, every render run is also confined
+// by Landlock: it can read the program and its libraries, the system's font
+// and locale files, process and CPU information, and the one input file, by
+// its descriptor, not a file beside it or one later put at its path, and
+// it can write only in a directory of its own. A reference inside the PDF to
+// another file, an external stream, a font or CMap path, an attachment or a
+// link action is not followed, and the sandbox's socket denial closes the
+// network. NewProcessor fails when Config.RenderTypes is set and the host
+// cannot confine files (Linux 5.13 or later with the Landlock security module
+// enabled).
+//
 // It does not guarantee that the decoders are free of bugs, and it does not
-// confine what an exploited tool can reach. Such a tool runs as the calling
-// user: it can read and write that user's files and signal that user's other
-// processes. Its resident memory is not limited, only its address space. The
+// confine what an exploited tool can reach, except for the files of a render
+// run, as above; a render run can still signal the user's other processes,
+// because scoping signals needs Landlock ABI 6 (Linux 6.12), which the
+// supported kernels do not all have. Such a tool runs as the calling user: it
+// can read and write that user's files and signal that user's other
+// processes. Its resident memory is not
+// limited, only its address space. The
 // limit on the processes it may start counts all of the user's tasks, and is
 // not enforced for root. A deployment for hostile input supplies the rest: a
 // container or equivalent with its own unprivileged user, a read-only root
@@ -188,6 +224,12 @@
 // tool binaries give the same output bytes on one architecture. Nothing is
 // promised across library versions, tool builds or architectures.
 //
+// A render's bytes depend also on the host's fonts when the PDF names fonts it
+// does not embed: fontconfig reads the system's configuration and font
+// directories, and a render is the same only where those are the same. The
+// library gives a render run no home directory, so a user's own fonts and
+// fontconfig files are never read.
+//
 // # Sizing
 //
 // [Resources] bounds one tool run. A call runs one tool at a time, except an
@@ -209,6 +251,11 @@
 //     and up to Resources.Disk for each animation. These bound the large
 //     items, not a call's scratch as a whole, so give Dir a size limit of its
 //     own.
+//   - A rendered page: pdftoppm's memory is bounded only by the sandbox's
+//     address space limit, not by Resources.Memory and Map. A page of 16384 by
+//     16384 pixels holds 768 MiB of pixels, and measured 1.8 GiB at its peak
+//     with a full-page image to decode, beside the page's PNG on disk. Each
+//     render run also reads the host's fonts afresh.
 //   - Time: Resources.TimeLimit is wall-clock time ImageMagick may spend on
 //     one image, and Resources.CPUTime the CPU time of one tool run over all
 //     its threads. Neither bounds a call, which may run many tools (see
@@ -230,6 +277,9 @@
 // the tools, the defaults of Resources, and the set Types returns, which may
 // grow. A deployment sets the fields it relies on; a nil Config.Types follows
 // Types, so a deployment for hostile input names its types.
+//
+// [RenderTypes] may grow, and [Types] never lists a type that only a renderer
+// reads.
 //
 // Later versions may add fields to the structs, values to [Kind] and
 // [Format], and sentinels, so that an error which wraps none now may wrap one

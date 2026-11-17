@@ -83,6 +83,41 @@ func ExampleProcessor_ExtractPreview() {
 	fmt.Printf("candidate %d, %dx%d\n", pv.Candidate, pv.Width, pv.Height)
 }
 
+// Drawing a PDF's pages: the Processor is told to render PDFs, the document is
+// admitted and its pages described, and Render writes the pages it selects as
+// PNGs, which Open reads like any other file.
+func ExampleDocument_Render() {
+	ctx := context.Background()
+	p, err := media.NewProcessor(ctx, media.Config{RenderTypes: []string{"application/pdf"}})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer p.Close()
+
+	doc, _, err := p.OpenDocument(ctx, "report.pdf", media.DocumentOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer doc.Close()
+	fmt.Printf("%d pages\n", len(doc.Info().Pages))
+
+	// The first page with its long edge 2048 pixels, as pdftoppm draws it.
+	dir, err := os.MkdirTemp("", "pages")
+	if err != nil {
+		log.Fatal(err)
+	}
+	rasters, _, err := doc.Render(ctx, dir, media.Indices(0), media.LongEdge(2048))
+	if err != nil {
+		log.Fatal(err)
+	}
+	src, _, err := p.Open(ctx, filepath.Join(dir, rasters[0].Name), media.OpenOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer src.Close()
+	fmt.Printf("page %d: %dx%d\n", rasters[0].Page, rasters[0].Width, rasters[0].Height)
+}
+
 // The types a Processor accepts when Config.Types is nil.
 func ExampleTypes() {
 	for _, t := range media.Types() {

@@ -17,6 +17,15 @@ type Config struct {
 	// image/heic, image/heif and image/avif are all named or none, since one
 	// decoder reads all three.
 	Types []string
+	// RenderTypes are the types the Processor rasterizes through
+	// OpenDocument, each one that RenderTypes() lists; naming any other is an
+	// error from NewProcessor. Nil or empty renders none, which leaves the
+	// Processor as v1.0 made it. Rendering application/pdf needs the pdfinfo
+	// and pdftoppm programs, found as package tool finds the others. With the
+	// sandbox, rendering needs a host that can confine a tool's files (the
+	// package documentation's Rendering section), and NewProcessor fails
+	// without one.
+	RenderTypes []string
 	// Caps turn away inputs that are too large. The zero value is the
 	// library's ceilings.
 	Caps Caps
@@ -137,9 +146,10 @@ type Resources struct {
 	// uses at most two for a source above 4096x2160 whatever Threads is.
 	// Default 4.
 	Threads int
-	// TimeLimit is the wall-clock time ImageMagick may work on one image, and
-	// how long a frame compositor waits for a frame it wrote to be consumed.
-	// It is not a deadline for a call, which may process many images. It must
+	// TimeLimit is the wall-clock time ImageMagick may work on one image, how
+	// long a frame compositor waits for a frame it wrote to be consumed, and
+	// the time each pdfinfo run and each pdftoppm page may take. It is not a
+	// deadline for a call, which may process many images. It must
 	// be a whole number of seconds, at least one. Default 300 s.
 	TimeLimit time.Duration
 	// CPUTime is the CPU time one tool run may use, summed over its threads.

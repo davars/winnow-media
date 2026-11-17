@@ -1,0 +1,10 @@
+"pdftoppm"
+"-png"
+"-f"
+"1"
+"-singlefile"
+"-r"
+"200"
+"/dev/fd/3"
+"p"
+

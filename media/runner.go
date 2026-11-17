@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -53,8 +54,25 @@ type runner func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (t
 // input descriptor.
 type toolRun func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error)
 
+// renderRun marks the tool runs of a context as render runs: they work in dir,
+// which the caller made and removes, and are confined to it, the input, the
+// tool and a fixed set of system files. policyDir, when not empty, is the
+// ImageMagick configuration directory they read.
+type renderRun struct {
+	dir, policyDir string
+}
+
+type renderRunKey struct{}
+
+// withRenderRun returns ctx marking its tool runs as render runs in rr.
+func withRenderRun(ctx context.Context, rr renderRun) context.Context {
+	return context.WithValue(ctx, renderRunKey{}, rr)
+}
+
 // runTool runs one tool through the Processor's runner, with in, when not nil,
-// as its input descriptor.
+// as its input descriptor. A run in a context from withRenderRun works in the
+// render run's directory, which it leaves in place, and is confined; any
+// other works in a directory of its own that it removes.
 func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 	path, ok := p.tools[name]
 	if !ok {
@@ -63,14 +81,25 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 	if err := requireInput(in, args); err != nil {
 		return runResult{}, err
 	}
-	tmp, err := p.runTempDir()
-	if err != nil {
-		return runResult{}, err
+	spec := runSpec{Tool: path, Args: args, Dir: p.dir, Input: in}
+	if rr, ok := ctx.Value(renderRunKey{}).(renderRun); ok {
+		spec.Env, spec.Dir = p.environFor(rr.dir, cmp.Or(rr.policyDir, p.dir)), rr.dir
+		var extra []string
+		if rr.policyDir != "" {
+			extra = []string{rr.policyDir}
+		}
+		spec.Confine = renderConfinement(path, rr.dir, extra...)
+	} else {
+		tmp, err := p.runTempDir()
+		if err != nil {
+			return runResult{}, err
+		}
+		defer func() { _ = os.RemoveAll(tmp) }()
+		spec.Env = p.environ(tmp)
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
 	var stdout bytes.Buffer
 	var stderr headTailBuffer
-	res, err := p.start(ctx, runSpec{Tool: path, Args: args, Env: p.environ(tmp), Dir: p.dir, Input: in}, &stdout, &stderr)
+	res, err := p.start(ctx, spec, &stdout, &stderr)
 	tail := bytes.TrimSpace(stderr.bytes())
 	return runResult{Stdout: stdout.Bytes(), Stderr: tail, Usage: res.Usage}, runError(ctx, name, res, err, tail)
 }

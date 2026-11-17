@@ -16,6 +16,8 @@ func helperMain() {}
 
 func probeSandbox(context.Context, rlimits) error { return sandboxAvailable() }
 
+func probeConfinement(context.Context, string, rlimits) error { return sandboxAvailable() }
+
 func sandboxRunner(rlimits) runner {
 	return func(context.Context, runSpec, io.Writer, io.Writer) (toolResult, error) {
 		return toolResult{}, sandboxAvailable()

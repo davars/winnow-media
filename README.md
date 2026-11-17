@@ -63,7 +63,8 @@ is the reference, and its other
 (source: [`media/example_test.go`](media/example_test.go)) cover several
 encodings from one decode, samples of a video, an animation to one animated
 WebP, regions of a kept decode, naming a type, a configuration for hostile
-input, handling errors, and extracting an embedded preview.
+input, handling errors, extracting an embedded preview, and drawing the pages
+of a PDF.
 
 | Call | Does |
 |---|---|
@@ -71,6 +72,7 @@ input, handling errors, and extracting an embedded preview.
 | `Processor.Open` | Admits one file by its bytes, type and size, without decoding a pixel, and returns a `Source`. |
 | `Source.Info` | Describes the file: type, `Kind` (still, animation or video), size, orientation, and the facts of its kind. |
 | `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Consecutive`) and `Region` of a `Select` into an empty directory, once per `Encoding`: a file per frame, or one animated WebP. |
+| `Processor.OpenDocument`, `Document.Render` | Admits a PDF (with `Config.RenderTypes`) and draws the pages a `FrameSelection` selects, at a `PageScale`, as the renderer's own PNGs in an empty directory, for `Open` to read. |
 | `Processor.ExtractPreview` | Chooses the largest embedded JPEG among byte ranges the caller reports for a file, and copies it into an empty directory to be opened. |
 | `Source.KeptBytes` | Reports the disk a Source holds for `OpenOptions.KeepDecode`. |
 | `Source.Close`, `Processor.Close` | Release a Source's file and scratch; closing the Processor closes its Sources. |
@@ -86,8 +88,9 @@ Each point is stated in full in the package documentation.
 - **[Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).**
   The content cannot select a decoder outside `Config.Types`, and a tool
   cannot open a socket, gain privileges or leave a process behind. The sandbox
-  does not confine files or resident memory: a deployment supplies that, and
-  sets `Config.Types` and `Config.Caps`.
+  confines the files of a PDF render, and neither the files of other tools nor
+  resident memory: a deployment supplies that, and sets `Config.Types` and
+  `Config.Caps`.
 - **[Lifecycle](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Lifecycle_and_concurrency).**
   Everything is safe for concurrent use. A failed or cancelled `Encode`
   leaves its directory empty and the `Source` usable.
@@ -111,7 +114,8 @@ functions and the flat layout of `packages.<system>.default` are covered too.
 
 The module needs Go 1.26 or later. `NewProcessor` needs four programs,
 whatever types are configured: `magick` (ImageMagick 7), `ffmpeg`, `ffprobe`
-and `webp-frames`.
+and `webp-frames`. It needs `pdfinfo` and `pdftoppm` (poppler) only when
+`Config.RenderTypes` names `application/pdf`.
 
 ### With Nix
 
@@ -154,7 +158,8 @@ its runtime closure, and in any container image built from it.
 ### Without Nix
 
 A binary built without the flake's `ldflags` finds the tools on `PATH`. You
-provide ImageMagick 7, FFmpeg, and `webp-frames`, which no distribution ships:
+provide ImageMagick 7, FFmpeg, poppler's `pdfinfo` and `pdftoppm` where PDFs
+are rendered, and `webp-frames`, which no distribution ships:
 build it from a checkout of this repository, against the libwebp your
 ImageMagick uses and with its development headers.
 
@@ -176,7 +181,9 @@ cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpmux -lwebpdemux -lwe
   and permission to install a seccomp filter, which container runtimes'
   default profiles give; it needs no capability, user namespace or root.
   Elsewhere the library runs only with `Config.Unsandboxed`, which is not for
-  hostile input.
+  hostile input. Rendering under the sandbox also needs Linux 5.13 or later with
+  the Landlock security module enabled (`landlock` in
+  `/sys/kernel/security/lsm`); `NewProcessor` fails without it.
 - For hostile input, the container and configuration to supply are listed
   under
   [Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).
