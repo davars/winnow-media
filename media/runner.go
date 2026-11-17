@@ -21,6 +21,9 @@ type runSpec struct {
 	// descriptor 3, open for reading. The caller keeps it open until the run
 	// ends; the runner does not close it.
 	Input *os.File
+	// Confine, when not nil, limits the files the process can reach to those
+	// it lists. The sandbox runner applies it; the direct runner does not.
+	Confine *confinement
 }
 
 // toolResult is how a run ended, when the runner delivered a report.

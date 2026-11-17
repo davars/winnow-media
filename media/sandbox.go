@@ -18,3 +18,21 @@ func init() {
 		compositorMain()
 	}
 }
+
+// confinement is the set of file accesses a confined run keeps; every other
+// access to the filesystem fails with EACCES. A path that does not exist on
+// the host is skipped.
+type confinement struct {
+	// Exec are files and directories whose files may be read and executed:
+	// the programs and the libraries they load.
+	Exec []string
+	// Read are files and directories that may be read.
+	Read []string
+	// Write are files and directories that may be read and written. Within a
+	// directory, files may be created, truncated and removed, and linked into
+	// the directory from within it.
+	Write []string
+	// Input says that the file the run inherits as its input descriptor may
+	// be read, and no other file beside it.
+	Input bool
+}

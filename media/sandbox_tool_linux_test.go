@@ -4,6 +4,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 func init() { toolMainHook = fakeTool }
@@ -107,6 +109,41 @@ func fakeTool(args []string) {
 			}
 			fmt.Println("fd", e.Name(), "->", target)
 		}
+	case "open":
+		// open <path> <r|w|c|d>: the errno of opening path to read, to write,
+		// to create it, or as a directory to list.
+		flags := map[string]int{"r": syscall.O_RDONLY, "w": syscall.O_WRONLY, "c": syscall.O_WRONLY | syscall.O_CREAT | syscall.O_EXCL, "d": syscall.O_RDONLY | syscall.O_DIRECTORY}[args[2]]
+		fd, err := syscall.Open(args[1], flags|syscall.O_CLOEXEC, 0o600)
+		if err == nil {
+			_ = syscall.Close(fd)
+		}
+		fmt.Println("errno", errnoOf(err))
+	case "read-input":
+		b, err := os.ReadFile(inputFDPath)
+		fmt.Println("read", string(b), errnoOf(errors.Unwrap(errors.Unwrap(err))))
+	case "exec":
+		// exec <path>: the errno of an execve that returns.
+		path, err := syscall.BytePtrFromString(args[1])
+		check(err)
+		argv := []*byte{path, nil}
+		_, _, e := syscall.Syscall(syscall.SYS_EXECVE, uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(&argv[0])), 0)
+		fmt.Println("errno", int(e))
+	case "child":
+		// child <args...>: run this tool again with the arguments, which
+		// inherits what the confinement allows.
+		cmd := exec.Command(self, append([]string{"--tool"}, args[1:]...)...)
+		cmd.Stdout = os.Stdout
+		check(cmd.Run())
+	case "open-parent":
+		// open-parent <name> <r|w>: the errno of opening /proc/<parent>/<name>,
+		// the parent being the process that started the tool.
+		flags := map[string]int{"r": syscall.O_RDONLY, "w": syscall.O_WRONLY}[args[2]]
+		path := fmt.Sprintf("/proc/%d/%s", os.Getppid(), args[1])
+		fd, err := syscall.Open(path, flags|syscall.O_CLOEXEC, 0)
+		if err == nil {
+			_ = syscall.Close(fd)
+		}
+		fmt.Println("errno", errnoOf(err))
 	case "exit":
 		n, _ := strconv.Atoi(args[1])
 		os.Exit(n)

@@ -102,8 +102,14 @@ type helperConfig struct {
 	HasInput bool
 	// Limits are the resource limits the helper applies to itself.
 	Limits rlimits
+	// Confine, when not nil, confines the helper's thread, and so the tool,
+	// to those files, after the sandbox.
+	Confine *confinement `json:",omitempty"`
+	// ConfineProbe, with Probe, names the accesses the probe tries once
+	// confined.
+	ConfineProbe *confineProbe `json:",omitempty"`
 	// Fault makes the helper skip one guard so that tests can check that the
-	// Processor notices: "filter", "limit:<name>" or "cpu-watch", which turns off
+	// Processor notices: "filter", "confine", "limit:<name>" or "cpu-watch", which turns off
 	// the helper's own CPU check so that only the kernel's limit ends a run.
 	Fault string
 }
@@ -141,6 +147,9 @@ type probeReport struct {
 	// ProcessBase is the number of tasks of the user when the process limit
 	// was computed.
 	ProcessBase uint64
+	// Confinement is what a probe of the file confinement observed; nil when
+	// none was asked for.
+	Confinement *confineReport `json:",omitempty"`
 }
 
 // checkProbe returns an error unless r shows the socket and io_uring calls
@@ -261,6 +270,7 @@ func sandboxRunner(limits rlimits) runner {
 	return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
 		res, err := runHelper(ctx, helperConfig{
 			Tool: spec.Tool, Args: spec.Args, Env: spec.Env, Dir: spec.Dir, Input: spec.Input, Limits: limits,
+			Confine: spec.Confine,
 		}, stdout, stderr)
 		if err != nil {
 			err = fmt.Errorf("sandbox helper: %w", err)
@@ -325,8 +335,26 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 	if err != nil {
 		return helperResult{Err: err.Error()}
 	}
+	if cfg.Confine != nil && cfg.Fault != "confine" {
+		inputFD := -1
+		if cfg.HasInput {
+			inputFD = inputHelperFD
+		}
+		if err := cfg.Confine.apply(inputFD); err != nil {
+			return helperResult{Err: fmt.Sprintf("confining the tool: %v", err)}
+		}
+		const prSetDumpable = 4
+		if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetDumpable, 0, 0); e != 0 {
+			return helperResult{Err: fmt.Sprintf("making the helper undumpable: %v", e)}
+		}
+	}
 	if cfg.Probe {
-		return helperResult{Probe: readProbe(base, cfg.Limits)}
+		r := readProbe(base, cfg.Limits)
+		if cfg.ConfineProbe != nil {
+			abi, _ := landlockABI()
+			r.Confinement = tryConfined(cfg.ConfineProbe, abi)
+		}
+		return helperResult{Probe: r}
 	}
 
 	// The parent closing its end of the lifeline, or dying, is the signal to
