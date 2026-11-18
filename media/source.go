@@ -54,7 +54,7 @@ type OpenOptions struct {
 	// image that cannot be kept, because its format has no exact kept form,
 	// it does not fit, or its full-size decode is over the caps, is encoded
 	// as it would be without KeepDecode. With KeepDecode, the output bytes of
-	// a JPEG or still WebP can differ from those without it.
+	// a JPEG can differ from those without it.
 	KeepDecode bool
 }
 

@@ -27,7 +27,7 @@
             buildInputs = [ pkgs.libwebp ];
             buildPhase = ''
               runHook preBuild
-              $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpmux -lwebpdemux -lwebp
+              $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpdemux -lwebp
               runHook postBuild
             '';
             installPhase = ''

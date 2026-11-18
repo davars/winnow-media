@@ -850,12 +850,12 @@ func TestReuseRecordKeptChecksWhatTheRunWrote(t *testing.T) {
 func TestReuseRemembersOnlyFailuresNoLaterCallWouldFix(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		err       error
+		// damage changes the plan of the run that wrote kd.
+		damage    func(kp *keepPlan)
 		permanent bool
 	}{
-		"an I/O error":      {errors.New("no space left on device"), false},
-		"a failed check":    {checkFailed("no"), true},
-		"a wrapped failure": {fmt.Errorf("copy: %w", checkFailed("no")), true},
+		"an I/O error":   {func(kp *keepPlan) { kp.pam = filepath.Join(kp.pam, "x") }, false},
+		"a failed check": {func(kp *keepPlan) { kp.line = "not a keep line" }, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -864,7 +864,8 @@ func TestReuseRemembersOnlyFailuresNoLaterCallWouldFix(t *testing.T) {
 			kd := src.kept[0]
 			delete(src.kept, 0)
 			es := src.stills[0]
-			es.keep = &keepPlan{pam: kd.pam, icc: kd.icc, line: fakeKeepLine, err: tc.err}
+			es.keep = &keepPlan{pam: kd.pam, icc: kd.icc, line: fakeKeepLine}
+			tc.damage(es.keep)
 			src.adoptKept(0, es)
 			if src.noKeep[0] != tc.permanent {
 				t.Errorf("noKeep = %v, want %v", src.noKeep[0], tc.permanent)
@@ -1047,44 +1048,6 @@ func TestReuseChecksTheKeptIdentityAfterReading(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(src.dir, ".call-*")); len(left) != 0 {
 		t.Errorf("per-call files left: %v", left)
-	}
-}
-
-// A profile that cannot be copied beside a WebP's decode leaves it unkept for
-// this call only.
-func TestReuseWebPProfileCopyFailureIsNotRemembered(t *testing.T) {
-	t.Parallel()
-	env := requireMagick(t)
-	p := requireProcessor(t)
-	var path string
-	for _, fx := range fusedFixtures() {
-		if fx.name == "webp lossless" {
-			path = fx.write(t, env, t.TempDir())
-		}
-	}
-	if path == "" {
-		t.Fatal("no webp lossless fixture")
-	}
-	enc := Encoding{Format: PNG, MaxEdge: 400}
-	want := fusedWant(t, p, path, Select{}, enc)
-	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
-	block := filepath.Join(src.dir, ".kept-0.icc")
-	if err := os.Mkdir(block, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(block, "x"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sameBytes(t, "profile not copied", encodeAll(t, src, Select{}, enc), want)
-	if len(src.kept) != 0 || src.noKeep[0] {
-		t.Errorf("kept %d, noKeep %v, want nothing kept and no memory of it", len(src.kept), src.noKeep)
-	}
-	if err := os.RemoveAll(block); err != nil {
-		t.Fatal(err)
-	}
-	sameBytes(t, "later call", encodeAll(t, src, Select{}, enc), want)
-	if src.kept[0] == nil {
-		t.Error("a later call did not keep the decode")
 	}
 }
 

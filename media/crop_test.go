@@ -341,8 +341,8 @@ func TestRegionTurnsJPEGReductionOff(t *testing.T) {
 	}
 }
 
-// A still WebP is decoded at its stored size when a region is set, and its
-// region is checked against the orientation its decode reveals.
+// A region of a still WebP is checked against the orientation its decode
+// reveals.
 func TestRegionStillWebP(t *testing.T) {
 	requireWebPBuilders(t)
 	requireExiftool(t)
@@ -350,22 +350,11 @@ func TestRegionStillWebP(t *testing.T) {
 	path := withOrientation(t, real, stillWebP(t, photoPNG(t, real, 1800, 1200, false), "-q", "80"), 6)
 	enc := Encoding{Format: PNG, MaxEdge: 400, MaxArea: 400 * 400}
 
-	p, rec := sourceProcessor(t)
-	if _, err := stillRegion(context.Background(), p, region{}, path, OpenOptions{}, enc, t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	if got := decodedAt(rec.calls); !slices.Equal(got, [][2]int{{800, 534}}) {
-		t.Fatalf("the control decode is at %v, want 800x534", got)
-	}
-
 	// The picture is 1200x1800 upright.
-	p, rec = sourceProcessor(t)
+	p, _ := sourceProcessor(t)
 	img, err := stillRegion(context.Background(), p, region{1100, 0, 100, 100}, path, OpenOptions{}, enc, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if got := decodedAt(rec.calls); !slices.Equal(got, [][2]int{{1800, 1200}}) {
-		t.Errorf("a region decoded at %v, want the stored size 1800x1200", got)
 	}
 	if img.Width != 100 || img.Height != 100 {
 		t.Errorf("output is %dx%d, want 100x100", img.Width, img.Height)

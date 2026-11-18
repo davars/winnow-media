@@ -127,50 +127,6 @@ func TestFrameLinesRefuseAWrongReport(t *testing.T) {
 	}
 }
 
-// A still WebP is decoded to exactly one image.
-func TestEncodeRefusesAStillWebPDecodeThatWritesTheWrongImages(t *testing.T) {
-	t.Parallel()
-	requireWebPBuilders(t)
-	path := stillWebP(t, photoPNG(t, requireMagick(t), 300, 200, false), "-q", "80")
-	for _, c := range []struct {
-		name   string
-		images int
-		want   string
-	}{
-		{"no image", 0, "webp-frames wrote 0 images, want 1"},
-		{"two images", 2, "webp-frames wrote more than one image"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			p := requireProcessor(t)
-			inner := p.compose
-			p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
-				return inner(ctx, in, req, func(f composedFrame) error {
-					for range c.images {
-						if err := onFrame(f); err != nil {
-							return err
-						}
-					}
-					return nil
-				})
-			}
-			src, _, err := p.Open(context.Background(), path, OpenOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = src.Close() }()
-			dir := t.TempDir()
-			if _, _, err = src.Encode(context.Background(), dir, Select{}, Encoding{Format: WebP}); err == nil {
-				t.Fatal("Encode succeeded")
-			} else if !strings.Contains(err.Error(), c.want) {
-				t.Errorf("err = %v, want it to say %q", err, c.want)
-			}
-			if got := dirNames(t, dir); len(got) != 0 {
-				t.Errorf("output dir holds %v", got)
-			}
-		})
-	}
-}
-
 // The Processor, which encodes frames as the compositor writes them, refuses a
 // compositor that writes one frame more or fewer than were selected, and
 // leaves nothing behind.

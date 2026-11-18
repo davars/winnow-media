@@ -300,15 +300,19 @@ Reduced decode of a JPEG, a worked example of how `Caps.MaxFramePixels` (here
 and refused at seven eighths (about 55.9 MP) and where nothing reduces it. A
 16382x3628 JPEG is admitted at a `MaxEdge` of 2048 and below.
 
-Still WebP, decoded by `webp-frames still` with libwebp's scaler:
+Still WebP, decoded by ImageMagick like any format that cannot be reduced:
 
-- libwebp's scaling bounds memory only for lossy images without alpha. 268 MP
-  of lossless, an 82 KB file, needs about 1 GB to decode at 1024; lossy with
-  alpha about 370 MB; lossy without alpha 7 MB. The scaling is a gain in time
-  and memory for those, not a cap relaxation, which is why a WebP's stored
-  size is held to the still caps at the header.
-- Pixels differ from ImageMagick's own decode and resize by under 1 level of
-  255 on average, because libwebp's scaler and upsampling are not its filter.
+- The decode is whole, at the stored size, which is why a WebP's stored size
+  is held to the still caps at the header. libwebp's scaling bounds memory
+  only for lossy images without alpha, so a reduced decode would not have
+  relaxed the cap for lossless or alpha images (268 MP of lossless, an 82 KB
+  file, needs about 1 GB to decode at 1024; lossy with alpha about 370 MB;
+  lossy without alpha 7 MB).
+- The output is ImageMagick's own decode and resize, pixel for pixel. A
+  separate decoder at a reduced size differed by under 1 level of 255 on
+  average, because libwebp's scaler and upsampling are not ImageMagick's
+  filter, and its orientation and profile handling had to be reproduced
+  alongside ImageMagick's.
 
 Animations:
 

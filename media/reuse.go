@@ -37,8 +37,6 @@ type keepPlan struct {
 	pam, icc string
 	// line is the "keep|" line the run printed right after the read.
 	line string
-	// err is why the run's profile cannot be kept, if it is not.
-	err error
 }
 
 // keepLinePrefix starts the line a keep run prints right after the read: the
@@ -52,10 +50,10 @@ const keepLinePrefix = "keep|"
 // prelude returns the operators that report what the read gave, turn the
 // frame upright by orientation and write the files, ahead of the targets' own
 // operators. The profile is written only when the image carries it.
-func (k *keepPlan) prelude(orientation string, writeProfile bool) []string {
+func (k *keepPlan) prelude(orientation string) []string {
 	ops := []string{"-precision", "17", "-print", keepLinePrefix + "%[fx:resolution.x]|%[fx:resolution.y]|%U|%[colorspace]|%z|%r|%A|%[jpeg:sampling-factor]|%[quantum:format]\\n", "-precision", "6"}
 	ops = append(ops, orientOps(orientation)...)
-	if writeProfile && k.icc != "" {
+	if k.icc != "" {
 		ops = append(ops, "-write", "icc:"+k.icc)
 	}
 	return append(ops, "-depth", "16", "-write", "pam:"+k.pam)
@@ -193,15 +191,6 @@ func readProfile(path string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, maxKeptProfile+1))
 }
 
-// copyProfile copies the profile file from to a new file to.
-func copyProfile(from, to string) error {
-	data, err := readProfile(from)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(to, data, 0o600)
-}
-
 // keepFacts is what a keep run reported of the image it read.
 type keepFacts struct {
 	xres, yres, units, sampling string
@@ -312,9 +301,6 @@ func (s *Source) adoptKept(k int, es *frameSource) {
 // otherwise an I/O failure or a shortage of room that another call may not
 // meet.
 func (s *Source) recordKept(kp *keepPlan, es *frameSource) (*keptDecode, error) {
-	if kp.err != nil {
-		return nil, kp.err
-	}
 	facts, err := parseKeepFacts(kp.line)
 	if err != nil {
 		return nil, checkFailed("%v", err)

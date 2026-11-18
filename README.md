@@ -166,7 +166,7 @@ build it from a checkout of this repository, against the libwebp your
 ImageMagick uses and with its development headers.
 
 ```sh
-cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpmux -lwebpdemux -lwebp
+cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpdemux -lwebp
 ```
 
 - **No other ImageMagick policy.** `NewProcessor` generates the policy the
