@@ -189,6 +189,29 @@ func Types() []string {
 	return out
 }
 
+// typeAliases maps a media type some catalogs record for a format to the type
+// of Types that reads it.
+var typeAliases = map[string]string{
+	// Windows cursors, which the ICO decoder reads.
+	"image/x-win-bitmap": "image/vnd.microsoft.icon",
+}
+
+// CanonicalType returns the type of [Types] that reads mediaType: mediaType
+// itself when Types lists it, or the type of that list a known alias of it
+// names, such as image/vnd.microsoft.icon for the cursor type
+// image/x-win-bitmap. Media types are case-insensitive, so the match ignores
+// case and the result is in the lower case of Types. It reports false for any
+// other, including the types of [RenderTypes]. The result is what
+// [OpenOptions.Type] takes, subject to Config.Types.
+func CanonicalType(mediaType string) (string, bool) {
+	mediaType = strings.ToLower(mediaType)
+	if alias, ok := typeAliases[mediaType]; ok {
+		mediaType = alias
+	}
+	_, ok := typeTable[mediaType]
+	return mediaType, ok && mediaType != ""
+}
+
 // resolveTypes returns the set requested, or the whole table for nil, as a
 // sorted list without repeats; it is an error to name a type the table lacks.
 func resolveTypes(requested []string) ([]string, error) {
