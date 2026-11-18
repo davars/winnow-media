@@ -11,8 +11,11 @@ const maxWebPChunks = 1024
 
 // VP8X flag bits.
 const (
-	webpICCFlag  = 0x20
-	webpAnimFlag = 0x02
+	webpICCFlag   = 0x20
+	webpEXIFFlag  = 0x08
+	webpXMPFlag   = 0x04
+	webpAlphaFlag = 0x10
+	webpAnimFlag  = 0x02
 )
 
 // webpICC reports from its chunk headers alone whether ImageMagick reads an
@@ -25,7 +28,11 @@ const (
 // clear or has chunks that end exactly at the size the RIFF header states,
 // one ICCP chunk at most (with data), and an image the animation flag
 // describes: one VP8 or VP8L chunk and no ANMF chunk, or ANMF chunks and no
-// bare image chunk. ICC profile means the VP8X ICC flag is set and an ICCP
+// bare image chunk. The layout must also be one libwebp's mux accepts, as
+// ImageMagick reads no profile from a file it refuses: EXIF and XMP chunks
+// present exactly when their flags are set and at most one of each, no ANIM
+// chunk unless the animation flag is set, and no ALPH chunk unless the alpha
+// flag is set. ICC profile means the VP8X ICC flag is set and an ICCP
 // chunk exists; in an animation the profile applies to its frames. Only chunk
 // headers are read, at most maxWebPChunks of them, never chunk data.
 func webpICC(in input) (hasICC, known bool) {
@@ -46,6 +53,8 @@ func webpICC(in input) (hasICC, known bool) {
 	pos := int64(12)
 	extended, animated := false, false
 	iccp, images, frames := 0, 0, 0
+	exif, xmp, anim, alph := 0, 0, 0, 0
+	var vp8x byte
 	for n := 0; pos != end; n++ {
 		if n == maxWebPChunks || pos+8 > end {
 			return false, false
@@ -68,7 +77,7 @@ func webpICC(in input) (hasICC, known bool) {
 			if flags[0]&webpICCFlag == 0 {
 				return false, true
 			}
-			extended, animated = true, flags[0]&webpAnimFlag != 0
+			extended, animated, vp8x = true, flags[0]&webpAnimFlag != 0, flags[0]
 		case n == 0 && (kind == "VP8 " || kind == "VP8L"):
 			images++
 		case !extended || kind == "VP8X":
@@ -81,6 +90,14 @@ func webpICC(in input) (hasICC, known bool) {
 			images++
 		case kind == "ANMF":
 			frames++
+		case kind == "EXIF":
+			exif++
+		case kind == "XMP ":
+			xmp++
+		case kind == "ANIM":
+			anim++
+		case kind == "ALPH":
+			alph++
 		}
 		if _, err := f.Seek(next, io.SeekStart); err != nil {
 			return false, false
@@ -88,6 +105,10 @@ func webpICC(in input) (hasICC, known bool) {
 		pos = next
 	}
 	if extended && (animated && (frames == 0 || images > 0) || !animated && (frames > 0 || images != 1)) {
+		return false, false
+	}
+	if extended && (exif > 1 || xmp > 1 || (exif > 0) != (vp8x&webpEXIFFlag != 0) ||
+		(xmp > 0) != (vp8x&webpXMPFlag != 0) || !animated && anim > 0 || alph > 0 && vp8x&webpAlphaFlag == 0) {
 		return false, false
 	}
 	return iccp == 1, true

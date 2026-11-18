@@ -248,11 +248,6 @@ func tiffOrientation(order binary.AppendByteOrder, typ, count, value uint16, aft
 	return append(b, 0, 0, 0, 0)
 }
 
-// VP8X flags.
-const (
-	webpEXIFFlag = 0x08
-)
-
 // fullReads returns the runs among calls that read an image whole to identify
 // it, which is how a WebP's orientation is asked of ImageMagick.
 func fullReads(calls [][]string) int {
