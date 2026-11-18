@@ -22,10 +22,17 @@ type Config struct {
 	// other is an error from NewProcessor. Nil or empty renders none, which
 	// leaves the Processor as v1.0 made it. Rendering application/pdf needs
 	// the pdfinfo and pdftoppm programs, found as package tool finds the
-	// others. With the sandbox, rendering needs a host that can confine a
-	// tool's files (the package documentation's Rendering section), and
-	// NewProcessor fails without one.
+	// others. With the sandbox, render runs are confined to their files with
+	// Landlock where the host has it, and run without that, under the rest of
+	// the sandbox, where it does not; RequireConfinement refuses such a host
+	// and Processor.Confinement reports which case holds.
 	RenderTypes []string
+	// RequireConfinement makes NewProcessor fail, when RenderTypes is not
+	// empty, unless render runs are confined to their files: where the kernel
+	// has no usable Landlock, and with Unsandboxed. It has no effect without
+	// RenderTypes. Whatever its value, NewProcessor also fails where the
+	// kernel reports Landlock but a probe finds the confinement not enforced.
+	RequireConfinement bool
 	// Caps turn away inputs that are too large. The zero value is the
 	// library's ceilings.
 	Caps Caps

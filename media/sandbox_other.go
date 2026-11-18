@@ -16,7 +16,9 @@ func helperMain() {}
 
 func probeSandbox(context.Context, rlimits) error { return sandboxAvailable() }
 
-func probeConfinement(context.Context, string, rlimits) error { return sandboxAvailable() }
+var errConfinementUnavailable = errors.New("file confinement is unavailable")
+
+func probeConfinement(context.Context, string, rlimits) (int, error) { return 0, sandboxAvailable() }
 
 func sandboxRunner(rlimits) runner {
 	return func(context.Context, runSpec, io.Writer, io.Writer) (toolResult, error) {

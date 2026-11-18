@@ -105,6 +105,11 @@
 // Text in a PDF whose fonts are not embedded, and in an SVG, is drawn with the
 // host's fonts (see Determinism).
 //
+// Under the sandbox, render runs are also confined to their files where the
+// kernel has Landlock; see Hostile input. [Processor.Confinement] reports
+// whether they are, and at which Landlock ABI, and [Config.RequireConfinement]
+// makes NewProcessor fail where they cannot be.
+//
 // # Lifecycle and concurrency
 //
 // A Processor and its Sources are safe for concurrent use. Calls on one
@@ -179,19 +184,28 @@
 // data: URL inside an SVG is inline content and is drawn, its image decoded
 // by librsvg's own decoders, outside ImageMagick's policy. With the sandbox,
 // every render run is also confined
-// by Landlock: it can read the program and its libraries, the system's font
-// and locale files, process and CPU information, and the one input file, by
-// its descriptor, not a file beside it or one later put at its path, and
-// it can write only in a directory of its own. A reference inside the PDF to
-// another file, an external stream, a font or CMap path, an attachment or a
-// link action is not followed, and the sandbox's socket denial closes the
-// network. NewProcessor fails when Config.RenderTypes is set and the host
-// cannot confine files (Linux 5.13 or later with the Landlock security module
-// enabled).
+// by Landlock where the kernel has it (Linux 5.13 or later with the Landlock
+// security module enabled): it can read the program and its libraries, the
+// system's font and locale files, process and CPU information, and the one
+// input file, by its descriptor, not a file beside it or one later put at its
+// path, and it can write only in a directory of its own. A reference inside
+// the PDF to another file, an external stream, a font or CMap path, an
+// attachment or a link action is not followed, and the sandbox's socket
+// denial closes the network.
+//
+// The confinement is best-effort. Where the kernel reports no Landlock, or a
+// container's seccomp profile refuses it, NewProcessor still succeeds and
+// render runs have the rest of the sandbox (the seccomp filter, the limits,
+// no_new_privs) and the policies, but can read and write the calling user's
+// files; [Processor.Confinement] says so, and a caller that logs it makes the
+// state visible. A caller that needs the confinement sets
+// [Config.RequireConfinement], which makes NewProcessor fail on such a host.
+// Where the kernel reports Landlock but a probe at startup finds a denied
+// access let through, NewProcessor fails whatever RequireConfinement says.
 //
 // It does not guarantee that the decoders are free of bugs, and it does not
 // confine what an exploited tool can reach, except for the files of a render
-// run, as above; a render run can still signal the user's other processes,
+// run where confined, as above; a render run can still signal the user's other processes,
 // because scoping signals needs Landlock ABI 6 (Linux 6.12), which the
 // supported kernels do not all have. Such a tool runs as the calling user: it
 // can read and write that user's files and signal that user's other

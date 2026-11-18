@@ -657,14 +657,22 @@ func TestResolutionNeverExceedsTheMaximumEdge(t *testing.T) {
 	}
 }
 
-// NewProcessor refuses to render on a host where the confinement does not hold.
-func TestNewProcessorRefusesRenderingWithoutConfinement(t *testing.T) {
+// NewProcessor refuses to render on a host where the kernel reports Landlock
+// but the confinement does not hold, whether or not it is required.
+func TestNewProcessorRefusesRenderingWithBrokenConfinement(t *testing.T) {
 	requireTools(t, "magick", "ffmpeg", "ffprobe", "pdfinfo", "pdftoppm")
 	probeFault = "confine"
 	defer func() { probeFault = "" }()
-	if p, err := NewProcessor(context.Background(), pdfConfig); err == nil {
-		_ = p.Close()
-		t.Error("NewProcessor rendered PDF though the confinement probe failed")
+	for _, require := range []bool{false, true} {
+		cfg := pdfConfig
+		cfg.RequireConfinement = require
+		p, err := NewProcessor(context.Background(), cfg)
+		if err == nil {
+			_ = p.Close()
+			t.Errorf("RequireConfinement %v: NewProcessor rendered PDF though the confinement probe failed", require)
+		} else if !strings.Contains(err.Error(), "does not enforce it") {
+			t.Errorf("RequireConfinement %v: err = %v, want one saying the confinement is not enforced", require, err)
+		}
 	}
 	p, err := NewProcessor(context.Background(), Config{})
 	if err != nil {

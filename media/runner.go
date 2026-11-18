@@ -55,8 +55,9 @@ type runner func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (t
 type toolRun func(ctx context.Context, in *os.File, name string, args ...string) (runResult, error)
 
 // renderRun marks the tool runs of a context as render runs: they work in dir,
-// which the caller made and removes, and are confined to it, the input, the
-// tool and a fixed set of system files. policyDir, when not empty, is the
+// which the caller made and removes. Where the Processor confines render runs,
+// they are confined to it, the input, the tool and a fixed set of system
+// files. policyDir, when not empty, is the
 // ImageMagick configuration directory they read.
 type renderRun struct {
 	dir, policyDir string
@@ -71,8 +72,9 @@ func withRenderRun(ctx context.Context, rr renderRun) context.Context {
 
 // runTool runs one tool through the Processor's runner, with in, when not nil,
 // as its input descriptor. A run in a context from withRenderRun works in the
-// render run's directory, which it leaves in place, and is confined; any
-// other works in a directory of its own that it removes.
+// render run's directory, which it leaves in place, and is confined where the
+// Processor's render runs are (see Processor.Confinement); any other works in
+// a directory of its own that it removes.
 func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args ...string) (runResult, error) {
 	path, ok := p.tools[name]
 	if !ok {
@@ -88,7 +90,9 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 		if rr.policyDir != "" {
 			extra = []string{rr.policyDir}
 		}
-		spec.Confine = renderConfinement(path, rr.dir, extra...)
+		if p.confinement.Confined {
+			spec.Confine = renderConfinement(path, rr.dir, extra...)
+		}
 	} else {
 		tmp, err := p.runTempDir()
 		if err != nil {

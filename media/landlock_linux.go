@@ -224,15 +224,43 @@ func checkConfineReport(r *confineReport) error {
 	return nil
 }
 
-// probeConfinement starts the probe helper with a test confinement in dir,
-// which must exist, and refuses unless the helper reports it in force.
-func probeConfinement(ctx context.Context, dir string, limits rlimits) error {
+// errConfinementUnavailable marks a host on which the kernel reports no
+// Landlock, as against one that reports it and does not confine.
+var errConfinementUnavailable = errors.New("file confinement is unavailable")
+
+// landlockUnavailable reports whether err, from the version query, means the
+// kernel has no usable Landlock: not built in (ENOSYS), not enabled
+// (EOPNOTSUPP), or the system call refused by a container's seccomp profile
+// (EPERM).
+func landlockUnavailable(err error) bool {
+	return errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EPERM)
+}
+
+// probeConfinement returns the kernel's Landlock ABI after starting the probe
+// helper with a test confinement in dir, which must exist, and checking that
+// the helper reports it in force. It wraps errConfinementUnavailable where the
+// kernel reports no Landlock, and returns any other error where the
+// confinement does not hold.
+func probeConfinement(ctx context.Context, dir string, limits rlimits) (int, error) {
+	abi, err := landlockABI()
+	switch probeFault {
+	case "landlock-unavailable":
+		abi, err = 0, unix.ENOSYS
+	case "landlock-query-error":
+		abi, err = 0, unix.EINVAL
+	}
+	if landlockUnavailable(err) {
+		return 0, fmt.Errorf("%w (%w): it needs Linux 5.13 or later with the Landlock security module enabled", errConfinementUnavailable, err)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("confinement probe: %w", err)
+	}
 	root, probe, cfg, err := makeConfineProbe(dir)
 	if root != "" {
 		defer func() { _ = os.RemoveAll(root) }()
 	}
 	if err != nil {
-		return fmt.Errorf("confinement probe: %w", err)
+		return 0, fmt.Errorf("confinement probe: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -241,18 +269,18 @@ func probeConfinement(ctx context.Context, dir string, limits rlimits) error {
 	var stderr headTailBuffer
 	res, err := runHelper(ctx, cfg, io.Discard, &stderr)
 	if err != nil {
-		return fmt.Errorf("confinement probe: %w: %s", err, bytes.TrimSpace(stderr.bytes()))
+		return 0, fmt.Errorf("confinement probe: %w: %s", err, bytes.TrimSpace(stderr.bytes()))
 	}
 	if res.Err != "" {
-		return fmt.Errorf("confinement probe: %s", res.Err)
+		return 0, fmt.Errorf("confinement probe: %s", res.Err)
 	}
 	if res.Probe == nil {
-		return errors.New("confinement probe: the helper did not report")
+		return 0, errors.New("confinement probe: the helper did not report")
 	}
 	if err := checkConfineReport(res.Probe.Confinement); err != nil {
-		return fmt.Errorf("confinement probe: %w: file confinement needs Linux 5.13 or later with the Landlock security module enabled", err)
+		return 0, fmt.Errorf("confinement probe: %w: the kernel reports Landlock ABI %d but does not enforce it", err, abi)
 	}
-	return nil
+	return abi, nil
 }
 
 // makeConfineProbe makes the files of a confineProbe in dir and returns it

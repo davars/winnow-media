@@ -4,6 +4,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,8 +16,12 @@ import (
 
 func TestProbeConfinement(t *testing.T) {
 	dir := t.TempDir()
-	if err := probeConfinement(context.Background(), dir, defaultLimits); err != nil {
+	abi, err := probeConfinement(context.Background(), dir, defaultLimits)
+	if err != nil {
 		t.Fatalf("probe of an intact confinement: %v", err)
+	}
+	if abi < 1 {
+		t.Errorf("the probe reported Landlock ABI %d, want at least 1", abi)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("the probe left %d entries behind", len(entries))
@@ -27,9 +32,51 @@ func TestProbeConfinement(t *testing.T) {
 func TestProbeConfinementRefusesWhenItIsSkipped(t *testing.T) {
 	probeFault = "confine"
 	defer func() { probeFault = "" }()
-	err := probeConfinement(context.Background(), t.TempDir(), defaultLimits)
+	_, err := probeConfinement(context.Background(), t.TempDir(), defaultLimits)
 	if err == nil || !strings.Contains(err.Error(), "outside the list") || !strings.Contains(err.Error(), "Landlock") {
-		t.Errorf("err = %v, want one naming the access that was not refused and the Landlock requirement", err)
+		t.Errorf("err = %v, want one naming the access that was not refused and Landlock", err)
+	}
+	if errors.Is(err, errConfinementUnavailable) {
+		t.Errorf("a confinement that is not enforced was reported as unavailable: %v", err)
+	}
+}
+
+// A kernel with no Landlock is reported as such, not as a failed probe.
+func TestProbeConfinementReportsUnavailable(t *testing.T) {
+	probeFault = "landlock-unavailable"
+	defer func() { probeFault = "" }()
+	dir := t.TempDir()
+	abi, err := probeConfinement(context.Background(), dir, defaultLimits)
+	if !errors.Is(err, errConfinementUnavailable) || abi != 0 {
+		t.Errorf("abi, err = %d, %v, want 0 and errConfinementUnavailable", abi, err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("the probe left %d entries behind", len(entries))
+	}
+}
+
+// A Landlock version query that fails other than as unavailable is a failed
+// probe, never errConfinementUnavailable, so NewProcessor cannot fall back to
+// unconfined render runs on it. The fault makes the query fail with EINVAL.
+func TestProbeConfinementRefusesAnUnexpectedQueryError(t *testing.T) {
+	probeFault = "landlock-query-error"
+	defer func() { probeFault = "" }()
+	abi, err := probeConfinement(context.Background(), t.TempDir(), defaultLimits)
+	if err == nil || errors.Is(err, errConfinementUnavailable) || abi != 0 {
+		t.Errorf("abi, err = %d, %v; want 0 and a failed probe that is not errConfinementUnavailable", abi, err)
+	}
+}
+
+func TestLandlockUnavailable(t *testing.T) {
+	for _, e := range []syscall.Errno{syscall.ENOSYS, syscall.EOPNOTSUPP, syscall.EPERM} {
+		if !landlockUnavailable(fmt.Errorf("landlock_create_ruleset: %w", e)) {
+			t.Errorf("%v was not taken as unavailable", e)
+		}
+	}
+	for _, e := range []syscall.Errno{syscall.EINVAL, syscall.EACCES, syscall.ENOMEM} {
+		if landlockUnavailable(e) {
+			t.Errorf("%v was taken as unavailable", e)
+		}
 	}
 }
 

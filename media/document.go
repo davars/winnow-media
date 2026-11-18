@@ -238,8 +238,9 @@ func (p *Processor) openDocument(ctx context.Context, m *meter, path string) (_ 
 	return d, nil
 }
 
-// env returns the toolEnv for a run in a render directory dir: its runs are
-// confined to it and to the input.
+// env returns the toolEnv for a run in a render directory dir: its runs work
+// in it and, where the Processor confines render runs, are confined to it and
+// to the input.
 func (d *Document) env(ctx context.Context, m *meter, dir string) (context.Context, toolEnv) {
 	return withRenderRun(ctx, renderRun{dir: dir}), d.p.env(m, d.file).pinnedTo(d.file, d.id, "since it was opened")
 }

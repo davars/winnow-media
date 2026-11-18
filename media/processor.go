@@ -34,6 +34,8 @@ type Processor struct {
 	accepts map[string]bool
 	// renders is the resolved Config.RenderTypes as a set.
 	renders map[string]bool
+	// confinement is how render runs are confined, as probed at start.
+	confinement Confinement
 	// detect is the -format_whitelist of the probe that names a video the
 	// leading bytes do not: the demuxers of the detected types of types.
 	// Empty when there are none, which turns the probe off.
@@ -66,11 +68,16 @@ type Processor struct {
 // ffprobe and webp-frames programs, whatever cfg.Types is, found as package
 // tool finds them, and, unless cfg.Unsandboxed is set, a host the sandbox
 // supports (see the package documentation). With cfg.RenderTypes naming
-// application/pdf it also needs pdfinfo and pdftoppm, and under the sandbox a
-// host that can confine a tool's files. It checks, within ctx, that the
-// sandbox and the generated ImageMagick policy are in force, and returns an
-// error rather than a Processor that would run without either. Call Close
-// when done.
+// application/pdf it also needs pdfinfo and pdftoppm. It checks, within ctx,
+// that the sandbox and the generated ImageMagick policy are in force, and
+// returns an error rather than a Processor that would run without either.
+//
+// Under the sandbox, render runs are confined to their files with Landlock
+// where the kernel has it. Where it has none, the Processor is returned and
+// render runs go unconfined unless cfg.RequireConfinement is set, which makes
+// it an error; where the kernel reports Landlock but the confinement is
+// found not to hold, it is an error regardless. Processor.Confinement reports
+// the outcome. Call Close when done.
 //
 // It is also an error if cfg.Resources has a negative field or a TimeLimit or
 // CPUTime that is not a whole number of seconds of at least one, if cfg.Caps
@@ -165,8 +172,23 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	if len(renders) > 0 && !cfg.Unsandboxed {
-		if err := probeConfinement(ctx, p.dir, rl); err != nil {
+	switch {
+	case len(renders) == 0:
+		p.confinement.Reason = reasonNoRender
+	case cfg.Unsandboxed:
+		if cfg.RequireConfinement {
+			_ = p.Close()
+			return nil, errors.New("processor: RequireConfinement cannot be met with Unsandboxed")
+		}
+		p.confinement.Reason = "the sandbox is off"
+	default:
+		abi, err := probeConfinement(ctx, p.dir, rl)
+		switch {
+		case err == nil:
+			p.confinement = Confinement{Confined: true, ABI: abi}
+		case errors.Is(err, errConfinementUnavailable) && !cfg.RequireConfinement:
+			p.confinement.Reason = err.Error()
+		default:
 			_ = p.Close()
 			return nil, fmt.Errorf("processor: %w", err)
 		}
@@ -184,6 +206,41 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	}
 	return p, nil
 }
+
+// Confinement reports how a Processor confines the files of render runs.
+type Confinement struct {
+	// Confined is true when every render run is confined to its files by
+	// Landlock, as the startup probe found the kernel enforces it.
+	Confined bool
+	// ABI is the kernel's Landlock ABI version, at least 1, when Confined,
+	// and 0 otherwise.
+	ABI int
+	// Reason, when Confined is false, says why: no render types, no sandbox,
+	// or Landlock unavailable on the host. It is for logs, and its wording may
+	// change.
+	Reason string
+}
+
+// reasonNoRender is the Reason of a Processor with no render types, which has
+// no render runs to confine.
+const reasonNoRender = "no render types"
+
+// String describes c for a log line.
+func (c Confinement) String() string {
+	if c.Reason == reasonNoRender {
+		return "no render runs: Config.RenderTypes is empty"
+	}
+	if c.Confined {
+		return fmt.Sprintf("render runs confined by Landlock ABI %d", c.ABI)
+	}
+	return "render runs not confined: " + c.Reason
+}
+
+// Confinement reports whether the Processor's render runs are confined to
+// their files, and with which Landlock ABI. It is fixed when NewProcessor
+// returns. Where Confined is false the other tools' runs are as they always
+// are, and render runs have the rest of the sandbox.
+func (p *Processor) Confinement() Confinement { return p.confinement }
 
 func (p *Processor) install(rules []policyRule) error {
 	if err := os.Mkdir(p.tmpDir(), 0o700); err != nil {

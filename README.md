@@ -89,9 +89,10 @@ Each point is stated in full in the package documentation.
 - **[Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).**
   The content cannot select a decoder outside `Config.Types`, and a tool
   cannot open a socket, gain privileges or leave a process behind. The sandbox
-  confines the files of a render, and neither the files of other tools nor
-  resident memory: a deployment supplies that, and sets `Config.Types` and
-  `Config.Caps`.
+  confines the files of a render where the kernel has Landlock, which
+  `Processor.Confinement` reports and `Config.RequireConfinement` demands, and
+  neither the files of other tools nor resident memory: a deployment supplies
+  that, and sets `Config.Types` and `Config.Caps`.
 - **[Lifecycle](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Lifecycle_and_concurrency).**
   Everything is safe for concurrent use. A failed or cancelled `Encode`
   leaves its directory empty and the `Source` usable.
@@ -182,9 +183,12 @@ cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpmux -lwebpdemux -lwe
   and permission to install a seccomp filter, which container runtimes'
   default profiles give; it needs no capability, user namespace or root.
   Elsewhere the library runs only with `Config.Unsandboxed`, which is not for
-  hostile input. Rendering under the sandbox also needs Linux 5.13 or later with
-  the Landlock security module enabled (`landlock` in
-  `/sys/kernel/security/lsm`); `NewProcessor` fails without it.
+  hostile input. Rendering under the sandbox is also confined to its files
+  where the kernel is Linux 5.13 or later with the Landlock security module
+  enabled (`landlock` in `/sys/kernel/security/lsm`) and the host's seccomp
+  profile allows it. Without that, `NewProcessor` still succeeds and render
+  runs are unconfined; log `Processor.Confinement()` to see which, and set
+  `Config.RequireConfinement` to make `NewProcessor` fail instead.
 - For hostile input, the container and configuration to supply are listed
   under
   [Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).
