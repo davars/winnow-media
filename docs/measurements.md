@@ -89,6 +89,31 @@ On the small host, the still values (a side of 16384 and 52 million pixels):
 - 80 MP was rejected, since AVIF (1399 MiB at 80 MP) and HEIC panoramas would
   need exceptions.
 
+The cost of that choice, which is the memory and time of ImageMagick's
+full-size pixel cache that the reduced decode never built:
+
+| Input (8000x6500 unless stated) | Before: time / peak memory | After: time / peak memory |
+|---|---|---|
+| lossy | 1.05 s / 92 MiB | 2.90 s / 821 MiB |
+| lossy with alpha | 1.84 s / 267 MiB | 4.52 s / 1020 MiB |
+| lossless | 3.15 s / 296 MiB | 5.00 s / 987 MiB |
+| 16383x16383 lossless, about 82 KB | 1.4 s / 1.09 GB | 9.2 s (19 s CPU) / 2.17 GB |
+
+Measured on x86_64 (12 CPUs, not idle) on 2026-11-18: `Open` and two `Encode`
+calls at `MaxEdge` 1024 and 256, zero `Config`, with no `KeepDecode`. "Before"
+is the release v1.1.0 route and "After" this one.
+
+- With `KeepDecode` the new route is equal or faster than the old (lossy,
+  same host: 2.93 s against 3.90 s), because the first decode is shared by
+  every encode.
+- On a Raspberry Pi 5 (tin, aarch64, 2026-11-18), `KeepDecode` was even with or
+  faster than the old route, with a peak of 1013 MiB under a 1536 MiB limit.
+  Without it the new route was 3 to 10 times slower. A 52 MP WebP with alpha
+  took about 21 s on both.
+- Output bytes of a still WebP without `KeepDecode` are now ImageMagick's own
+  full-size decode and resize, so they differ from the reduced decode's. A
+  consumer that caches outputs by recipe revision must bump its revision.
+
 Animations:
 
 - ImageMagick keeps 16 bytes per pixel, so animations set the frame and pixel
@@ -195,10 +220,15 @@ largest inputs admitted:
 | 8K HLG video | 1270 MiB | 1337 MiB |
 | 2-frame 52 MP GIF | 1112 MiB | 1932 MiB |
 | 52 MP 10-bit HEIC | 944 MiB | 960 MiB |
-| 52 MP WebP | 810 MiB | 2660 MiB |
+| 52 MP WebP (see below) | 810 MiB | 2660 MiB |
 
 The file-backed part is the pixel cache, which the kernel reclaims under the
 limit.
+
+The 52 MP WebP row was measured at 9309a82 on 2026-11-06 on the same Pi 5
+(tin), with the nixos-25.11 closure, when a still WebP was already a whole
+ImageMagick decode (through the pre-v1 pipeline, not the current code). It
+has not been re-measured.
 
 ## Tool closure
 
@@ -304,10 +334,11 @@ Still WebP, decoded by ImageMagick like any format that cannot be reduced:
 
 - The decode is whole, at the stored size, which is why a WebP's stored size
   is held to the still caps at the header. libwebp's scaling bounds memory
-  only for lossy images without alpha, so a reduced decode would not have
-  relaxed the cap for lossless or alpha images (268 MP of lossless, an 82 KB
-  file, needs about 1 GB to decode at 1024; lossy with alpha about 370 MB;
-  lossy without alpha 7 MB).
+  only for lossy images without alpha, so a reduced decode did not relax the
+  cap for lossless or alpha images (268 MP of lossless, an 82 KB file, needed
+  about 1 GB to decode at 1024; lossy with alpha about 370 MB; lossy without
+  alpha 7 MB). It did keep memory low for lossy images without alpha, which
+  now cost the full-size pixel cache too; see the cost below.
 - The output is ImageMagick's own decode and resize, pixel for pixel. A
   separate decoder at a reduced size differed by under 1 level of 255 on
   average, because libwebp's scaler and upsampling are not ImageMagick's

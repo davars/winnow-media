@@ -413,8 +413,9 @@ func (s *frameSource) fits(r region, enc encoding) bool {
 // choosing a reduction; a format for which it holds is still confirmed with
 // the decoder (see decodePlan).
 //
-// A WebP is not reducible: ImageMagick decodes it whole, so it is capped at
-// its stored size at the header, like any format that cannot be reduced.
+// A WebP is not reducible: ImageMagick decodes it whole, at the memory of its
+// stored size whatever its codec or alpha, so it is capped at that size at the
+// header, like any format that cannot be reduced.
 func reducible(format string) bool { return format == "JPEG" }
 
 // reducedEighths decides whether a still is decoded at a reduced size for

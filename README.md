@@ -163,7 +163,8 @@ A binary built without the flake's `ldflags` finds the tools on `PATH`. You
 provide ImageMagick 7, FFmpeg, poppler's `pdfinfo` and `pdftoppm` where PDFs
 are rendered, and `webp-frames`, which no distribution ships:
 build it from a checkout of this repository, against the libwebp your
-ImageMagick uses and with its development headers.
+ImageMagick uses and with its development headers, from the same revision as
+the module, since the program and the library are versioned together.
 
 ```sh
 cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpdemux -lwebp
