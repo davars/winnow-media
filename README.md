@@ -232,7 +232,7 @@ and `aarch64-darwin`; `checks`, `apps` and `devShells` are Linux only.
 - `lib.version`: the release version, without the `v`.
 - `lib.assertGoModPin goModPath` and `lib.checkGoModPin { goModText, rev }`:
   see [the pin check](#the-pin-check).
-- `checks.<system>`: the gate CI runs (`test`, `lint`, `gofumpt`, `pin`,
+- `checks.<system>`: the gate CI runs (`test`, `lint` (which includes gofumpt), `pin`,
   `closure`).
 - `packages.<system>.measure` and `apps.<system>.measure` (Linux): the
   measurement harness; see [the measurements](docs/measurements.md#how-to-measure).
@@ -259,11 +259,11 @@ function over strings.
 
 ```sh
 nix develop          # Go, golangci-lint, gofumpt, the tools
-nix flake check      # test, lint, gofumpt, pin, closure
+nix flake check      # test, lint (with gofumpt), pin, closure
 ```
 
 CI runs `nix flake check` on x86_64 and aarch64 Linux; macOS is not tested. A
-weekly workflow opens a pull request updating `flake.lock`, which changes the
+monthly workflow opens a pull request updating `flake.lock`, which changes the
 tool binaries and so can change output bytes.
 
 To release version X.Y.Z: set `version` in `flake.nix` to `X.Y.Z`, tag that

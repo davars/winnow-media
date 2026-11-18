@@ -353,14 +353,6 @@
         {
           test = s.gate "test" s.allTools "go test -timeout 30m ./...";
           lint = s.gate "lint" [ s.golangci-lint ] "golangci-lint run ./...";
-          gofumpt = s.gate "gofumpt" [ s.pkgs.gofumpt ] ''
-            unformatted=$(gofumpt -l .)
-            if [ -n "$unformatted" ]; then
-              echo "gofumpt would reformat:" >&2
-              echo "$unformatted" >&2
-              exit 1
-            fi
-          '';
           closure = s.closureCheck;
           pin =
             let

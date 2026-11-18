@@ -2,7 +2,7 @@ name: update-flake-lock
 
 on:
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 1 * *"
   workflow_dispatch:
 
 # The branch is pushed and its PR opened with FLAKE_LOCK_TOKEN, a
@@ -35,7 +35,7 @@ jobs:
             exit 0
           fi
           {
-            echo "Weekly \`nix flake update\`, within the channels \`flake.nix\` names."
+            echo "Monthly \`nix flake update\`, within the channels \`flake.nix\` names."
             echo
             echo '```'
             grep -v '^warning:' update.log || true

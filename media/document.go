@@ -3,9 +3,10 @@ package media
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/png" // registers the decoder pngSize reads with
 	"io"
 	"math"
 	"os"
@@ -456,21 +457,21 @@ func (p *Processor) timed(ctx context.Context, env toolEnv, name string, args ..
 	return res, err
 }
 
-// pngSize reads the dimensions from the IHDR of the PNG at path.
+// pngSize reads the dimensions of the PNG at path from its header.
 func pngSize(path string) (w, h int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, 0, withoutPath(err)
 	}
 	defer func() { _ = f.Close() }()
-	var head [24]byte
-	if _, err := io.ReadFull(f, head[:]); err != nil {
+	cfg, format, err := image.DecodeConfig(f)
+	if err != nil {
 		return 0, 0, err
 	}
-	if !bytes.Equal(head[:8], []byte("\x89PNG\r\n\x1a\n")) || string(head[12:16]) != "IHDR" {
+	if format != "png" {
 		return 0, 0, errors.New("not a PNG")
 	}
-	return int(binary.BigEndian.Uint32(head[16:20])), int(binary.BigEndian.Uint32(head[20:24])), nil
+	return cfg.Width, cfg.Height, nil
 }
 
 // moveFile moves src to dst, which must not exist, by rename or, across
