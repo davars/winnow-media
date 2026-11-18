@@ -70,7 +70,8 @@ type Processor struct {
 // supports (see the package documentation). With cfg.RenderTypes naming
 // application/pdf it also needs pdfinfo and pdftoppm. It checks, within ctx,
 // that the sandbox and the generated ImageMagick policy are in force, and
-// returns an error rather than a Processor that would run without either.
+// returns an error rather than a Processor that would run without either. It
+// does not check that ImageMagick enforces the resource limits the policy sets.
 //
 // Under the sandbox, render runs are confined to their files with Landlock
 // where the kernel has it. Where it has none, the Processor is returned and

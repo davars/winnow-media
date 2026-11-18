@@ -168,18 +168,6 @@ func TestProcessorInstallsTheResources(t *testing.T) {
 					t.Errorf("policy.xml lacks %s=%s:\n%s", name, want, data)
 				}
 			}
-			res, err := p.run(context.Background(), nil, "magick", "-list", "resource")
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := parseResourceList(res.Stdout)
-			for name, want := range map[string]string{"memory": c.memory, "map": c.mapLm} {
-				g, _ := resourceNumber(got[name])
-				w, _ := resourceNumber(want)
-				if g != w {
-					t.Errorf("effective %s = %s, want %s", name, got[name], want)
-				}
-			}
 			var m meter
 			var ran []string
 			env := p.env(&m, nil)

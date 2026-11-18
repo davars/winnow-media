@@ -1,11 +1,15 @@
 package media
 
 import (
+	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // listPolicyOutput is "magick -list policy" as ImageMagick 7.1.2 prints it
@@ -83,63 +87,91 @@ func TestEffectivePolicyAcceptsOnlyOurs(t *testing.T) {
 	}
 }
 
-func TestEffectiveResources(t *testing.T) {
+// The effective resource limits of the pinned ImageMagick, listed under the
+// policy of ordinary runs and of SVG runs, are the ceilings the policy writes.
+// ImageMagick lists sizes to six significant digits, so a value that is not a
+// whole number of the unit it picks, such as 3000 MiB, lists rounded. It lowers
+// the thread limit to one less than the host's CPUs, and caps memory, map and
+// area at one, two and four times the host's RAM, so the cases assume a host
+// with more than 3 GiB of it.
+func TestEffectiveResourcesMatchThePolicy(t *testing.T) {
 	t.Parallel()
-	const listed = `Resource limits:
-  Width: 65536P
-  Height: 65536P
-  Area: 512MP
-  List length: 2048B
-  Memory: 1GiB
-  Map: 2GiB
-  Disk: 4GiB
-  File: 786432
-  Thread: 4
-  Throttle: 0
-  Time: 5 minutes
-`
-	want := processorPolicy(defaultResources(), Types())
-	limits := parseResourceList([]byte(listed))
-	if err := checkEffectiveResources(limits, want); err != nil {
-		t.Errorf("matching limits refused: %v", err)
+	units := map[string]float64{
+		"": 1, "B": 1, "P": 1, "KP": 1e3, "MP": 1e6, "GP": 1e9,
+		"KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
+		"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40, "PiB": 1 << 50,
+		"second": 1, "seconds": 1, "minute": 60, "minutes": 60, "hour": 3600, "hours": 3600,
+		"day": 86400, "days": 86400, "week": 7 * 86400, "weeks": 7 * 86400,
+		"month": 2628000, "months": 2628000, "year": 365 * 86400, "years": 365 * 86400,
 	}
-	for _, lower := range []struct{ from, to string }{
-		{"Thread: 4", "Thread: 3"},
-		{"Memory: 1GiB", "Memory: 512MiB"},
+	number := func(t testing.TB, s string) float64 {
+		s = strings.TrimSpace(s)
+		if s == "unlimited" {
+			return math.Inf(1)
+		}
+		i := strings.IndexFunc(s, func(r rune) bool { return r != '.' && (r < '0' || r > '9') })
+		if i < 0 {
+			i = len(s)
+		}
+		n, err := strconv.ParseFloat(s[:i], 64)
+		unit, ok := units[strings.TrimSpace(s[i:])]
+		if err != nil || !ok {
+			t.Fatalf("cannot read the listed limit %q", s)
+		}
+		return n * unit
+	}
+	for name, r := range map[string]Resources{
+		"default":      {},
+		"low memory":   lowMemory(),
+		"MiB memory":   {Memory: 3000 << 20},
+		"byte map":     {Map: 3_000_000_000},
+		"byte disk":    {Disk: 3_000_000_000},
+		"under 2 GiB":  {Map: 2<<30 - 1},
+		"aligned more": {Memory: 3 << 30},
+		"a week":       {TimeLimit: 7 * 24 * time.Hour},
+		"a PiB disk":   {Disk: 1 << 50},
 	} {
-		got := parseResourceList([]byte(strings.Replace(listed, lower.from, lower.to, 1)))
-		if err := checkEffectiveResources(got, want); err != nil {
-			t.Errorf("limits with %q refused: %v", lower.to, err)
-		}
-	}
-	for _, change := range []struct{ from, to string }{
-		{"Memory: 1GiB", "Memory: 3GiB"},
-		{"Memory: 1GiB", "Memory: 1.00001GiB"},
-		{"Time: 5 minutes", "Time: 6 minutes"},
-		{"Width: 65536P", "Width: 65537P"},
-		{"  Thread: 4\n", ""},
-	} {
-		got := parseResourceList([]byte(strings.Replace(listed, change.from, change.to, 1)))
-		if err := checkEffectiveResources(got, want); err == nil {
-			t.Errorf("limits with %q accepted", change.to)
-		}
-	}
-}
-
-func TestResourceNumber(t *testing.T) {
-	t.Parallel()
-	cases := map[string]float64{
-		"1GiB": 1 << 30, "512MP": 512e6, "65536P": 65536, "2048B": 2048,
-		"5 minutes": 300, "300": 300, "4": 4,
-		"1 weeks": 7 * 86400, "2 years": 2 * 365 * 86400, "1PiB": 1 << 50, "4EiB": 1 << 62,
-	}
-	for in, want := range cases {
-		if got, err := resourceNumber(in); err != nil || got != want {
-			t.Errorf("resourceNumber(%q) = %v, %v; want %v", in, got, err, want)
-		}
-	}
-	if _, err := resourceNumber("12 parsecs"); err == nil {
-		t.Error("unknown unit accepted")
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := requireProcessorWith(t, Config{Resources: r, RenderTypes: svgConfig.RenderTypes, Unsandboxed: true})
+			run, err := p.runTempDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(run) })
+			for policy, c := range map[string]struct {
+				ctx   context.Context
+				rules []policyRule
+			}{
+				"processor": {context.Background(), processorPolicy(p.res, p.types)},
+				"svg":       {withRenderRun(context.Background(), renderRun{dir: run, policyDir: p.svgDir()}), svgPolicy(p.res)},
+			} {
+				res, err := p.run(c.ctx, nil, "magick", "-list", "resource")
+				if err != nil {
+					t.Fatal(err)
+				}
+				listed := map[string]string{}
+				for line := range strings.SplitSeq(string(res.Stdout), "\n") {
+					if k, v, ok := strings.Cut(line, ":"); ok && !strings.HasPrefix(line, "Resource limits") {
+						listed[strings.ToLower(strings.ReplaceAll(strings.TrimSpace(k), " ", "-"))] = strings.TrimSpace(v)
+					}
+				}
+				for _, rule := range c.rules {
+					if rule.domain != "resource" {
+						continue
+					}
+					got, ok := listed[rule.name]
+					if !ok {
+						t.Errorf("%s: resource %s is not listed", policy, rule.name)
+						continue
+					}
+					g, w := number(t, got), number(t, rule.value)
+					if g > w*(1+5e-6) || (rule.name != "thread" && g < w*(1-5e-6)) {
+						t.Errorf("%s: resource %s lists as %q, policy writes %q", policy, rule.name, got, rule.value)
+					}
+				}
+			}
+		})
 	}
 }
 

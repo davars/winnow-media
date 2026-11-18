@@ -40,8 +40,7 @@ func (p *Processor) installSVGPolicy(rules []policyRule) error {
 }
 
 // verifySVGPolicy reads the policy an SVG run will see back from ImageMagick,
-// in a run configured as SVG runs are, and refuses unless it is exactly rules
-// and no resource limit is above its ceiling.
+// in a run configured as SVG runs are, and refuses unless it is exactly rules.
 func (p *Processor) verifySVGPolicy(ctx context.Context, rules []policyRule) error {
 	run, err := p.runTempDir()
 	if err != nil {
@@ -60,10 +59,7 @@ func (p *Processor) verifySVGPolicy(ctx context.Context, rules []policyRule) err
 	if err := checkEffectivePolicy(files, filepath.Join(p.svgDir(), "policy.xml"), rules); err != nil {
 		return fmt.Errorf("SVG policy: %w", err)
 	}
-	if res, err = p.run(ctx, nil, "magick", "-list", "resource"); err != nil {
-		return fmt.Errorf("listing the SVG resources: %w", err)
-	}
-	return checkEffectiveResources(parseResourceList(res.Stdout), rules)
+	return nil
 }
 
 // RenderSVG draws the SVG file at path into dir, which must exist and be

@@ -228,85 +228,8 @@ func checkEffectivePolicy(files []policyFile, ourPath string, want []policyRule)
 	return nil
 }
 
-// parseResourceList parses the output of "magick -list resource" into the
-// raw value of each limit, keyed by lower-case name.
-func parseResourceList(out []byte) map[string]string {
-	limits := map[string]string{}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		name, value, ok := strings.Cut(line, ":")
-		if !ok || strings.HasPrefix(line, "Resource limits") {
-			continue
-		}
-		limits[strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))] = strings.TrimSpace(value)
-	}
-	return limits
-}
-
-var resourceUnits = map[string]float64{
-	"": 1, "B": 1, "P": 1,
-	"KP": 1e3, "MP": 1e6, "GP": 1e9, "TP": 1e12,
-	"KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
-	"PB": 1e15, "EB": 1e18,
-	"KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40, "PiB": 1 << 50, "EiB": 1 << 60,
-	"second": 1, "seconds": 1, "minute": 60, "minutes": 60, "hour": 3600, "hours": 3600,
-	"day": 86400, "days": 86400, "week": 7 * 86400, "weeks": 7 * 86400, "year": 365 * 86400, "years": 365 * 86400,
-}
-
-// resourceNumber converts a limit such as "1GiB", "512MP" or "5 minutes" to
-// a number, so that spellings of one limit compare equal.
-func resourceNumber(s string) (float64, error) {
-	s = strings.TrimSpace(s)
-	i := 0
-	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
-		i++
-	}
-	n, err := strconv.ParseFloat(s[:i], 64)
-	if err != nil {
-		return 0, fmt.Errorf("resource value %q: %w", s, err)
-	}
-	unit, ok := resourceUnits[strings.TrimSpace(s[i:])]
-	if !ok {
-		return 0, fmt.Errorf("resource value %q has unknown unit", s)
-	}
-	return n * unit, nil
-}
-
-// listedPrecision is the relative rounding of a listed limit: ImageMagick
-// prints six significant digits, so 3000 MiB reads back as 2.92969GiB, which
-// is above the 2.9296875GiB written.
-const listedPrecision = 5e-6
-
-// checkEffectiveResources requires each resource rule in want to read back
-// at or below the quantity written, to the precision the listing has.
-// ImageMagick lowers some limits to fit the host (threads to its CPUs), and a
-// lower limit is still within the ceiling.
-func checkEffectiveResources(limits map[string]string, want []policyRule) error {
-	for _, r := range want {
-		if r.domain != "resource" {
-			continue
-		}
-		got, ok := limits[r.name]
-		if !ok {
-			return fmt.Errorf("resource %s is not listed", r.name)
-		}
-		g, err := resourceNumber(got)
-		if err != nil {
-			return err
-		}
-		w, err := resourceNumber(r.value)
-		if err != nil {
-			return err
-		}
-		if g > w*(1+listedPrecision) {
-			return fmt.Errorf("resource %s is %q, above the ceiling %q", r.name, got, r.value)
-		}
-	}
-	return nil
-}
-
 // verifyPolicy reads the policy ImageMagick will apply back from the tool and
-// refuses unless the rules are exactly the installed ones and no resource
-// limit is above its ceiling.
+// refuses unless the rules are exactly the installed ones.
 func (p *Processor) verifyPolicy(ctx context.Context, want []policyRule) error {
 	res, err := p.run(ctx, nil, "magick", "-list", "policy")
 	if err != nil {
@@ -316,12 +239,5 @@ func (p *Processor) verifyPolicy(ctx context.Context, want []policyRule) error {
 	if err != nil {
 		return err
 	}
-	if err := checkEffectivePolicy(files, filepath.Join(p.dir, "policy.xml"), want); err != nil {
-		return err
-	}
-	res, err = p.run(ctx, nil, "magick", "-list", "resource")
-	if err != nil {
-		return fmt.Errorf("listing resources: %w", err)
-	}
-	return checkEffectiveResources(parseResourceList(res.Stdout), want)
+	return checkEffectivePolicy(files, filepath.Join(p.dir, "policy.xml"), want)
 }

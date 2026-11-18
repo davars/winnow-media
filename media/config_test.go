@@ -147,32 +147,6 @@ func TestResourcesReachTheirTargets(t *testing.T) {
 	}
 }
 
-// NewProcessor reads every limit back from "magick -list resource". It lists
-// sizes to six significant digits, so a value that is not a whole number of
-// the unit it picks reads back rounded up: 3000 MiB lists as 2.92969GiB and
-// 3e9 bytes as 2.79397GiB, both above the value written. It also lists a week
-// as "1 weeks" and a pebibyte as "1PiB".
-func TestResourcesReadBackAsWritten(t *testing.T) {
-	t.Parallel()
-	requireTools(t, "magick", "ffmpeg", "ffprobe")
-	for name, r := range map[string]Resources{
-		"MiB memory":   {Memory: 3000 << 20},
-		"byte map":     {Map: 3_000_000_000},
-		"byte disk":    {Disk: 3_000_000_000},
-		"under 2 GiB":  {Map: 2<<30 - 1},
-		"aligned more": {Memory: 3 << 30},
-		"a week":       {TimeLimit: 7 * 24 * time.Hour},
-		"a PiB disk":   {Disk: 1 << 50},
-	} {
-		p, err := NewProcessor(context.Background(), Config{Resources: r, Unsandboxed: true, Dir: t.TempDir()})
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		_ = p.Close()
-	}
-}
-
 // Raising Memory and Map must never lower the address-space limit derived
 // from them: the sum must not wrap.
 func TestRlimitsDoNotWrap(t *testing.T) {

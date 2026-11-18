@@ -176,7 +176,9 @@ cc -O2 -o webp-frames tools/webp-frames/webp-frames.c -lwebpdemux -lwebp
   Remove or empty that file; `magick -list policy` shows what is in effect.
 - **Only the flake's tools are tested.** With others, a type that
   `media.Types()` lists can fail at `Open` because the build lacks its
-  decoder, and output bytes are your build's.
+  decoder, and output bytes are your build's. `NewProcessor` checks that its
+  policy is the one in effect, not that the build enforces the policy's
+  resource limits; only the tests check that, against the flake's ImageMagick.
 
 ### Deploying
 
