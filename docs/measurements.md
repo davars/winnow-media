@@ -212,10 +212,10 @@ flake links only `pdfinfo` and `pdftoppm` from `poppler-utils`.
 The five are `poppler-utils` (6.8 MiB), `poppler-data` (12.4 MiB), `nss`
 (4.0 MiB), `sqlite` (5.7 MiB) and `nspr` (0.3 MiB). Everything else poppler
 links is already in ImageMagick's closure, among it the `fontconfig`,
-`freetype`, `libpng`, `lcms2`, `libjpeg-turbo` and `cairo` builds. The
-flake's closure check requires both: that the five are all that poppler adds,
-and that those libraries are ImageMagick's, so that the two read fonts through
-one fontconfig.
+`freetype`, `libpng`, `lcms2`, `libjpeg-turbo` and `cairo` builds. These
+figures are a measurement, not a check: the flake's closure check asserts only
+which programs a consumer's binary resolves and that a tool it does not list
+is absent.
 
 ## Memory profiles
 

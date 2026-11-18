@@ -10,43 +10,40 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       toolSystems = systems ++ [ "x86_64-darwin" "aarch64-darwin" ];
 
-      toolNames = [ "ffmpeg" "imagemagick" "poppler" "webp-frames" ];
-
-      # The programs of a tool that toolDir links, where that is fewer than
-      # all of its bin/*. poppler-utils has thirteen programs; the library
-      # runs two.
-      toolPrograms = {
-        poppler = [ "pdfinfo" "pdftoppm" ];
-      };
-
-      # Tools this repository builds. webp-frames links the pinned libwebp,
-      # the build ImageMagick links, so it adds no store path of its own
-      # beyond the program.
-      ownTools = {
-        webp-frames = pkgs: pkgs.stdenv.mkDerivation {
-          pname = "webp-frames";
-          version = "1";
-          src = ./tools/webp-frames;
-          buildInputs = [ pkgs.libwebp ];
-          buildPhase = ''
-            runHook preBuild
-            $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpmux -lwebpdemux -lwebp
-            runHook postBuild
-          '';
-          installPhase = ''
-            runHook preInstall
-            install -Dm755 webp-frames $out/bin/webp-frames
-            runHook postInstall
-          '';
-          meta.mainProgram = "webp-frames";
+      # The tools the flake builds, by name: the package, and the programs
+      # toolDir links from it, which are the programs package media runs. The
+      # closure check compares them with what internal/cmd/toolprobe, which
+      # asks the Go package, says the library can run.
+      toolTable = {
+        ffmpeg = { package = pkgs: pkgs.ffmpeg-headless; programs = [ "ffmpeg" "ffprobe" ]; };
+        imagemagick = { package = pkgs: pkgs.imagemagick; programs = [ "magick" ]; };
+        poppler = { package = pkgs: pkgs.poppler-utils; programs = [ "pdfinfo" "pdftoppm" ]; };
+        # webp-frames links the pinned libwebp, the build ImageMagick links.
+        webp-frames = {
+          package = pkgs: pkgs.stdenv.mkDerivation {
+            pname = "webp-frames";
+            version = "1";
+            src = ./tools/webp-frames;
+            buildInputs = [ pkgs.libwebp ];
+            buildPhase = ''
+              runHook preBuild
+              $CC -O2 -Wall -Wextra -Werror -o webp-frames webp-frames.c -lwebpmux -lwebpdemux -lwebp
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 webp-frames $out/bin/webp-frames
+              runHook postInstall
+            '';
+            meta.mainProgram = "webp-frames";
+          };
+          programs = [ "webp-frames" ];
         };
       };
 
-      toolPackages = pkgs: nixpkgs.lib.genAttrs toolNames (name:
-        if ownTools ? ${name} then ownTools.${name} pkgs
-        else if name == "ffmpeg" then pkgs.ffmpeg-headless
-        else if name == "poppler" then pkgs.poppler-utils
-        else pkgs.${name});
+      toolNames = builtins.attrNames toolTable;
+
+      toolPackages = pkgs: nixpkgs.lib.mapAttrs (_: t: t.package pkgs) toolTable;
 
       # Programs the tests use to build and inspect inputs; they are not part
       # of the tool closure. cjpeg is in libjpeg-turbo's bin output, setsid in
@@ -59,16 +56,16 @@
           pkgs = nixpkgs.legacyPackages.${system};
           all = toolPackages pkgs;
           pick = name:
-            all.${name} or (throw "winnow-media: unknown tool '${name}'; known tools: ${nixpkgs.lib.concatStringsSep ", " toolNames}");
+            toolTable.${name} or (throw "winnow-media: unknown tool '${name}'; known tools: ${nixpkgs.lib.concatStringsSep ", " toolNames}");
           link = name:
-            let bin = nixpkgs.lib.getBin (pick name); in
-            if toolPrograms ? ${name}
-            then nixpkgs.lib.concatMapStringsSep "\n" (prog: ''ln -s "${bin}/bin/${prog}" "$out/${prog}"'') toolPrograms.${name}
-            else ''
-              for f in ${bin}/bin/*; do
-                ln -s "$f" "$out/$(basename "$f")"
-              done
-            '';
+            let
+              bin = nixpkgs.lib.getBin all.${name};
+              ln = prog: ''
+                test -x "${bin}/bin/${prog}" || { echo "winnow-media: ${name} has no ${prog}" >&2; exit 1; }
+                ln -s "${bin}/bin/${prog}" "$out/${prog}"
+              '';
+            in
+            nixpkgs.lib.concatMapStringsSep "\n" ln (pick name).programs;
         in
         # Flat: <dir>/<program>, not <dir>/bin/<program>. A name two tools
         # both provide fails the build instead of picking one.
@@ -214,7 +211,7 @@
             meta.mainProgram = "measure";
           };
 
-          probeTools = [ "imagemagick" "webp-frames" ];
+          probeTools = [ "imagemagick" "ffmpeg" "webp-frames" ];
           probeDir = toolDir { inherit system; tools = probeTools; };
           probe = probeWith (ldflags { inherit system; tools = probeTools; });
 
@@ -226,109 +223,58 @@
           renderProbe = probeWith (ldflags { inherit system; tools = renderTools; });
           renderClosure = pkgs.closureInfo { rootPaths = [ renderProbe ]; };
 
-          poppler = tools.poppler;
-          popplerClosure = pkgs.closureInfo { rootPaths = [ poppler ]; };
-          ffmpegClosure = pkgs.closureInfo { rootPaths = [ tools.ffmpeg ]; };
+          # How each program is run to see that it starts. webp-frames has no
+          # version flag; run bare it prints its usage and exits 1.
+          versionFlag = {
+            magick = "-version";
+            ffmpeg = "-version";
+            ffprobe = "-version";
+            pdfinfo = "-v";
+            pdftoppm = "-v";
+          };
+          runProgram = prog:
+            if prog == "webp-frames"
+            then ''[[ "$("$got" 2>&1 || true)" == *usage:* ]] || fail "webp-frames did not print its usage"''
+            else ''"$got" ${versionFlag.${prog} or (throw "winnow-media: no version flag for ${prog}")} >/dev/null 2>&1 || fail "${prog} did not run"'';
 
-          webpFrames = tools.webp-frames;
-          webpFramesClosure = pkgs.closureInfo { rootPaths = [ webpFrames ]; };
-          imagemagickClosure = pkgs.closureInfo { rootPaths = [ pkgs.imagemagick ]; };
+          # Asserts of a probe binary built with `listed` tools and `dir`: it
+          # names exactly the programs the flake knows, each program of a
+          # listed tool resolves into dir and runs, and each program of any
+          # other tool is absent, as is that tool's package from the binary's
+          # runtime closure.
+          probeCheck = { name, probe, dir, listed, closure }:
+            let
+              programsOf = names: lib.concatMap (n: toolTable.${n}.programs) names;
+              unlisted = lib.filter (n: !(lib.elem n listed)) toolNames;
+              known = lib.concatStringsSep " " (lib.sort lib.lessThan (programsOf toolNames));
+              binOf = n: lib.getBin tools.${n};
+            in
+            ''
+              fail() { echo "${name}: $1" >&2; exit 1; }
+              report=$(${probe}/bin/toolprobe)
+              pathOf() { echo "$report" | awk -v p="$1" '$1 == p { print $2 }'; }
+              programs=$(echo "$report" | awk '$1 != "flake-revision" { print $1 }' | sort | xargs)
+              [ "$programs" = "${known}" ] || fail "toolprobe names '$programs', the flake knows '${known}'"
+              ${lib.concatMapStringsSep "\n" (prog: ''
+                got=$(pathOf ${prog})
+                [ "$got" = "${dir}/${prog}" ] || fail "${prog} resolved to '$got', want ${dir}/${prog}"
+                ${runProgram prog}
+              '') (programsOf listed)}
+              ${lib.concatMapStringsSep "\n" (prog: ''
+                got=$(pathOf ${prog})
+                [ -z "$got" ] || fail "${prog} of an unlisted tool resolved to '$got'"
+              '') (programsOf unlisted)}
+              ${lib.concatMapStringsSep "\n" (n: ''
+                grep -qxF ${binOf n} ${closure}/store-paths || fail "${n} is missing from the runtime closure"
+              '') listed}
+              ${lib.concatMapStringsSep "\n" (n: ''
+                ! grep -qxF ${binOf n} ${closure}/store-paths || fail "${n} is in the runtime closure of a build that does not list it"
+              '') unlisted}
+            '';
 
           closureCheck = pkgs.runCommand "winnow-media-closure-check" { } ''
-            got=$(${probe}/bin/toolprobe | sed -n 1p)
-            want=${probeDir}/magick
-            if [ "$got" != "$want" ]; then
-              echo "toolprobe resolved '$got', want '$want'" >&2
-              exit 1
-            fi
-            "$got" -version >/dev/null
-            got=$(${probe}/bin/toolprobe | sed -n 3p)
-            want=${probeDir}/webp-frames
-            if [ "$got" != "$want" ]; then
-              echo "toolprobe resolved webp-frames as '$got', want '$want'" >&2
-              exit 1
-            fi
-
-            # webp-frames links the libwebp ImageMagick links, and nothing of
-            # its closure is outside ImageMagick's but the program itself.
-            if ! grep -qxF ${pkgs.libwebp} ${webpFramesClosure}/store-paths; then
-              echo "libwebp ${pkgs.libwebp} missing from webp-frames' closure" >&2
-              exit 1
-            fi
-            if ! grep -qxF ${pkgs.libwebp} ${imagemagickClosure}/store-paths; then
-              echo "libwebp ${pkgs.libwebp} missing from ImageMagick's closure" >&2
-              exit 1
-            fi
-            extra=$(sort ${webpFramesClosure}/store-paths | comm -23 - <(sort ${imagemagickClosure}/store-paths) | grep -vxF ${webpFrames} || true)
-            if [ -n "$extra" ]; then
-              echo "webp-frames adds store paths beyond ImageMagick's closure:" >&2
-              echo "$extra" >&2
-              exit 1
-            fi
-            if ! grep -qxF ${webpFrames} ${closure}/store-paths; then
-              echo "webp-frames missing from the probe's runtime closure" >&2
-              exit 1
-            fi
-
-            if ! grep -qxF ${pkgs.imagemagick} ${closure}/store-paths; then
-              echo "imagemagick ${pkgs.imagemagick} missing from the probe's runtime closure" >&2
-              exit 1
-            fi
-
-            # A consumer that does not list poppler gets none of it.
-            for line in 4 5; do
-              got=$(${probe}/bin/toolprobe | sed -n ''${line}p)
-              if [ -n "$got" ]; then
-                echo "toolprobe without poppler resolved line $line as '$got', want none" >&2
-                exit 1
-              fi
-            done
-            if grep -q -- '-poppler-' ${closure}/store-paths; then
-              echo "the probe without poppler has poppler in its runtime closure" >&2
-              exit 1
-            fi
-
-            # With poppler: both programs resolve into the flat directory, and
-            # run.
-            for entry in "4 pdftoppm" "5 pdfinfo"; do
-              set -- $entry
-              got=$(${renderProbe}/bin/toolprobe | sed -n "$1p")
-              want=${renderDir}/$2
-              if [ "$got" != "$want" ]; then
-                echo "toolprobe resolved $2 as '$got', want '$want'" >&2
-                exit 1
-              fi
-              "$got" -v >/dev/null 2>&1
-            done
-            if ! grep -qxF ${poppler} ${renderClosure}/store-paths; then
-              echo "poppler-utils ${poppler} missing from the render probe's runtime closure" >&2
-              exit 1
-            fi
-
-            # One font and pixel stack: poppler links the build of each library
-            # that ImageMagick links, so both renderers read fonts through one
-            # fontconfig. A nixpkgs change that splits them fails here.
-            for lib in fontconfig freetype libpng-apng lcms2 libjpeg-turbo cairo; do
-              for path in $(grep -E -- "^/nix/store/[a-z0-9]{32}-$lib-[0-9]" ${popplerClosure}/store-paths); do
-                if ! grep -qxF "$path" ${imagemagickClosure}/store-paths; then
-                  echo "poppler links $path, which is not in ImageMagick's closure" >&2
-                  exit 1
-                fi
-              done
-              if ! grep -qE -- "^/nix/store/[a-z0-9]{32}-$lib-[0-9]" ${popplerClosure}/store-paths; then
-                echo "poppler's closure has no $lib; the check names a library it does not link" >&2
-                exit 1
-              fi
-            done
-
-            # What poppler adds beyond ImageMagick and ffmpeg is a known set.
-            extra=$(sort ${popplerClosure}/store-paths | comm -23 - <(sort -u ${imagemagickClosure}/store-paths ${ffmpegClosure}/store-paths) \
-              | grep -vE -- '^/nix/store/[a-z0-9]{32}-(poppler-utils|poppler-data|nss|nspr|sqlite)-[0-9]' || true)
-            if [ -n "$extra" ]; then
-              echo "poppler adds store paths beyond ImageMagick's and ffmpeg's closures, other than the expected ones:" >&2
-              echo "$extra" >&2
-              exit 1
-            fi
+            ${probeCheck { name = "without poppler"; inherit probe closure; dir = probeDir; listed = probeTools; }}
+            ${probeCheck { name = "with poppler"; probe = renderProbe; closure = renderClosure; dir = renderDir; listed = renderTools; }}
             touch $out
           '';
         in

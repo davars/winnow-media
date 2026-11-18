@@ -224,9 +224,10 @@ and `aarch64-darwin`; `checks`, `apps` and `devShells` are Linux only.
   `ffprobe`), `imagemagick` is nixpkgs' build, `poppler` is nixpkgs'
   `poppler-utils`, and `webp-frames` is built here against the libwebp that
   ImageMagick links.
-- `packages.<system>.default`: a directory holding every program of those
-  tools, flat (`<dir>/magick`, not `<dir>/bin/magick`), except that of
-  `poppler` it holds `pdfinfo` and `pdftoppm` only.
+- `packages.<system>.default`: a directory holding exactly the programs the
+  library runs: `magick`, `ffmpeg`, `ffprobe`, `webp-frames`, `pdfinfo` and
+  `pdftoppm`, flat (`<dir>/magick`, not `<dir>/bin/magick`). The other
+  programs of those packages, such as ImageMagick's `convert`, are not linked.
 - `lib.toolDir { system, tools }`: the same kind of directory for the named
   tools. An unknown name fails evaluation.
 - `lib.ldflags { system, tools }`: the list of strings for `buildGoModule`'s

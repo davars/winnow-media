@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/davars/winnow-media/internal/programs"
 	"github.com/davars/winnow-media/tool"
 )
 
@@ -758,5 +759,23 @@ func TestRenderRunsAreConfinedAndOthersAreNot(t *testing.T) {
 		if c != nil {
 			t.Errorf("a magick run of Open was confined: %+v", c)
 		}
+	}
+}
+
+// The programs a Processor resolves are the ones package programs lists, which
+// the flake's closure check reads: a program the library runs and the list
+// lacks would be missing from the check.
+func TestProcessorRunsOnlyListedPrograms(t *testing.T) {
+	requireTools(t, "magick", "ffmpeg", "ffprobe", "pdfinfo", "pdftoppm")
+	p := requireProcessorWith(t, pdfConfig)
+	var ran []string
+	for name := range p.tools {
+		ran = append(ran, name)
+	}
+	slices.Sort(ran)
+	want := programs.Names()
+	slices.Sort(want)
+	if !slices.Equal(ran, want) {
+		t.Errorf("a Processor that renders resolves %v, package programs lists %v", ran, want)
 	}
 }
