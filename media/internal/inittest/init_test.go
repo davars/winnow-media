@@ -41,6 +41,9 @@ func TestUnsandboxedProcessorRunsWithoutTestMain(t *testing.T) {
 
 func runOperations(t *testing.T, cfg media.Config) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("runs external tools; skipped under -short")
+	}
 	for _, name := range []string{"magick", "ffmpeg", "ffprobe", "webp-frames"} {
 		if _, err := tool.Resolve(name); err != nil {
 			t.Fatal(name + " is not available; run the tests under nix develop")

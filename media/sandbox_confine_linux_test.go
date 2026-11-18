@@ -15,6 +15,7 @@ import (
 )
 
 func TestProbeConfinement(t *testing.T) {
+	skipShort(t)
 	dir := t.TempDir()
 	abi, err := probeConfinement(context.Background(), dir, defaultLimits)
 	if err != nil {
@@ -30,6 +31,7 @@ func TestProbeConfinement(t *testing.T) {
 
 // A probe that skips the confinement must be noticed.
 func TestProbeConfinementRefusesWhenItIsSkipped(t *testing.T) {
+	skipShort(t)
 	probeFault = "confine"
 	defer func() { probeFault = "" }()
 	_, err := probeConfinement(context.Background(), t.TempDir(), defaultLimits)

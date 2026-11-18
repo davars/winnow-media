@@ -15,6 +15,7 @@ import (
 
 // The kernel kills what the direct runner started when the program dies.
 func TestDirectRunnerToolDiesWithTheProgram(t *testing.T) {
+	skipShort(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +45,7 @@ func TestDirectRunnerToolDiesWithTheProgram(t *testing.T) {
 // A program that ignores SIGCHLD has its children reaped by the kernel; the
 // direct runner reports that instead of dereferencing a missing exit status.
 func TestDirectRunnerReportsALostExitStatus(t *testing.T) {
+	skipShort(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

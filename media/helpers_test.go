@@ -19,11 +19,21 @@ import (
 	"github.com/davars/winnow-media/tool"
 )
 
+// skipShort skips the test under -short. A test calls it, directly or through
+// a helper that obtains a tool, before it starts any process.
+func skipShort(t testing.TB) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("runs external tools; skipped under -short")
+	}
+}
+
 // testEnv runs the real tools, resolved through the tool package, directly
 // and without the sandbox, under the default Resources and the measured caps.
 // A test that needs a tool fails when it cannot be found.
 func testEnv(t *testing.T) toolEnv {
 	t.Helper()
+	skipShort(t)
 	return toolEnv{
 		run: func(ctx context.Context, name string, args ...string) (runResult, error) {
 			path, err := tool.Resolve(name)
@@ -52,6 +62,7 @@ func testEnv(t *testing.T) toolEnv {
 // develop.
 func requireTools(t *testing.T, names ...string) toolEnv {
 	t.Helper()
+	skipShort(t)
 	for _, name := range names {
 		if _, err := tool.Resolve(name); err != nil {
 			t.Fatal(name + " is not available; run the tests under nix develop")

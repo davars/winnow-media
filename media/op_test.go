@@ -63,6 +63,7 @@ func record(p *Processor) *recorder {
 
 func requireExiftool(t *testing.T) {
 	t.Helper()
+	skipShort(t)
 	if _, err := exec.LookPath("exiftool"); err != nil {
 		t.Fatal("exiftool is not available; run the tests under nix develop")
 	}

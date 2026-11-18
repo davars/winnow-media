@@ -27,6 +27,7 @@ func fakeProcessor(t *testing.T) *Processor { return fakeProcessorWith(t, Resour
 
 func fakeProcessorWith(t *testing.T, r Resources) *Processor {
 	t.Helper()
+	skipShort(t)
 	r, err := r.resolve()
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +66,7 @@ func TestSandboxDeniesSocketCreation(t *testing.T) {
 }
 
 func TestFilterCoversThreadsThatExistBeforeItIsInstalled(t *testing.T) {
+	skipShort(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -439,6 +441,7 @@ func TestSandboxedUsageExcludesTheCallingProgramsPeak(t *testing.T) {
 var defaultLimits = rlimitsFor(defaultResources())
 
 func TestProbeRefusesWhenAGuardIsMissing(t *testing.T) {
+	skipShort(t)
 	defer func() { probeFault = "" }()
 	if err := probeSandbox(context.Background(), defaultLimits); err != nil {
 		t.Fatalf("probe of an intact sandbox: %v", err)
@@ -720,6 +723,7 @@ func TestSandboxedFailuresNameTheHelper(t *testing.T) {
 // its own: two opens each see the whole file though the descriptor sits
 // mid-file.
 func TestSandboxHandsTheToolTheInputOnDescriptorThree(t *testing.T) {
+	skipShort(t)
 	t.Parallel()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -905,6 +909,7 @@ func TestOnlyTheWatchersOwnKillIsTheCPULimit(t *testing.T) {
 // clock is readable by the helper under the sandbox's filter. The CPU bound
 // below is under the backstop, so a run that meets it was ended by the helper.
 func TestHelperKillsAToolAtTheCPUBudget(t *testing.T) {
+	skipShort(t)
 	const budget = 2 * time.Second
 	self, err := os.Executable()
 	if err != nil {
@@ -939,6 +944,7 @@ func TestHelperKillsAToolAtTheCPUBudget(t *testing.T) {
 // With the helper's own check off, the kernel's backstop ends the run, and the
 // helper still reports it as the CPU limit, judged on the kernel's clock.
 func TestKernelBackstopKillIsTheCPULimit(t *testing.T) {
+	skipShort(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

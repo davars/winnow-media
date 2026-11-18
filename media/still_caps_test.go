@@ -249,6 +249,7 @@ func TestStillCapAtSevenEighths(t *testing.T) {
 // ImageMagick reports as JPEG and libjpeg-turbo never scales.
 func losslessJPEG(t *testing.T, w, h int) string {
 	t.Helper()
+	skipShort(t)
 	cjpeg, err := exec.LookPath("cjpeg")
 	if err != nil {
 		t.Fatal("cjpeg is not available; run the tests under nix develop")

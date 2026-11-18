@@ -23,6 +23,7 @@ import (
 // the animated WebPs the tests need, and the webp-frames tool are available.
 func requireWebPBuilders(t *testing.T) {
 	t.Helper()
+	skipShort(t)
 	for _, name := range []string{"cwebp", "webpmux"} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Fatal(name + " is not available; run the tests under nix develop")

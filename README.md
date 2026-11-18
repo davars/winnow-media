@@ -268,6 +268,7 @@ function over strings.
 ```sh
 nix develop          # Go, golangci-lint, gofumpt, the tools
 nix flake check      # test, lint (with gofumpt), pin, closure
+go test -short ./... # fast loop: skips the tests that run external tools
 ```
 
 CI runs `nix flake check` on x86_64 and aarch64 Linux; macOS is not tested. A

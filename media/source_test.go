@@ -974,6 +974,7 @@ func TestStillHeaderReadIsBounded(t *testing.T) {
 }
 
 func TestProcessorCloseClosesItsSources(t *testing.T) {
+	skipShort(t)
 	t.Parallel()
 	p, err := NewProcessor(context.Background(), Config{Dir: t.TempDir()})
 	if err != nil {

@@ -8,6 +8,15 @@ pinned toolchain and tools: `nix develop --command go test ./...`,
 full gate. The shell sets `GOFLAGS=-timeout=30m`, as the gate does, because the
 media suite outlasts go test's 10m default.
 
+For the edit loop, run `nix develop --command go test -short ./...`. Under
+`-short`, a test that starts any external program, the sandbox helper, or the
+test binary as a tool skips; the pure-Go tests still run. The skip is
+`skipShort` in `media/helpers_test.go`; the helpers that obtain a tool call it,
+so a new tool-running test gets it by using them. A test that starts a process
+without a helper calls `skipShort` itself. Under `-short` `TestMain` empties
+`PATH`, so a test that forgets fails instead of running the tool. The gate and
+CI run without `-short`.
+
 ## Vocabulary
 
 This library has more than one consumer. Name things for what the code does,

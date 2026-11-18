@@ -337,6 +337,7 @@ func compositorPeakRSS(t *testing.T, w, h, n int) int64 {
 // multiplies the frames by ten. Holding every decoded frame would add 90
 // frames of 1.5 MB, 135 MB; one frame at a time adds nothing but noise.
 func TestCompositorMemoryDoesNotGrowWithFrameCount(t *testing.T) {
+	skipShort(t)
 	const w, h = 1500, 1000
 	few := compositorPeakRSS(t, w, h, 10)
 	many := compositorPeakRSS(t, w, h, 100)

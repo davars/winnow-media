@@ -16,6 +16,7 @@ import (
 )
 
 func TestDirectRunner(t *testing.T) {
+	skipShort(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Fatal("sh is not available; run the tests under nix develop")
