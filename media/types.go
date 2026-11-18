@@ -14,6 +14,10 @@ type typeEntry struct {
 	// %m, in upper case; the first is the coder a caller's naming of the type
 	// pins. Empty for a video.
 	coders []string
+	// alsoReported are other %m names the coders report for content of the
+	// type: ImageMagick reports some BMPs as BMP3 or BMP2. They
+	// name the type when detection reports them, and are read with coders[0].
+	alsoReported []string
 	// demuxer is the ffmpeg demuxer of a video.
 	demuxer string
 	// alsoDemuxers are other demuxers that read the type: a detected file
@@ -49,7 +53,7 @@ var typeTable = map[string]typeEntry{
 	"image/jpeg":                    {coders: []string{"JPEG"}, keptExact: true},
 	"image/png":                     {coders: []string{"PNG"}, keptExact: true},
 	"image/tiff":                    {coders: []string{"TIFF", "TIFF64"}, keptExact: true},
-	"image/bmp":                     {coders: []string{"BMP"}},
+	"image/bmp":                     {coders: []string{"BMP"}, alsoReported: []string{"BMP3", "BMP2"}},
 	"image/x-tga":                   {coders: []string{"TGA"}},
 	"image/vnd.microsoft.icon":      {coders: []string{"ICO"}},
 	"image/x-pcx":                   {coders: []string{"PCX"}},
@@ -152,7 +156,7 @@ var coderTypes = func() map[string]string {
 		if e.sniffed {
 			continue
 		}
-		for _, c := range e.coders {
+		for _, c := range append(slices.Clone(e.coders), e.alsoReported...) {
 			m[c] = typ
 		}
 	}
@@ -222,7 +226,7 @@ func (e typeEntry) decoderFor(coder string) decoder {
 	if e.video {
 		return decoder{"ffmpeg", e.demuxer}
 	}
-	if coder == "" {
+	if !slices.Contains(e.coders, coder) {
 		coder = e.coders[0]
 	}
 	return decoder{"magick", strings.ToLower(coder)}

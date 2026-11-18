@@ -490,12 +490,29 @@ func (p *Processor) admitInput(ctx context.Context, m *meter, named, path string
 	if err != nil {
 		return admitted{}, err
 	}
+	abs := path
+	if (typ == "" || typ == typeBMP) && p.accepts[typeBMP] {
+		staged, err := stageBMP(f, info, dir)
+		if err != nil {
+			release()
+			return admitted{}, err
+		}
+		if staged != nil {
+			_ = f.Close()
+			f = staged
+			if info, err = f.Stat(); err != nil {
+				release()
+				return admitted{}, fmt.Errorf("source: %w", withoutPath(err))
+			}
+			path = filepath.Join(dir, "bmp")
+		}
+	}
 	ref, err := inputRef(dir, path)
 	if err != nil {
 		release()
 		return admitted{}, err
 	}
-	in = admitted{file: f, ref: ref, dir: dir, abs: path, id: idOf(info), release: release}
+	in = admitted{file: f, ref: ref, dir: dir, abs: abs, id: idOf(info), release: release}
 	if typ == "" {
 		if err := p.admitUnnamed(ctx, m, f, ref, lead, &in); err != nil {
 			release()

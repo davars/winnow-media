@@ -74,6 +74,15 @@
 // [ErrInputChanged] if it has. A file rewritten in place between that check
 // and a tool's read is not detected.
 //
+// A BMP of 16 bits per pixel or more whose color count, a field that means
+// nothing at that depth, exceeds the file's size is refused by ImageMagick as
+// short of data. Open reads such a file from a copy, made in Config.Dir, with
+// the count zeroed, so that the file decodes as its pixels say; the copy is the
+// descriptor's content at Open, and goes with the Source; a file changed
+// during the copy is [ErrInputChanged]. Every other BMP is read as it is. A
+// BMP with no type named is typed image/bmp however ImageMagick reports it
+// (BMP, BMP3 or BMP2).
+//
 // # Embedded previews
 //
 // Many camera raw and TIFF files carry JPEG previews whose byte ranges an EXIF
