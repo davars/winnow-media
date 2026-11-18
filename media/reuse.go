@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -141,7 +143,7 @@ func failedCheck(err error) bool {
 // and returns it with its status. A file that is missing, a symlink or not a
 // regular file fails a check; any other error is an I/O failure.
 func openKept(path string) (*os.File, os.FileInfo, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 	switch {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ELOOP):
 		return nil, nil, checkFailed("the file is gone or replaced by a link")

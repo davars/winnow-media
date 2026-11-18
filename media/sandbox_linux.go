@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // The sandbox's fixed limits. Each sits above the largest value measured for
@@ -49,9 +51,6 @@ const (
 // status and lifeline descriptors.
 const inputHelperFD = 5
 
-// rlimitNproc is RLIMIT_NPROC, which package syscall does not name.
-const rlimitNproc = 6
-
 type limitSpec struct {
 	name     string
 	resource int
@@ -78,11 +77,11 @@ func (l rlimits) backstopCPU() uint64 {
 // the user's current tasks.
 func (l rlimits) specs() []limitSpec {
 	return []limitSpec{
-		{limitCPU, syscall.RLIMIT_CPU, l.backstopCPU()},
+		{limitCPU, unix.RLIMIT_CPU, l.backstopCPU()},
 		{limitAddress, syscall.RLIMIT_AS, l.Address},
 		{limitFileSize, syscall.RLIMIT_FSIZE, l.FileSize},
 		{limitOpenFiles, syscall.RLIMIT_NOFILE, sandboxOpenFiles},
-		{limitProcesses, rlimitNproc, 0},
+		{limitProcesses, unix.RLIMIT_NPROC, 0},
 	}
 }
 
@@ -315,13 +314,8 @@ func helperMain() {
 
 // closeOnExecFrom marks every open descriptor from first up close-on-exec, so
 // that a process the helper starts does not inherit them. It needs Linux 5.11.
-func closeOnExecFrom(first uintptr) error {
-	const (
-		sysCloseRange        = 436 // the same number on amd64 and arm64
-		closeRangeCloexec    = 4
-		allDescriptorsFromTo = ^uintptr(0)
-	)
-	if _, _, e := syscall.RawSyscall(sysCloseRange, first, allDescriptorsFromTo, closeRangeCloexec); e != 0 {
+func closeOnExecFrom(first uint) error {
+	if e := unix.CloseRange(first, ^uint(0), unix.CLOSE_RANGE_CLOEXEC); e != nil {
 		return fmt.Errorf("the sandbox needs Linux 5.11 or later (close_range): %w", e)
 	}
 	return nil
@@ -343,8 +337,7 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 		if err := cfg.Confine.apply(inputFD); err != nil {
 			return helperResult{Err: fmt.Sprintf("confining the tool: %v", err)}
 		}
-		const prSetDumpable = 4
-		if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetDumpable, 0, 0); e != 0 {
+		if _, _, e := syscall.RawSyscall(unix.SYS_PRCTL, unix.PR_SET_DUMPABLE, 0, 0); e != 0 {
 			return helperResult{Err: fmt.Sprintf("making the helper undumpable: %v", e)}
 		}
 	}
@@ -437,18 +430,12 @@ func helperRun(cfg helperConfig, life *os.File) helperResult {
 // with WNOWAIT), and returns the error that stopped it early, if any. EINTR
 // is retried.
 func awaitExit(pid int) error {
-	const (
-		pPID    = 1
-		wExited = 4
-		wNoWait = 0x1000000
-	)
-	var info [128]byte // siginfo_t
+	var info unix.Siginfo
 	for {
-		_, _, e := syscall.Syscall6(syscall.SYS_WAITID, pPID, uintptr(pid), uintptr(unsafe.Pointer(&info[0])), wExited|wNoWait, 0, 0)
-		switch e {
-		case 0:
+		switch e := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil); e {
+		case nil:
 			return nil
-		case syscall.EINTR:
+		case unix.EINTR:
 		default:
 			return fmt.Errorf("waitid: %w", e)
 		}
@@ -499,16 +486,15 @@ const cpuclockProf = 0
 // filtered.
 func processCPUTime(pid int) (time.Duration, error) {
 	clock := int32(^int32(pid)<<3 | cpuclockProf)
-	var ts syscall.Timespec
-	if _, _, e := syscall.Syscall(syscall.SYS_CLOCK_GETTIME, uintptr(clock), uintptr(unsafe.Pointer(&ts)), 0); e != 0 {
-		return 0, e
+	var ts unix.Timespec
+	if err := unix.ClockGettime(clock, &ts); err != nil {
+		return 0, err
 	}
 	return time.Duration(ts.Sec)*time.Second + time.Duration(ts.Nsec), nil
 }
 
 func setSubreaper() error {
-	const prSetChildSubreaper = 36
-	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); e != 0 {
+	if _, _, e := syscall.RawSyscall(unix.SYS_PRCTL, unix.PR_SET_CHILD_SUBREAPER, 1, 0); e != 0 {
 		return fmt.Errorf("becoming child subreaper: %w", e)
 	}
 	return nil
@@ -518,8 +504,7 @@ func setSubreaper() error {
 // calling process and returns the process base the process limit used. fault
 // names a guard to skip, for tests.
 func applySandbox(fault string, limits rlimits) (uint64, error) {
-	const prSetNoNewPrivs = 38
-	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0); e != 0 {
+	if _, _, e := syscall.RawSyscall(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0); e != 0 {
 		return 0, fmt.Errorf("setting no_new_privs: %w", e)
 	}
 	base, err := userTasks(uint32(os.Getuid()))
@@ -569,7 +554,7 @@ func readProbe(base uint64, limits rlimits) *probeReport {
 	// ENOSYS, or with EPERM when io_uring is disabled by sysctl or a container
 	// profile, where it is unusable anyway; one denied by the filter never
 	// reaches the kernel.
-	if _, _, e := syscall.RawSyscall(sysIoUringSetup, 1, 0, 0); e != 0 {
+	if _, _, e := syscall.RawSyscall(unix.SYS_IO_URING_SETUP, 1, 0, 0); e != 0 {
 		r.IoUringSetupErrno = int(e)
 	}
 	for _, l := range limits.specs() {
@@ -581,31 +566,15 @@ func readProbe(base uint64, limits rlimits) *probeReport {
 	return r
 }
 
-type sockFilter struct {
-	code   uint16
-	jt, jf uint8
-	k      uint32
-}
-
-type sockFprog struct {
-	length uint16
-	_      [6]byte
-	filter *sockFilter
-}
-
 // installFilter denies socket, socketpair and the io_uring system calls with
 // EPERM and allows every other system call of the native ABI; any other ABI is
 // killed, so that neither 32-bit socketcall nor x32 reaches the sockets. Filters apply to the
 // calling thread, and the helper may start the tool from any thread, so the
 // filter is synchronised to all threads.
 func installFilter() error {
-	const (
-		setModeFilter = 1
-		tsync         = 1
-	)
 	prog := filterProgram()
-	fprog := sockFprog{length: uint16(len(prog)), filter: &prog[0]}
-	if _, _, e := syscall.Syscall(sysSeccomp, setModeFilter, tsync, uintptr(unsafe.Pointer(&fprog))); e != 0 {
+	fprog := unix.SockFprog{Len: uint16(len(prog)), Filter: &prog[0]}
+	if _, _, e := syscall.Syscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, uintptr(unsafe.Pointer(&fprog))); e != 0 {
 		return fmt.Errorf("installing the seccomp filter: %w", e)
 	}
 	runtime.KeepAlive(prog)
@@ -613,42 +582,45 @@ func installFilter() error {
 }
 
 const (
-	bpfLdAbs = 0x20 // BPF_LD | BPF_W | BPF_ABS
-	bpfJeq   = 0x15 // BPF_JMP | BPF_JEQ | BPF_K
-	bpfJset  = 0x45 // BPF_JMP | BPF_JSET | BPF_K
-	bpfRet   = 0x06 // BPF_RET | BPF_K
+	bpfLdAbs = unix.BPF_LD | unix.BPF_W | unix.BPF_ABS
+	bpfJeq   = unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K
+	bpfJset  = unix.BPF_JMP | unix.BPF_JSET | unix.BPF_K
+	bpfRet   = unix.BPF_RET | unix.BPF_K
 
-	retKill  = 0x80000000 // SECCOMP_RET_KILL_PROCESS
-	retAllow = 0x7fff0000
-	retErrno = 0x00050000
+	retKill  = unix.SECCOMP_RET_KILL_PROCESS
+	retAllow = unix.SECCOMP_RET_ALLOW
+	retErrno = unix.SECCOMP_RET_ERRNO
 )
 
 // filterProgram is the classic BPF program installFilter loads.
-func filterProgram() []sockFilter {
-	prog := []sockFilter{
-		{code: bpfLdAbs, k: 4}, // seccomp_data.arch
-		{code: bpfJeq, jt: 1, k: auditArch},
-		{code: bpfRet, k: retKill},
-		{code: bpfLdAbs, k: 0}, // seccomp_data.nr
+func filterProgram() []unix.SockFilter {
+	prog := []unix.SockFilter{
+		{Code: bpfLdAbs, K: 4}, // seccomp_data.arch
+		{Code: bpfJeq, Jt: 1, K: auditArch},
+		{Code: bpfRet, K: retKill},
+		{Code: bpfLdAbs, K: 0}, // seccomp_data.nr
 	}
 	if rejectX32 {
-		prog = append(prog, sockFilter{code: bpfJset, jf: 1, k: x32Bit}, sockFilter{code: bpfRet, k: retKill})
+		prog = append(prog, unix.SockFilter{Code: bpfJset, Jf: 1, K: x32Bit}, unix.SockFilter{Code: bpfRet, K: retKill})
 	}
 	for i, nr := range deniedSyscalls {
 		// A match skips the checks after it and the allow, to the denial.
-		prog = append(prog, sockFilter{code: bpfJeq, jt: uint8(len(deniedSyscalls) - i), k: nr})
+		prog = append(prog, unix.SockFilter{Code: bpfJeq, Jt: uint8(len(deniedSyscalls) - i), K: nr})
 	}
 	return append(
 		prog,
-		sockFilter{code: bpfRet, k: retAllow},
-		sockFilter{code: bpfRet, k: retErrno | uint32(syscall.EPERM)},
+		unix.SockFilter{Code: bpfRet, K: retAllow},
+		unix.SockFilter{Code: bpfRet, K: retErrno | uint32(syscall.EPERM)},
 	)
 }
 
 // deniedSyscalls are the system calls the filter fails with EPERM. io_uring
 // is denied because it can create a socket (IORING_OP_SOCKET, Linux 5.19)
 // without socket(2).
-var deniedSyscalls = []uint32{sysSocket, sysSocketpair, sysIoUringSetup, sysIoUringEnter, sysIoUringRegister}
+var deniedSyscalls = []uint32{
+	unix.SYS_SOCKET, unix.SYS_SOCKETPAIR,
+	unix.SYS_IO_URING_SETUP, unix.SYS_IO_URING_ENTER, unix.SYS_IO_URING_REGISTER,
+}
 
 // userTasks counts the tasks (threads) owned by uid, the quantity
 // RLIMIT_NPROC compares with.

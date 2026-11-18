@@ -218,3 +218,14 @@ func TestConfinedToolCannotReachItsHelper(t *testing.T) {
 		}
 	}
 }
+
+// TestLandlockRightValues pins the rights the confinement handles to the
+// kernel's ABI 1 set and the file-capable subset.
+func TestLandlockRightValues(t *testing.T) {
+	if abi1Rights != 1<<13-1 {
+		t.Errorf("abi1Rights = %#x, want the thirteen ABI 1 bits %#x", abi1Rights, 1<<13-1)
+	}
+	if want := 1<<0 | 1<<1 | 1<<2 | 1<<14; fileRights != want {
+		t.Errorf("fileRights = %#x, want %#x", fileRights, want)
+	}
+}

@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // fakeProcessor returns a Processor whose only tool, "tool", is the test
@@ -506,27 +508,27 @@ func TestCheckProbe(t *testing.T) {
 }
 
 // runFilter interprets the filter program for one system call.
-func runFilter(prog []sockFilter, arch, nr uint32) uint32 {
+func runFilter(prog []unix.SockFilter, arch, nr uint32) uint32 {
 	var acc uint32
 	for pc := 0; pc < len(prog); pc++ {
 		in := prog[pc]
-		switch in.code {
+		switch in.Code {
 		case bpfLdAbs:
-			acc = map[uint32]uint32{0: nr, 4: arch}[in.k]
+			acc = map[uint32]uint32{0: nr, 4: arch}[in.K]
 		case bpfJeq:
-			if acc == in.k {
-				pc += int(in.jt)
+			if acc == in.K {
+				pc += int(in.Jt)
 			} else {
-				pc += int(in.jf)
+				pc += int(in.Jf)
 			}
 		case bpfJset:
-			if acc&in.k != 0 {
-				pc += int(in.jt)
+			if acc&in.K != 0 {
+				pc += int(in.Jt)
 			} else {
-				pc += int(in.jf)
+				pc += int(in.Jf)
 			}
 		case bpfRet:
-			return in.k
+			return in.K
 		}
 	}
 	panic("program ends without a verdict")
@@ -541,15 +543,15 @@ func TestFilterProgram(t *testing.T) {
 		nr      uint32
 		verdict uint32
 	}{
-		{"socket", auditArch, sysSocket, deny},
-		{"socketpair", auditArch, sysSocketpair, deny},
-		{"io_uring_setup", auditArch, sysIoUringSetup, deny},
-		{"io_uring_enter", auditArch, sysIoUringEnter, deny},
-		{"io_uring_register", auditArch, sysIoUringRegister, deny},
-		{"the call after io_uring_register", auditArch, sysIoUringRegister + 1, retAllow},
+		{"socket", auditArch, unix.SYS_SOCKET, deny},
+		{"socketpair", auditArch, unix.SYS_SOCKETPAIR, deny},
+		{"io_uring_setup", auditArch, unix.SYS_IO_URING_SETUP, deny},
+		{"io_uring_enter", auditArch, unix.SYS_IO_URING_ENTER, deny},
+		{"io_uring_register", auditArch, unix.SYS_IO_URING_REGISTER, deny},
+		{"the call after io_uring_register", auditArch, unix.SYS_IO_URING_REGISTER + 1, retAllow},
 		{"read", auditArch, 0, retAllow},
 		{"execve", auditArch, uint32(syscall.SYS_EXECVE), retAllow},
-		{"another architecture", 0x40000003, sysSocket, retKill},
+		{"another architecture", 0x40000003, unix.SYS_SOCKET, retKill},
 		{"another architecture, other call", 0x40000003, 1, retKill},
 	} {
 		if got := runFilter(prog, c.arch, c.nr); got != c.verdict {
@@ -557,7 +559,7 @@ func TestFilterProgram(t *testing.T) {
 		}
 	}
 	if rejectX32 {
-		for _, nr := range []uint32{sysSocket, 0, 1} {
+		for _, nr := range []uint32{unix.SYS_SOCKET, 0, 1} {
 			if got := runFilter(prog, auditArch, nr|x32Bit); got != retKill {
 				t.Errorf("x32 call %d: verdict %#x, want kill", nr, got)
 			}

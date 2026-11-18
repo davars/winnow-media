@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func init() { toolMainHook = fakeTool }
@@ -45,7 +47,7 @@ func fakeTool(args []string) {
 		for _, c := range []struct {
 			name string
 			nr   uintptr
-		}{{"io_uring_setup", sysIoUringSetup}, {"io_uring_enter", sysIoUringEnter}, {"io_uring_register", sysIoUringRegister}} {
+		}{{"io_uring_setup", unix.SYS_IO_URING_SETUP}, {"io_uring_enter", unix.SYS_IO_URING_ENTER}, {"io_uring_register", unix.SYS_IO_URING_REGISTER}} {
 			_, _, e := syscall.RawSyscall6(c.nr, 0, 0, 0, 0, 0, 0)
 			fmt.Println(c.name, int(e))
 		}
@@ -180,8 +182,7 @@ func fakeTool(args []string) {
 		}()
 		<-started
 		runtime.LockOSThread()
-		const prSetNoNewPrivs = 38
-		_, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetNoNewPrivs, 1, 0)
+		_, _, e := syscall.RawSyscall(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, 0)
 		if e != 0 {
 			check(e)
 		}

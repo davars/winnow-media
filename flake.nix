@@ -166,12 +166,17 @@
           tools = toolPackages pkgs;
           allTools = builtins.attrValues tools ++ testToolPackages pkgs;
 
-          # A Go-only gate: no dependencies to vendor, output is an empty file.
+          # The hash of the vendored modules in go.mod and go.sum; every build
+          # of this module shares it. Redrive it when they change: set it to
+          # lib.fakeHash, build, and paste the hash Nix prints.
+          vendorHash = "sha256-3/tNPMYKxKjwprceoPRjRJuTNBwJSJE4LD8grnh+haI=";
+
+          # A Go gate: its output is an empty file.
           gate = name: nativeBuildInputs: script: buildGoModule {
             pname = "winnow-media-${name}";
             version = "0";
             inherit src nativeBuildInputs;
-            vendorHash = null;
+            inherit vendorHash;
             buildPhase = ''
               runHook preBuild
               export HOME="$TMPDIR/home"
@@ -191,7 +196,7 @@
             pname = "toolprobe";
             version = "0";
             inherit src;
-            vendorHash = null;
+            inherit vendorHash;
             subPackages = [ "internal/cmd/toolprobe" ];
             ldflags = probeLdflags;
           };
@@ -203,7 +208,7 @@
             pname = "measure";
             version = "0";
             inherit src;
-            vendorHash = null;
+            inherit vendorHash;
             subPackages = [ "internal/cmd/measure" ];
             ldflags = ldflags { inherit system; tools = measureTools; };
             meta.mainProgram = "measure";

@@ -5,7 +5,6 @@ package media
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -14,54 +13,39 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
-)
 
-// The Landlock system calls, whose numbers are the same on amd64 and arm64.
-const (
-	sysLandlockCreateRuleset = 444
-	sysLandlockAddRule       = 445
-	sysLandlockRestrictSelf  = 446
-
-	landlockCreateRulesetVersion = 1
-	landlockRulePathBeneath      = 1
-
-	// oPath is O_PATH, which package syscall does not name.
-	oPath = 0x200000
+	"golang.org/x/sys/unix"
 )
 
 // Filesystem access rights, by the Landlock ABI that introduced them.
+//
+// Rights stop at the ABI 3 set. The later ones, network ports (ABI 4), device
+// ioctls (ABI 5) and signal and abstract-socket scoping (ABI 6), are not
+// handled, so the seccomp filter and the host's own policy decide those
+// accesses, as they did before the confinement.
 const (
-	fsExecute    = 1 << 0
-	fsWriteFile  = 1 << 1
-	fsReadFile   = 1 << 2
-	fsReadDir    = 1 << 3
-	fsRemoveDir  = 1 << 4
-	fsRemoveFile = 1 << 5
-	fsMakeChar   = 1 << 6
-	fsMakeDir    = 1 << 7
-	fsMakeReg    = 1 << 8
-	fsMakeSock   = 1 << 9
-	fsMakeFifo   = 1 << 10
-	fsMakeBlock  = 1 << 11
-	fsMakeSym    = 1 << 12
-	fsRefer      = 1 << 13 // ABI 2
-	fsTruncate   = 1 << 14 // ABI 3
-
-	// Rights stop at the ABI 3 set. The later ones, network ports (ABI 4),
-	// device ioctls (ABI 5) and signal and abstract-socket scoping (ABI 6),
-	// are not handled, so the seccomp filter and the host's own policy decide
-	// those accesses, as they did before the confinement.
-
 	// abi1Rights are the rights every Landlock kernel handles.
-	abi1Rights = 1<<13 - 1
+	abi1Rights = unix.LANDLOCK_ACCESS_FS_EXECUTE | unix.LANDLOCK_ACCESS_FS_WRITE_FILE |
+		unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_READ_DIR |
+		unix.LANDLOCK_ACCESS_FS_REMOVE_DIR | unix.LANDLOCK_ACCESS_FS_REMOVE_FILE |
+		unix.LANDLOCK_ACCESS_FS_MAKE_CHAR | unix.LANDLOCK_ACCESS_FS_MAKE_DIR |
+		unix.LANDLOCK_ACCESS_FS_MAKE_REG | unix.LANDLOCK_ACCESS_FS_MAKE_SOCK |
+		unix.LANDLOCK_ACCESS_FS_MAKE_FIFO | unix.LANDLOCK_ACCESS_FS_MAKE_BLOCK |
+		unix.LANDLOCK_ACCESS_FS_MAKE_SYM
 	// fileRights are the rights a rule on a file, not a directory, may carry.
-	fileRights = fsExecute | fsWriteFile | fsReadFile | fsTruncate
+	fileRights = unix.LANDLOCK_ACCESS_FS_EXECUTE | unix.LANDLOCK_ACCESS_FS_WRITE_FILE |
+		unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_TRUNCATE
 )
+
+// rulesetAttrSize is the size of the attribute landlock_create_ruleset gets:
+// handled_access_fs alone. The kernel accepts the sizes of every ABI, and the
+// struct has grown fields for rights this package does not handle.
+const rulesetAttrSize = 8
 
 // landlockABI returns the Landlock ABI version of the kernel, at least 1, or
 // an error where Landlock is not built in or not enabled.
 func landlockABI() (int, error) {
-	v, _, e := syscall.Syscall(sysLandlockCreateRuleset, 0, 0, landlockCreateRulesetVersion)
+	v, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if e != 0 {
 		return 0, fmt.Errorf("landlock_create_ruleset: %w", e)
 	}
@@ -79,21 +63,22 @@ func (c *confinement) apply(inputFD int) error {
 	}
 	handled := uint64(abi1Rights)
 	if abi >= 2 {
-		handled |= fsRefer
+		handled |= unix.LANDLOCK_ACCESS_FS_REFER
 	}
 	if abi >= 3 {
-		handled |= fsTruncate
+		handled |= unix.LANDLOCK_ACCESS_FS_TRUNCATE
 	}
-	attr := handled
-	rs, _, e := syscall.Syscall(sysLandlockCreateRuleset, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+	attr := unix.LandlockRulesetAttr{Handled_access_fs: handled}
+	rs, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), rulesetAttrSize, 0)
 	if e != 0 {
 		return fmt.Errorf("landlock_create_ruleset: %w", e)
 	}
 	defer func() { _ = syscall.Close(int(rs)) }()
 
-	dirExec := uint64(fsExecute | fsReadFile | fsReadDir)
-	dirRead := uint64(fsReadFile | fsReadDir)
-	write := uint64(fsReadFile | fsReadDir | fsWriteFile | fsRemoveFile | fsMakeReg | fsRefer | fsTruncate)
+	dirExec := uint64(unix.LANDLOCK_ACCESS_FS_EXECUTE | unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_READ_DIR)
+	dirRead := uint64(unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_READ_DIR)
+	write := uint64(unix.LANDLOCK_ACCESS_FS_READ_FILE | unix.LANDLOCK_ACCESS_FS_READ_DIR | unix.LANDLOCK_ACCESS_FS_WRITE_FILE |
+		unix.LANDLOCK_ACCESS_FS_REMOVE_FILE | unix.LANDLOCK_ACCESS_FS_MAKE_REG | unix.LANDLOCK_ACCESS_FS_REFER | unix.LANDLOCK_ACCESS_FS_TRUNCATE)
 	for _, g := range []struct {
 		paths  []string
 		access uint64
@@ -105,11 +90,11 @@ func (c *confinement) apply(inputFD int) error {
 		}
 	}
 	if c.Input && inputFD >= 0 {
-		if err := addRule(int(rs), inputFD, fsReadFile, handled); err != nil {
+		if err := addRule(int(rs), inputFD, unix.LANDLOCK_ACCESS_FS_READ_FILE, handled); err != nil {
 			return fmt.Errorf("allowing the input: %w", err)
 		}
 	}
-	if _, _, e := syscall.Syscall(sysLandlockRestrictSelf, rs, 0, 0); e != 0 {
+	if _, _, e := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, rs, 0, 0); e != 0 {
 		return fmt.Errorf("landlock_restrict_self: %w", e)
 	}
 	return nil
@@ -118,7 +103,7 @@ func (c *confinement) apply(inputFD int) error {
 // addPath allows access to the file or directory at path, and everything
 // below a directory, unless it does not exist.
 func addPath(rs int, path string, access, handled uint64) error {
-	fd, err := syscall.Open(path, oPath|syscall.O_CLOEXEC, 0)
+	fd, err := syscall.Open(path, unix.O_PATH|syscall.O_CLOEXEC, 0)
 	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR) {
 		return nil
 	}
@@ -146,11 +131,10 @@ func addRule(rs, fd int, access, handled uint64) error {
 	if access == 0 {
 		return nil
 	}
-	// struct landlock_path_beneath_attr is packed: u64 allowed_access, s32 parent_fd.
-	var attr [12]byte
-	binary.NativeEndian.PutUint64(attr[:8], access)
-	binary.NativeEndian.PutUint32(attr[8:], uint32(fd))
-	if _, _, e := syscall.Syscall6(sysLandlockAddRule, uintptr(rs), landlockRulePathBeneath, uintptr(unsafe.Pointer(&attr[0])), 0, 0, 0); e != 0 {
+	// landlock_add_rule takes no size; the kernel reads the packed 12 bytes
+	// of its struct, though the Go struct is padded to 16.
+	attr := unix.LandlockPathBeneathAttr{Allowed_access: access, Parent_fd: int32(fd)}
+	if _, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE, uintptr(rs), unix.LANDLOCK_RULE_PATH_BENEATH, uintptr(unsafe.Pointer(&attr)), 0, 0, 0); e != 0 {
 		return e
 	}
 	return nil

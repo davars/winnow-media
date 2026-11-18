@@ -7,7 +7,8 @@ import (
 	"math"
 	"os"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // inputFDPath names, inside a tool, descriptor 3: the first after the standard
@@ -34,7 +35,7 @@ func (in input) open() (io.ReadSeeker, func(), error) {
 // openInputFile opens the file at path for reading without blocking, and
 // without making a terminal the process's controlling one.
 func openInputFile(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
+	return os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOCTTY, 0)
 }
 
 // requireInput refuses arguments that name the input descriptor when the run
