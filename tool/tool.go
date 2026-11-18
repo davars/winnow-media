@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 )
 
 // Set by the linker, as the flake's lib.ldflags does:
@@ -50,3 +51,47 @@ func Resolve(name string) (string, error) {
 // "unknown". It is empty when nothing was set. It identifies the tool
 // binaries, which output bytes depend on.
 func FlakeRevision() string { return flakeRev }
+
+const modulePath = "github.com/davars/winnow-media"
+
+// Dir returns the tool directory set at link time, the path in the Nix store
+// that Resolve looks in, or "" for a build that finds its tools on PATH. The
+// directory's store path is derived from the packages whose programs it
+// links, so binaries with equal non-empty Dir run the same tool binaries.
+// An empty Dir identifies nothing: PATH holds whatever the host has.
+func Dir() string { return toolDir }
+
+// ModuleVersion returns this module's version as the running binary was
+// built, from its build information: a tag ("v1.1.0"), a pseudo-version
+// ("v1.1.1-0.20261118120000-0123456789ab", whose last element names the
+// commit), or "(devel)". It is "(devel)" when the module was built from its
+// own tree or replaced by a local directory, and empty when the build
+// information does not list the module, as in a build without module
+// information. Equal tags or pseudo-versions mean the same library source;
+// "(devel)" and the empty string identify no source. The flake revision of a
+// pinned build, FlakeRevision, changes with every commit of the flake, and
+// Dir only with the tools.
+func ModuleVersion() string {
+	info, _ := debug.ReadBuildInfo()
+	return moduleVersion(info)
+}
+
+// moduleVersion is this module's version in info, or empty.
+func moduleVersion(info *debug.BuildInfo) string {
+	if info == nil {
+		return ""
+	}
+	if info.Main.Path == modulePath {
+		return info.Main.Version
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != modulePath {
+			continue
+		}
+		if dep.Replace != nil {
+			return dep.Replace.Version
+		}
+		return dep.Version
+	}
+	return ""
+}
