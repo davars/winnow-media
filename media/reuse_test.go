@@ -1065,10 +1065,11 @@ func TestReuseKeepsTheFilterOfAnOpaqueWebP(t *testing.T) {
 	if src.kept[0] == nil {
 		t.Fatal("not kept")
 	}
-	// A fresh decode to a small target is reduced, which a full-size decode
-	// does not give; the first call of a KeepDecode Source decodes at full size.
-	want := encodeAll(t, openSourceOn(t, p, path, OpenOptions{KeepDecode: true}), Select{}, small)
-	sameBytes(t, "resized from the kept decode", encodeAll(t, src, Select{}, small), want)
+	// A WebP is never decoded at a reduced size, so a plain decode resizes
+	// from the full frame with the filter the kept decode must reproduce.
+	got := encodeAll(t, src, Select{}, small)
+	sameBytes(t, "resized from the kept decode", got, encodeAll(t, openSourceOn(t, p, path, OpenOptions{}), Select{}, small))
+	sameBytes(t, "resized from a fresh keeping decode", got, encodeAll(t, openSourceOn(t, p, path, OpenOptions{KeepDecode: true}), Select{}, small))
 }
 
 // A still WebP whose ICC chunk ImageMagick does not read, because libwebp's

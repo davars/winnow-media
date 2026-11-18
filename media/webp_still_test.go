@@ -324,6 +324,18 @@ func TestStillWebPIsDecodedByImageMagick(t *testing.T) {
 			if n := webpFramesRuns(rec.calls); n != 0 {
 				t.Errorf("webp-frames ran %d times for a still", n)
 			}
+			if n := fullReads(rec.calls); n != 0 {
+				t.Errorf("%d whole-image identify reads; the profile of this file is certain at the header", n)
+			}
+			encodes := 0
+			for _, c := range rec.calls {
+				if c[0] == "magick" && c[1] != "identify" {
+					encodes++
+				}
+			}
+			if encodes != 1 {
+				t.Errorf("%d magick encode runs, want the one that decodes and encodes", encodes)
+			}
 			ref, _ := magickReference(t, path, OpenOptions{}, target)
 			if out[0].Width != ref.Width || out[0].Height != ref.Height {
 				t.Fatalf("output %dx%d, ImageMagick's %dx%d", out[0].Width, out[0].Height, ref.Width, ref.Height)
