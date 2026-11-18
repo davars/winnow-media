@@ -183,3 +183,39 @@ func TestWebPICCDeclinesAnUnreadableLayout(t *testing.T) {
 		t.Errorf("missing file: webpICC = %t, known; want no answer", has)
 	}
 }
+
+// libwebp's mux, through which ImageMagick reads a WebP's metadata, refuses a
+// file whose EXIF or XMP chunk disagrees with its VP8X flag, that repeats a
+// chunk, or that has an ANIM chunk without the animation flag; ImageMagick
+// then reads no profile however the ICC flag and chunk agree. Where the scan
+// answers for such a file, the answer must be ImageMagick's.
+func TestWebPICCAgreesWhereTheMuxRefusesTheFile(t *testing.T) {
+	t.Parallel()
+	real := requireMagick(t)
+	profile, err := os.ReadFile(writeSRGBProfile(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := imageChunk(t, real)
+	iccp := riffChunk("ICCP", profile)
+	exif := riffChunk("EXIF", []byte("Exif\x00\x00II*\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00"))
+	const icc, exifFlag = webpICCFlag, 0x08
+	for name, file := range map[string][]byte{
+		"EXIF chunk with its flag clear": riffWebP(vp8xChunk(icc), iccp, image, exif),
+		"XMP chunk with its flag clear":  riffWebP(vp8xChunk(icc), iccp, image, riffChunk("XMP ", []byte("<x/>"))),
+		"two EXIF chunks":                riffWebP(vp8xChunk(icc|exifFlag), iccp, image, exif, exif),
+		"ANIM chunk in a still":          riffWebP(vp8xChunk(icc), iccp, riffChunk("ANIM", make([]byte, 6)), image),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeBytes(t, file)
+			read, err := real.run(context.Background(), "magick", "identify", "-format", "%[profiles]", path)
+			if err != nil {
+				t.Fatalf("ImageMagick refuses the file: %v", err)
+			}
+			want := profileListHasICC(string(read.Stdout))
+			if has, known := webpICC(inputAt(t, path)); known && has != want {
+				t.Errorf("webpICC = %t, known; ImageMagick reads a profile: %t", has, want)
+			}
+		})
+	}
+}

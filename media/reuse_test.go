@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -1068,6 +1069,37 @@ func TestReuseKeepsTheFilterOfAnOpaqueWebP(t *testing.T) {
 	// does not give; the first call of a KeepDecode Source decodes at full size.
 	want := encodeAll(t, openSourceOn(t, p, path, OpenOptions{KeepDecode: true}), Select{}, small)
 	sameBytes(t, "resized from the kept decode", encodeAll(t, src, Select{}, small), want)
+}
+
+// A still WebP whose ICC chunk ImageMagick does not read, because libwebp's
+// mux refuses the file for an EXIF chunk whose VP8X flag is clear, is kept
+// like any other WebP, by the one run that encodes it.
+func TestReuseKeepsAWebPWhoseProfileImageMagickDoesNotRead(t *testing.T) {
+	t.Parallel()
+	requireWebPBuilders(t)
+	real := requireMagick(t)
+	simple := mustReadFile(t, stillWebP(t, photoPNG(t, real, 300, 200, false), "-q", "80"))
+	path := webpWithFlags(t, simple, 300, 200, webpICCFlag, riffChunk("ICCP", mustAdobeProfile(t)), tiffOrientation(binary.LittleEndian, 3, 1, 6))
+	enc := Encoding{Format: PNG, MaxEdge: 100}
+	p, rec := sourceProcessor(t)
+	want := fusedWant(t, p, path, Select{}, enc)
+	rec.mu.Lock()
+	rec.calls = nil
+	rec.mu.Unlock()
+	src := openSourceOn(t, p, path, OpenOptions{KeepDecode: true})
+	sameBytes(t, "first encode", encodeAll(t, src, Select{}, enc), want)
+	if src.kept[0] == nil || src.noKeep[0] {
+		t.Errorf("kept %v, noKeep %v; want the decode kept", src.kept[0] != nil, src.noKeep[0])
+	}
+	encodes := 0
+	for _, c := range rec.calls {
+		if c[0] == "magick" && c[1] != "identify" {
+			encodes++
+		}
+	}
+	if encodes != 1 {
+		t.Errorf("%d encode runs, want 1", encodes)
+	}
 }
 
 // An Opaque encode flattens alpha onto white, so a kept decode gives the bytes
