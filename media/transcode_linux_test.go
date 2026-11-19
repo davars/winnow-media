@@ -3,10 +3,12 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -122,6 +124,44 @@ func TestTranscodeLimitsAreEnforced(t *testing.T) {
 			}
 			if entries, _ := os.ReadDir(out); len(entries) != 0 {
 				t.Errorf("the call left %d entries in its directory", len(entries))
+			}
+		})
+	}
+}
+
+// Each encoder completes a transcode under the confinement, and writes the
+// same file as it does unconfined.
+func TestTranscodeEncodersRunConfined(t *testing.T) {
+	env := requireFFmpeg(t)
+	input := avClip(t, env)
+	confined := requireProcessorWith(t, Config{RenderTypes: RenderTypes()})
+	if !confined.Confinement().Confined {
+		t.Skipf("render runs are not confined on this host: %v", confined.Confinement())
+	}
+	plain := requireProcessor(t)
+	for _, c := range []struct {
+		name string
+		t    Transcode
+	}{
+		{"av1-webm", av1WebM},
+		{"hevc-mp4", hevcMP4},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var files [][]byte
+			for _, p := range []*Processor{confined, plain} {
+				out := t.TempDir()
+				got, _, err := openVideo(t, p, input).Transcode(context.Background(), out, c.t)
+				if err != nil {
+					t.Fatalf("confined %v: %v\n%s", p.Confinement().Confined, err, Stderr(err))
+				}
+				data, err := os.ReadFile(filepath.Join(out, got.Name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, data)
+			}
+			if !bytes.Equal(files[0], files[1]) {
+				t.Errorf("the confined run wrote %d bytes, the unconfined %d; they differ", len(files[0]), len(files[1]))
 			}
 		})
 	}

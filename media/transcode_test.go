@@ -77,8 +77,8 @@ func TestTranscodeArgs(t *testing.T) {
 		{index: 1, kind: "audio", isDefault: true},
 	}}
 	prefix := []string{
-		"-hide_banner", "-nostdin", "-v", "info", "-y", "-max_alloc", "1073741824", "-filter_threads", "32",
-		"-nostats", "-threads", "32", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-enable_drefs", "0",
+		"-hide_banner", "-nostdin", "-v", "error", "-y", "-max_alloc", "1073741824", "-filter_threads", "32",
+		"-threads", "32", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-enable_drefs", "0",
 		"-f", "mov", "-i", "/dev/fd/3",
 	}
 	for _, c := range []struct {
@@ -94,7 +94,7 @@ func TestTranscodeArgs(t *testing.T) {
 		}},
 		{"hevc-mp4", hevcMP4, []string{
 			"-map", "0:0", "-map", "0:1",
-			"-c:v", "libx265", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-tag:v", "hvc1",
+			"-c:v", "libx265", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-x265-params", "log-level=info",
 			"-c:a", "aac", "-b:a", "256k",
 			"-movflags", "+faststart", "-f", "mp4", "/out/000.mp4",
 		}},
@@ -466,14 +466,14 @@ func TestTranscodeWritesTheChosenStreams(t *testing.T) {
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=1:sample_rate=48000",
 		"-f", "lavfi", "-i", "sine=frequency=880:duration=1:sample_rate=44100",
 		"-map", "0", "-map", "1", "-map", "2", "-map", "3",
-		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "flac",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "flac", "-ac:a:1", "2",
 		"-disposition:v:0", "0", "-disposition:v:1", "default", "-disposition:a:0", "0", "-disposition:a:1", "default")
 	p := requireProcessor(t)
 	src := openVideo(t, p, input)
 	base := Transcode{Video: SVTAV1{Preset: 12, CRF: 40}, Audio: Opus{Bitrate: 64_000}, Container: WebM{}}
 	describe := func(t *testing.T, path string) []string {
 		res, err := env.run(context.Background(), "ffprobe", "-v", "error", "-of", "csv=p=0",
-			"-show_entries", "stream=codec_type,width,sample_rate", path)
+			"-show_entries", "stream=codec_type,width,channels", path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -485,8 +485,8 @@ func TestTranscodeWritesTheChosenStreams(t *testing.T) {
 		audio []int
 		want  []string
 	}{
-		{"defaults", nil, nil, []string{"video,160", "audio,48000"}},
-		{"named", intPtr(0), []int{2, 3}, []string{"video,320", "audio,48000", "audio,48000"}},
+		{"defaults", nil, nil, []string{"video,160", "audio,2"}},
+		{"named", intPtr(0), []int{2, 3}, []string{"video,320", "audio,1", "audio,2"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tr := base

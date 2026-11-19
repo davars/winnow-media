@@ -115,7 +115,9 @@ func (e SVTAV1) videoArgs() ([]string, error) {
 
 // X265 encodes HEVC with x265 at a constant quality. In an MP4 the stream is
 // tagged hvc1, the form that carries its parameter sets in the sample
-// description, which Apple's players require.
+// description, which Apple's players require. The encoder's own log level is
+// fixed at info, which is what ffmpeg's default level gives it, so that the
+// stream is the one plain ffmpeg writes.
 type X265 struct {
 	// Preset is the speed preset: ultrafast, superfast, veryfast, faster,
 	// fast, medium, slow, slower, veryslow or placebo.
@@ -140,7 +142,7 @@ func (e X265) videoArgs() ([]string, error) {
 	}
 	return []string{
 		"-c:v", "libx265", "-preset", e.Preset, "-crf", strconv.Itoa(e.CRF), "-pix_fmt", "yuv420p",
-		"-tag:v", "hvc1",
+		"-tag:v", "hvc1", "-x265-params", "log-level=info",
 	}, nil
 }
 
@@ -438,15 +440,12 @@ func (v videoInfo) defaultAudio() (int, bool) {
 
 // transcodeArgs returns the ffmpeg arguments of a transcode by plan of the
 // input at inputPath, read with dec, to output, with threads for the decoder
-// and filters. The run logs at ffmpeg's default level, not at errors as other
-// runs do: x265 takes its log level from ffmpeg's and writes it into the
-// stream's header, so a lower level would change the file.
+// and filters. Like other runs it logs at errors, so that a failed run's
+// standard error is the failure and not a summary of the input; X265 pins its
+// own level because x265 writes the level it ran at into the stream's header.
 func transcodeArgs(dec decoder, inputPath string, plan transcodePlan, threads int, output string) []string {
 	args := ffmpegArgs(threads)
-	if i := slices.Index(args, "-v"); i >= 0 {
-		args[i+1] = "info"
-	}
-	args = append(args, "-nostats", "-threads", strconv.Itoa(ffmpegThreadsFor(threads, plan.video.width, plan.video.height)))
+	args = append(args, "-threads", strconv.Itoa(ffmpegThreadsFor(threads, plan.video.width, plan.video.height)))
 	args = append(args, inputArgs(dec, inputPath)...)
 	args = append(args, plan.output...)
 	return append(args, output)
