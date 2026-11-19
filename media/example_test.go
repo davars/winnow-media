@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/davars/winnow-media/media"
@@ -291,6 +292,41 @@ func ExampleSource_Encode_video() {
 }
 
 // All with Animate writes the frames of an animation into one animated WebP.
+func ExampleSource_Transcode() {
+	ctx := context.Background()
+	p, err := media.NewProcessor(ctx, media.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer p.Close()
+	src, _, err := p.Open(ctx, "clip.mov", media.OpenOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer src.Close()
+
+	dir, err := os.MkdirTemp("", "transcode")
+	if err != nil {
+		log.Fatal(err)
+	}
+	// An encode takes far longer than any other call, so its limits scale
+	// with the video's duration rather than coming from the Processor.
+	limit := max(30*time.Minute, 10*src.Info().Video.Duration)
+	out, usage, err := src.Transcode(ctx, dir, media.Transcode{
+		Video:     media.SVTAV1{Preset: 6, CRF: 30},
+		Audio:     media.Opus{Bitrate: 128_000},
+		Container: media.WebM{BitExact: true},
+		Limits: media.TranscodeLimits{
+			WallTime: limit, CPUTime: limit.Truncate(time.Second) * time.Duration(runtime.NumCPU()),
+			Threads: runtime.NumCPU(), AddressSpace: 32 << 30,
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s: %d bytes in %s, %s of CPU\n", out.Name, out.Bytes, out.Wall, usage.CPU)
+}
+
 func ExampleSource_Encode_animation() {
 	ctx := context.Background()
 	p, err := media.NewProcessor(ctx, media.Config{})

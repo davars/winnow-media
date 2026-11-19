@@ -1,13 +1,13 @@
 # winnow-media
 
 A Go library that turns an untrusted image, animation or video file into
-upright, sized, sRGB images, and a Nix flake that pins the programs it runs
-(ImageMagick, FFmpeg and `webp-frames`). It reads the image and video types
-that
+upright, sized, sRGB images and transcodes video, and a Nix flake that pins
+the programs it runs (ImageMagick, FFmpeg and `webp-frames`). It reads the
+image and video types that
 [`media.Types`](https://pkg.go.dev/github.com/davars/winnow-media/media#Types)
 lists, among them JPEG, PNG, GIF, WebP, HEIC, AVIF, JPEG XL, TIFF, MP4,
-QuickTime, WebM and Matroska, and writes JPEG, WebP and PNG. Licensed under
-AGPL-3.0.
+QuickTime, WebM and Matroska. It writes JPEG, WebP and PNG, and video as AV1
+or HEVC in WebM or MP4. Licensed under AGPL-3.0.
 
 - [`media`](https://pkg.go.dev/github.com/davars/winnow-media/media) is the
   library. It admits a file by its content, decodes it with external tools
@@ -64,7 +64,7 @@ is the reference, and its other
 encodings from one decode, samples of a video, an animation to one animated
 WebP, regions of a kept decode, naming a type, a configuration for hostile
 input, handling errors, extracting an embedded preview, drawing the pages
-of a PDF, and drawing an SVG.
+of a PDF, drawing an SVG, and transcoding a video.
 
 | Call | Does |
 |---|---|
@@ -72,6 +72,7 @@ of a PDF, and drawing an SVG.
 | `Processor.Open` | Admits one file by its bytes, type and size, without decoding a pixel, and returns a `Source`. |
 | `Source.Info` | Describes the file: type, `Kind` (still, animation or video), size, orientation, and the facts of its kind. |
 | `Source.Encode` | Writes the frames (`All`, `Even`, `Indices`, `Times`, `Consecutive`) and `Region` of a `Select` into an empty directory, once per `Encoding`: a file per frame, or one animated WebP. |
+| `Source.Transcode` | Encodes a video into one WebM or MP4 file in an empty directory, with the typed encoders (`SVTAV1`, `X265`, `Opus`, `AAC`) and container (`WebM`, `MP4`) of a `Transcode`, under the call's own `TranscodeLimits`. |
 | `Processor.OpenDocument`, `Document.Render` | Admits a PDF (with `Config.RenderTypes`) and draws the pages a `FrameSelection` selects, at a `PageScale`, as the renderer's own PNGs in an empty directory, for `Open` to read. |
 | `Processor.RenderSVG` | Draws an SVG (with `Config.RenderTypes`) as one PNG, opaque on white, reading nothing outside the file, for `Open` to read. |
 | `Processor.ExtractPreview` | Chooses the largest embedded JPEG among byte ranges the caller reports for a file, and copies it into an empty directory to be opened. |
@@ -89,19 +90,20 @@ Each point is stated in full in the package documentation.
 - **[Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).**
   The content cannot select a decoder outside `Config.Types`, and a tool
   cannot open a socket, gain privileges or leave a process behind. The sandbox
-  confines the files of a render where the kernel has Landlock, which
+  confines the files of a render or transcode where the kernel has Landlock, which
   `Processor.Confinement` reports and `Config.RequireConfinement` demands, and
   neither the files of other tools nor resident memory: a deployment supplies
   that, and sets `Config.Types` and `Config.Caps`.
 - **[Lifecycle](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Lifecycle_and_concurrency).**
-  Everything is safe for concurrent use. A failed or cancelled `Encode`
-  leaves its directory empty and the `Source` usable.
+  Everything is safe for concurrent use. A failed or cancelled `Encode` or
+  `Transcode` leaves its directory empty and the `Source` usable.
 - **[Errors](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Errors).**
   Six sentinels and `ToolError` say what went wrong and whether a retry can
   succeed. Error text is not part of the contract.
 - **[Determinism](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Determinism).**
   The same input, request, library version and tool binaries give the same
-  bytes on one architecture.
+  bytes on one architecture; an HEVC transcode's bytes also depend on the
+  host's processor count.
 
 ## Versioning
 

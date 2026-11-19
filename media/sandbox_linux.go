@@ -263,12 +263,17 @@ func runHelper(ctx context.Context, cfg helperConfig, stdout, stderr io.Writer) 
 }
 
 // sandboxRunner returns the runner that runs each process through the
-// sandbox helper under limits. Its Usage is what the helper measured for the
-// tool and its descendants.
+// sandbox helper under limits, or under the run's own Limits when it has
+// them. Its Usage is what the helper measured for the tool and its
+// descendants.
 func sandboxRunner(limits rlimits) runner {
 	return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
+		l := limits
+		if spec.Limits != nil {
+			l = *spec.Limits
+		}
 		res, err := runHelper(ctx, helperConfig{
-			Tool: spec.Tool, Args: spec.Args, Env: spec.Env, Dir: spec.Dir, Input: spec.Input, Limits: limits,
+			Tool: spec.Tool, Args: spec.Args, Env: spec.Env, Dir: spec.Dir, Input: spec.Input, Limits: l,
 			Confine: spec.Confine,
 		}, stdout, stderr)
 		if err != nil {

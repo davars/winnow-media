@@ -41,6 +41,8 @@ type Processor struct {
 	// Empty when there are none, which turns the probe off.
 	detect string
 	tools  map[string]string
+	// unsandboxed is Config.Unsandboxed: no run has the sandbox's limits.
+	unsandboxed bool
 	// start runs one process: the sandbox helper, or the direct runner.
 	start runner
 	// run runs one tool, with in, when not nil, as its input descriptor; tests
@@ -161,7 +163,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	for _, typ := range types {
 		accepts[typ] = true
 	}
-	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, renders: renders, detect: detectedDemuxers(types), tools: tools, start: start}
+	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, renders: renders, detect: detectedDemuxers(types), tools: tools, start: start, unsandboxed: cfg.Unsandboxed}
 	p.run = p.runTool
 	p.compose = p.composeFrames
 	rules := processorPolicy(res, types)

@@ -110,6 +110,17 @@ type videoInfo struct {
 	// format is ffprobe's format_name, the demuxer and its aliases; set only
 	// by the probe that detects a container.
 	format string
+	// all are the container's streams, of every kind, in container order.
+	all []probedStream
+}
+
+// probedStream is what the probe reads of one stream of the container.
+type probedStream struct {
+	index         int
+	kind          string // ffprobe's codec_type: "video", "audio" and others
+	width, height int
+	isDefault     bool
+	attachedPic   bool
 }
 
 // upright returns the dimensions the decoded frames have, which ffmpeg
@@ -235,6 +246,10 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 			if o.CodecType == "audio" {
 				v.hasAudio = true
 			}
+			v.all = append(v.all, probedStream{
+				index: o.Index, kind: o.CodecType, width: o.Width, height: o.Height,
+				isDefault: o.Disposition.Default == 1, attachedPic: o.Disposition.AttachedPic != 0,
+			})
 		}
 		for _, sd := range s.SideData {
 			if sd.Rotation != nil {

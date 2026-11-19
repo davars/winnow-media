@@ -1,8 +1,9 @@
 // Package media turns an untrusted image, animation or video file into
 // upright, sized, sRGB images: stills, the frames of an animation or video,
 // and animated WebPs of them, in the formats and sizes a caller asks for. It
-// runs ImageMagick, ffmpeg and a WebP compositor as external programs, under
-// limits and, on Linux, in a sandbox.
+// also transcodes a video into a WebM or MP4 file. It runs ImageMagick,
+// ffmpeg and a WebP compositor as external programs, under limits and, on
+// Linux, in a sandbox.
 //
 // A [Processor] holds the configuration and runs the tools. [Processor.Open]
 // admits one file and returns a [Source] without decoding a pixel.
@@ -10,7 +11,8 @@
 // region a [Select] names into an empty directory, once for each [Encoding]
 // it is given. A Source can be encoded from as often as the caller likes
 // until it is closed. [Types] lists the types that are read; the outputs are
-// JPEG, WebP and PNG. The examples show each step.
+// JPEG, WebP and PNG. [Source.Transcode] writes a video Source as one video
+// file (see Transcoding). The examples show each step.
 //
 // # Kinds
 //
@@ -119,6 +121,29 @@
 // whether they are, and at which Landlock ABI, and [Config.RequireConfinement]
 // makes NewProcessor fail where they cannot be.
 //
+// # Transcoding
+//
+// [Source.Transcode] encodes a video's frames and sound into a new file in
+// one ffmpeg run, with the encoders and container a [Transcode] names: AV1
+// by SVT-AV1 ([SVTAV1]) or HEVC by x265 ([X265]), Opus ([Opus]) or AAC
+// ([AAC]), in a [WebM] or an [MP4]. Each is a typed setting the library
+// checks before any tool runs; no other encoder option reaches ffmpeg. The
+// input is read as for any other call, through the descriptor Open admitted,
+// with the demuxer of its type.
+//
+// The video stream is the caller's, by container index, or by default the
+// one Info describes; the audio streams likewise, or by default the one with
+// the default disposition, else the first. The video is written upright in
+// 8-bit 4:2:0, with no tone mapping of HDR, and the container's metadata
+// and chapters are kept.
+//
+// One encode can run for hours, which no per-Processor limit can follow, so
+// each call carries its own [TranscodeLimits]: CPU time, wall time, threads,
+// address space and output size, each defaulting to the Processor's bound for
+// any run. Under the sandbox, where render runs are confined (see Hostile
+// input), a transcode run is confined in the same way and writes only its
+// output directory.
+//
 // # Lifecycle and concurrency
 //
 // A Processor and its Sources are safe for concurrent use. Calls on one
@@ -128,8 +153,8 @@
 // The library sets no deadline on a call: pass a context that has one.
 // Cancelling a call's context kills its tools and returns an error wrapping
 // the context's; an Encode waiting its turn on a Source returns as soon as
-// its context ends. An Encode that fails or is cancelled leaves its output
-// directory as it found it and the Source usable, though the Source may have
+// its context ends. An Encode or Transcode that fails or is cancelled leaves
+// its output directory as it found it and the Source usable, though the Source may have
 // dropped what it kept between calls.
 //
 // Close waits for running calls and does not interrupt them: to stop sooner,
@@ -190,6 +215,9 @@
 // to read and PNG, info and null to write, and denies every delegate, so
 // ImageMagick's SVG and MSVG coders, which can run other programs and read
 // other files, never see it, and the content cannot choose a coder. A
+// transcode run is confined like a render run, and may also read the host's
+// NUMA topology, from which an encoder sizes its threads, and write in its
+// output directory alone. A
 // data: URL inside an SVG is inline content and is drawn, its image decoded
 // by librsvg's own decoders, outside ImageMagick's policy. With the sandbox,
 // every render run is also confined
@@ -214,7 +242,7 @@
 //
 // It does not guarantee that the decoders are free of bugs, and it does not
 // confine what an exploited tool can reach, except for the files of a render
-// run where confined, as above; a render run can still signal the user's other processes,
+// or transcode run where confined, as above; a render run can still signal the user's other processes,
 // because scoping signals needs Landlock ABI 6 (Linux 6.12), which the
 // supported kernels do not all have. Such a tool runs as the calling user: it
 // can read and write that user's files and signal that user's other
@@ -256,6 +284,11 @@
 // tool binaries give the same output bytes on one architecture. Nothing is
 // promised across library versions, tool builds or architectures.
 //
+// A transcode's bytes depend also, with X265, on the host's processor count,
+// from which x265 sets how many frames it encodes at once; and a WebM is the
+// same file twice only with WebM.BitExact, without which its identifiers are
+// random.
+//
 // A render's bytes depend also on the host's fonts when the PDF names fonts it
 // does not embed and when the SVG has text: fontconfig reads the system's
 // configuration and font directories, and a render is the same only where
@@ -294,13 +327,19 @@
 //     one image, and Resources.CPUTime the CPU time of one tool run over all
 //     its threads. Neither bounds a call, which may run many tools (see
 //     Lifecycle and concurrency).
+//   - A transcode: one run, held to its TranscodeLimits instead. The
+//     encoders use every processor the run may use whatever
+//     TranscodeLimits.Threads says, and their peak address space exceeds the
+//     default limit for a 4K source; the measurements give the cost of an
+//     hours-long and a 4K encode. Its output is written in place, in the
+//     caller's directory.
 //
 // # Compatibility
 //
 // From v1 the module follows Go's compatibility rules for its exported
 // identifiers. Also covered: what a zero value means, which inputs and
 // requests are refused and with which sentinel, and the names and order of
-// the files Encode writes.
+// the files Encode and Transcode write.
 //
 // Limits only loosen: the ceilings and fixed limits at Caps, the ceilings a
 // zero Encoding.MaxEdge and MaxArea stand for, and [MaxVideoSamples] may rise
@@ -315,8 +354,11 @@
 // [RenderTypes] may grow, and [Types] never lists a type that only a renderer
 // reads.
 //
+// The ranges a Transcode's settings accept may widen in a later v1 release
+// but do not narrow.
+//
 // Later versions may add fields to the structs, values to [Kind] and
-// [Format], and sentinels, so that an error which wraps none now may wrap one
+// [Format], encoders and containers for a Transcode, and sentinels, so that an error which wraps none now may wrap one
 // later: write struct literals with field names, and give a switch over a
 // Kind or Format a default case.
 //

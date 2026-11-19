@@ -25,6 +25,9 @@ type runSpec struct {
 	// Confine, when not nil, limits the files the process can reach to those
 	// it lists. The sandbox runner applies it; the direct runner does not.
 	Confine *confinement
+	// Limits, when not nil, replace the sandbox runner's own limits for this
+	// process. The direct runner applies no limits.
+	Limits *rlimits
 }
 
 // toolResult is how a run ended, when the runner delivered a report.
@@ -58,9 +61,20 @@ type toolRun func(ctx context.Context, in *os.File, name string, args ...string)
 // which the caller made and removes. Where the Processor confines render runs,
 // they are confined to it, the input, the tool and a fixed set of system
 // files. policyDir, when not empty, is the
-// ImageMagick configuration directory they read.
+// ImageMagick configuration directory they read, read are further
+// directories they may read, and env is added to their environment. A
+// transcode run is a render run.
 type renderRun struct {
 	dir, policyDir string
+	read, env      []string
+}
+
+type runLimitsKey struct{}
+
+// withRunLimits returns ctx with l as the limits of its tool runs, in place of
+// the Processor's.
+func withRunLimits(ctx context.Context, l rlimits) context.Context {
+	return context.WithValue(ctx, runLimitsKey{}, l)
 }
 
 type renderRunKey struct{}
@@ -85,10 +99,10 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 	}
 	spec := runSpec{Tool: path, Args: args, Dir: p.dir, Input: in}
 	if rr, ok := ctx.Value(renderRunKey{}).(renderRun); ok {
-		spec.Env, spec.Dir = p.environFor(rr.dir, cmp.Or(rr.policyDir, p.dir)), rr.dir
-		var extra []string
+		spec.Env, spec.Dir = append(p.environFor(rr.dir, cmp.Or(rr.policyDir, p.dir)), rr.env...), rr.dir
+		extra := rr.read
 		if rr.policyDir != "" {
-			extra = []string{rr.policyDir}
+			extra = append([]string{rr.policyDir}, extra...)
 		}
 		if p.confinement.Confined {
 			spec.Confine = renderConfinement(path, rr.dir, extra...)
@@ -100,6 +114,9 @@ func (p *Processor) runTool(ctx context.Context, in *os.File, name string, args 
 		}
 		defer func() { _ = os.RemoveAll(tmp) }()
 		spec.Env = p.environ(tmp)
+	}
+	if l, ok := ctx.Value(runLimitsKey{}).(rlimits); ok {
+		spec.Limits = &l
 	}
 	var stdout bytes.Buffer
 	var stderr headTailBuffer

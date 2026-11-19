@@ -20,33 +20,35 @@ var (
 	ErrUnsupportedType = errors.New("unsupported media type")
 
 	// ErrTooLarge is returned when an input, or the work a call asks of it,
-	// is over a limit: one of Config.Caps, a fixed limit listed at Caps, or
+	// is over a limit: one of Config.Caps, a fixed limit listed at Caps,
 	// Resources.Disk, for the sampled frames of a video call and for an
-	// animation too large to write as one file. Retrying the same call on the
-	// same Processor cannot succeed; a smaller selection or Encoding, or a
-	// Processor with higher limits, may.
+	// animation too large to write as one file, or a transcode's
+	// TranscodeLimits.OutputBytes. Retrying the same call on the same
+	// Processor cannot succeed; a smaller selection or Encoding, or higher
+	// limits, may.
 	ErrTooLarge = errors.New("input too large")
 
 	// ErrTimeLimit is returned when a tool run reached a time limit:
 	// ImageMagick's limit for one image (Resources.TimeLimit), the sandbox's
-	// CPU-time limit (Resources.CPUTime), or a frame compositor's wait of
-	// Resources.TimeLimit for a frame to be consumed. It wraps the run's
-	// *ToolError when the tool failed. A retry can succeed with larger limits
-	// or on a less loaded host.
+	// CPU-time limit (Resources.CPUTime, or a transcode's
+	// TranscodeLimits.CPUTime), a transcode's TranscodeLimits.WallTime, or a
+	// frame compositor's wait of Resources.TimeLimit for a frame to be
+	// consumed. It wraps the run's *ToolError when the tool failed. A retry
+	// can succeed with larger limits or on a less loaded host.
 	ErrTimeLimit = errors.New("time limit exceeded")
 
 	// ErrClosed is returned by Open, OpenDocument and RenderSVG on a closed
-	// Processor, by Encode on a closed Source and by Render on a closed
-	// Document. Retrying cannot succeed; open a new Source or create a new
+	// Processor, by Encode and Transcode on a closed Source and by Render on a
+	// closed Document. Retrying cannot succeed; open a new Source or create a new
 	// Processor.
 	ErrClosed = errors.New("closed")
 
 	// ErrInputChanged is returned when the file is not the one that was
-	// opened, or has changed since: by Source.Encode, and by Processor.Open
-	// when the file is replaced while it is being opened. A change is one of
-	// its size, modification time or status-change time, which a chmod, a
-	// new link or an unlink also moves. It is the expected result when a
-	// file is replaced under a long-lived Source. Retrying on the same Source
+	// opened, or has changed since: by Source.Encode and Source.Transcode,
+	// and by Processor.Open when the file is replaced while it is being
+	// opened. A change is one of its size, modification time or status-change
+	// time, which a chmod, a new link or an unlink also moves. It is the
+	// expected result when a file is replaced under a long-lived Source. Retrying on the same Source
 	// cannot succeed; opening the file again can.
 	ErrInputChanged = errors.New("input changed")
 
@@ -56,10 +58,12 @@ var (
 	// outside the frame, a FrameSelection that does not apply to the Source's
 	// kind or names a frame or time that does not exist, an
 	// OpenOptions.Orientation out of range or given for a video, an output
-	// directory that is missing or not empty, or an Animate Encoding that
+	// directory that is missing or not empty, an Animate Encoding that
 	// cannot hold the frames selected (more than one frame in a format other
-	// than WebP, or several images of a still). Retrying the same call cannot
-	// succeed.
+	// than WebP, or several images of a still), or a Transcode of a Source
+	// that is not a video, or one that is incomplete, out of range, names an
+	// encoder its container does not hold or a stream of the wrong kind.
+	// Retrying the same call cannot succeed.
 	ErrInvalidRequest = errors.New("invalid request")
 )
 
