@@ -4,7 +4,7 @@
 // of docs/measurements.md.
 //
 //	transcodebench -video x265 -preset medium -crf 18 -audio aac -bitrate 256000 \
-//	    -container mp4 -faststart -threads 32 -cpu 86400s -wall 24h -as 64GiB <input> <empty-dir>
+//	    -container mp4 -faststart -threads 32 -cpu 604800s -wall 24h -as 64GiB <input> <empty-dir>
 package main
 
 import (
@@ -33,6 +33,7 @@ func main() {
 		faststart = flag.Bool("faststart", false, "MP4 FastStart")
 		bitexact  = flag.Bool("bitexact", false, "the container's BitExact")
 		stream    = flag.Int("stream", -1, "the video stream's index; -1 is the default choice")
+		audioIdx  = flag.String("audio-streams", "", "comma-separated container indexes of the audio streams; empty is the default choice")
 		threads   = flag.Int("threads", 0, "Limits.Threads")
 		cpu       = flag.Duration("cpu", 0, "Limits.CPUTime")
 		wall      = flag.Duration("wall", 0, "Limits.WallTime")
@@ -86,6 +87,10 @@ func main() {
 		t.VideoStream = stream
 	}
 
+	if t.AudioStreams, err = indexes(*audioIdx); err != nil {
+		fatal(err)
+	}
+
 	ctx := context.Background()
 	p, err := media.NewProcessor(ctx, media.Config{Dir: *scratch, RenderTypes: media.RenderTypes()})
 	if err != nil {
@@ -126,6 +131,22 @@ func main() {
 	if row["error"] != nil {
 		os.Exit(1)
 	}
+}
+
+// indexes parses a comma-separated list of stream indexes; empty is none.
+func indexes(s string) ([]int, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var out []int
+	for f := range strings.SplitSeq(s, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(f))
+		if err != nil {
+			return nil, fmt.Errorf("-audio-streams: %w", err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 func bytesFlag(s string) (int64, error) {
