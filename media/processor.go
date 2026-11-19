@@ -92,25 +92,61 @@ func NewProcessor(ctx context.Context, cfg Config) (*Processor, error) {
 	return newProcessor(ctx, cfg, nil)
 }
 
-// newProcessor is NewProcessor with wrap, when not nil, applied to the runner
-// the Processor would use; tests inject runners through it.
-func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*Processor, error) {
+// derivedProcessor is what a Config determines of a Processor without
+// consulting the host: the resolved settings and the tools it needs.
+type derivedProcessor struct {
+	res     Resources
+	caps    caps
+	types   []string
+	accepts map[string]bool
+	// renders is the resolved RenderTypes as a set.
+	renders map[string]bool
+	detect  string
+	// toolNames are the programs the Processor resolves.
+	toolNames []string
+}
+
+// deriveProcessor resolves cfg, reporting the first invalid setting.
+func deriveProcessor(cfg Config) (derivedProcessor, error) {
 	res, err := cfg.Resources.resolve()
 	if err != nil {
-		return nil, fmt.Errorf("processor: %w", err)
+		return derivedProcessor{}, err
 	}
 	limits, err := cfg.Caps.resolve()
 	if err != nil {
-		return nil, fmt.Errorf("processor: %w", err)
+		return derivedProcessor{}, err
 	}
 	types, err := resolveTypes(cfg.Types)
 	if err != nil {
-		return nil, fmt.Errorf("processor: %w", err)
+		return derivedProcessor{}, err
 	}
 	renderTypes, err := resolveRenderTypes(cfg.RenderTypes)
 	if err != nil {
+		return derivedProcessor{}, err
+	}
+	renders := make(map[string]bool, len(renderTypes))
+	for _, typ := range renderTypes {
+		renders[typ] = true
+	}
+	accepts := make(map[string]bool, len(types))
+	for _, typ := range types {
+		accepts[typ] = true
+	}
+	names := []string{"magick", "ffmpeg", "ffprobe", webpFramesTool}
+	if renders[typePDF] {
+		names = append(names, "pdfinfo", "pdftoppm")
+	}
+	return derivedProcessor{res, limits, types, accepts, renders, detectedDemuxers(types), names}, nil
+}
+
+// newProcessor is NewProcessor with wrap, when not nil, applied to the runner
+// the Processor would use; tests inject runners through it.
+func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*Processor, error) {
+	d, err := deriveProcessor(cfg)
+	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
+	res := d.res
 	start := runner(directRunner)
 	rl := rlimitsFor(res)
 	if !cfg.Unsandboxed {
@@ -126,15 +162,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 		start = wrap(start)
 	}
 	tools := map[string]string{}
-	names := []string{"magick", "ffmpeg", "ffprobe", webpFramesTool}
-	renders := make(map[string]bool, len(renderTypes))
-	for _, typ := range renderTypes {
-		renders[typ] = true
-	}
-	if renders[typePDF] {
-		names = append(names, "pdfinfo", "pdftoppm")
-	}
-	for _, name := range names {
+	for _, name := range d.toolNames {
 		path, err := tool.Resolve(name)
 		if err != nil {
 			return nil, fmt.Errorf("processor: %w", err)
@@ -159,14 +187,10 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	if err != nil {
 		return nil, fmt.Errorf("processor: %w", err)
 	}
-	accepts := make(map[string]bool, len(types))
-	for _, typ := range types {
-		accepts[typ] = true
-	}
-	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: limits, types: types, accepts: accepts, renders: renders, detect: detectedDemuxers(types), tools: tools, start: start, unsandboxed: cfg.Unsandboxed}
+	p := &Processor{openInput: openInputFile, dir: dir, res: res, caps: d.caps, types: d.types, accepts: d.accepts, renders: d.renders, detect: d.detect, tools: tools, start: start, unsandboxed: cfg.Unsandboxed}
 	p.run = p.runTool
 	p.compose = p.composeFrames
-	rules := processorPolicy(res, types)
+	rules := processorPolicy(res, d.types)
 	if err := p.install(rules); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
@@ -175,6 +199,7 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 		_ = p.Close()
 		return nil, fmt.Errorf("processor: %w", err)
 	}
+	renders := d.renders
 	switch {
 	case len(renders) == 0:
 		p.confinement.Reason = reasonNoRender
