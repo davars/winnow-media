@@ -370,11 +370,12 @@ runs ran before load sampling began.
   the x265 encode of the same file held 4.3 GiB.
 - **The same streams.** Every call wrote the same streams as plain ffmpeg
   (ffmpeg's `-f streamhash`, SHA-256 per stream). The MP4 files are
-  byte-identical, once the call logs at ffmpeg's default level: at `-v error`
-  each differed in one byte, the log level x265 records in the stream's
-  header. The 4K MP4 was checked byte for byte after that change; the
-  control's MP4 was not run again, and differed before it in that byte
-  alone.
+  byte-identical, once x265's own log level is pinned to info
+  (`-x265-params log-level=info`, which is what ffmpeg's default level gives
+  it): at `-v error` alone each differed in one byte, the log level x265
+  records in the stream's header. The 4K MP4 was checked byte for byte with
+  the call at ffmpeg's default level; the control's MP4 was not run again,
+  and differed before it in that byte alone.
 - **BitExact WebM.** Two calls with `-fflags +bitexact` alone wrote the same
   streams but different files: one had 131 audio packets before the first
   video packet, the other 135. The muxer writes the packets it holds once
