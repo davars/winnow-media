@@ -121,6 +121,9 @@ type probedStream struct {
 	width, height int
 	isDefault     bool
 	attachedPic   bool
+	// durationMS is the stream's own duration, else the container's; 0 when
+	// neither is known.
+	durationMS int64
 }
 
 // upright returns the dimensions the decoded frames have, which ffmpeg
@@ -249,6 +252,7 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 			v.all = append(v.all, probedStream{
 				index: o.Index, kind: o.CodecType, width: o.Width, height: o.Height,
 				isDefault: o.Disposition.Default == 1, attachedPic: o.Disposition.AttachedPic != 0,
+				durationMS: streamDurationMS(o.Duration, p.Format.Duration),
 			})
 		}
 		for _, sd := range s.SideData {
@@ -285,6 +289,17 @@ func parseVideoProbe(out []byte) (videoInfo, error) {
 		return v, nil
 	}
 	return videoInfo{}, errors.New("input has no video stream")
+}
+
+// streamDurationMS reads a stream's duration in seconds as ffprobe prints it,
+// else the container's; 0 when neither is usable.
+func streamDurationMS(stream, container string) int64 {
+	for _, s := range []string{stream, container} {
+		if sec, err := strconv.ParseFloat(s, 64); err == nil && sec > 0 && !math.IsInf(sec, 0) {
+			return int64(math.Round(min(sec, 1e12) * 1000))
+		}
+	}
+	return 0
 }
 
 // parseRate reads an ffprobe rational such as "30000/1001"; 0 when unusable.

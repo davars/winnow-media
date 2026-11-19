@@ -30,7 +30,7 @@ type Transcode struct {
 	Container Container
 	// VideoStream, when not nil, is the container index of the video stream
 	// to write: a video stream that is not an attached picture, within
-	// Config.Caps. Nil is the stream Source.Info describes, the one with the
+	// Config.Caps and the longest duration Open admits. Nil is the stream Source.Info describes, the one with the
 	// default disposition, else the first.
 	VideoStream *int
 	// AudioStreams are the container indexes of the audio streams to write,
@@ -379,6 +379,9 @@ func planTranscode(t Transcode, v videoInfo, c caps) (transcodePlan, error) {
 	}
 	if px := int64(st.width) * int64(st.height); px > c.framePixels {
 		return transcodePlan{}, tooLarge("video stream %d is %dx%d, %d pixels, the limit is %d", index, st.width, st.height, px, c.framePixels)
+	}
+	if index != v.stream && st.durationMS > maxDurationMS {
+		return transcodePlan{}, tooLarge("video stream %d lasts %d ms, the limit is %d", index, st.durationMS, int64(maxDurationMS))
 	}
 	plan.video = st
 

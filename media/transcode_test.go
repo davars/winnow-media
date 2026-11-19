@@ -198,6 +198,8 @@ func TestTranscodeRefusals(t *testing.T) {
 		{index: 2, kind: "video", width: 64, height: 64, attachedPic: true},
 		{index: 3, kind: "video", width: 20000, height: 100},
 		{index: 4, kind: "video", width: 4000, height: 4000},
+		{index: 5, kind: "video", width: 320, height: 240, durationMS: maxDurationMS + 1},
+		{index: 6, kind: "video", width: 320, height: 240, durationMS: maxDurationMS},
 	}}
 	with := func(f func(*Transcode)) Transcode {
 		tr := hevcMP4
@@ -248,6 +250,7 @@ func TestTranscodeRefusals(t *testing.T) {
 	}{
 		{"over the fixed side", 3, ceilingCaps},
 		{"over MaxFramePixels", 4, caps{framePixels: 4000 * 3999}},
+		{"over the longest duration", 5, ceilingCaps},
 	}
 	for _, c := range tooLargeCases {
 		t.Run(c.name, func(t *testing.T) {
@@ -256,6 +259,27 @@ func TestTranscodeRefusals(t *testing.T) {
 				t.Errorf("err = %v, want ErrTooLarge", err)
 			}
 		})
+	}
+}
+
+// A video stream the caller names is held to the duration Open holds the
+// default stream to, from the probe's own duration for it, else the
+// container's.
+func TestTranscodeProbeReadsEachStreamsDuration(t *testing.T) {
+	t.Parallel()
+	v, err := parseVideoProbe([]byte(`{"streams":[
+		{"index":0,"codec_type":"video","width":320,"height":240,"duration":"10.000"},
+		{"index":1,"codec_type":"video","width":320,"height":240,"duration":"30000.5"},
+		{"index":2,"codec_type":"video","width":320,"height":240,"duration":"N/A"},
+		{"index":3,"codec_type":"audio"}],
+		"format":{"duration":"20.0"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int64{10_000, 30_000_500, 20_000, 20_000} {
+		if got := v.all[i].durationMS; got != want {
+			t.Errorf("stream %d: durationMS = %d, want %d", i, got, want)
+		}
 	}
 }
 
@@ -651,5 +675,30 @@ func TestTranscodeUsesTheCallsThreads(t *testing.T) {
 		if i < 0 || argv[i+1] != "7" {
 			t.Errorf("%s in %q, want 7", flag, argv)
 		}
+	}
+}
+
+// Config.Caps reaches Transcode: a video stream the caller names is judged
+// against the Processor's caps, not the library's ceilings, though Open
+// admitted the video by its default stream.
+func TestTranscodeHonorsConfigCaps(t *testing.T) {
+	env := requireFFmpeg(t)
+	input := writeClip(t, env, ".mp4",
+		"-f", "lavfi", "-i", "testsrc2=size=64x64:rate=10:duration=1",
+		"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=10:duration=1",
+		"-map", "0", "-map", "1", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p")
+	p := requireProcessorWith(t, Config{Caps: Caps{MaxFramePixels: 64 * 64}})
+	src := openVideo(t, p, input)
+	rec := record(p)
+	tr := Transcode{Video: SVTAV1{Preset: 12, CRF: 40}, Container: WebM{}, VideoStream: intPtr(1)}
+	if _, _, err := src.Transcode(context.Background(), t.TempDir(), tr); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("a stream over Config.Caps: err = %v, want ErrTooLarge", err)
+	}
+	if n := rec.count(); n != 0 {
+		t.Errorf("%d tool runs for the refused call, want none", n)
+	}
+	tr.VideoStream = intPtr(0)
+	if _, _, err := src.Transcode(context.Background(), t.TempDir(), tr); err != nil {
+		t.Errorf("the stream within Config.Caps: %v", err)
 	}
 }
