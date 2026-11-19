@@ -310,6 +310,7 @@ func TestTranscodeLimitsResolve(t *testing.T) {
 		{WallTime: -1},
 		{Threads: -1},
 		{AddressSpace: -1},
+		{AddressSpace: 2<<30 - 1},
 		{OutputBytes: -1},
 		{CPUTime: 1500 * time.Millisecond},
 		{Threads: 1 << 40},

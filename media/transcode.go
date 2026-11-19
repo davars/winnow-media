@@ -63,7 +63,9 @@ type TranscodeLimits struct {
 	Threads int
 	// AddressSpace is the address space the run may map, in bytes. Zero
 	// means the limit of any run: Resources.Memory plus Resources.Map plus
-	// 5 GiB. A run that needs more fails with a *ToolError from ffmpeg.
+	// 5 GiB. A nonzero value must be at least 2 GiB, which the sandbox
+	// helper and ffmpeg's allocations of up to 1 GiB need. A run that needs
+	// more fails with a *ToolError from ffmpeg.
 	AddressSpace int64
 	// OutputBytes is the largest file the run may write, the output. Zero
 	// means the limit of any run: Resources.Disk and a quarter. Over it the
@@ -285,6 +287,12 @@ type transcodeLimits struct {
 	threads int
 }
 
+// minAddressSpace is the smallest nonzero TranscodeLimits.AddressSpace: the
+// sandbox helper starts reliably only from about 1.6 GiB (measured on a
+// 12-CPU host; thread stacks grow with the CPU count) and ffmpeg may allocate
+// 1 GiB (ffmpegMaxAlloc) on top.
+const minAddressSpace = 2 << 30
+
 // resolve returns l with its zero fields taken from res, which is resolved.
 func (l TranscodeLimits) resolve(res Resources) (transcodeLimits, error) {
 	for _, f := range []struct {
@@ -303,6 +311,9 @@ func (l TranscodeLimits) resolve(res Resources) (transcodeLimits, error) {
 	}
 	if l.CPUTime != 0 && l.CPUTime%time.Second != 0 {
 		return transcodeLimits{}, invalid("Limits.CPUTime %v is not a whole number of seconds", l.CPUTime)
+	}
+	if l.AddressSpace != 0 && l.AddressSpace < minAddressSpace {
+		return transcodeLimits{}, invalid("Limits.AddressSpace %d is below %d, which the sandbox helper and ffmpeg need", l.AddressSpace, int64(minAddressSpace))
 	}
 	if l.Threads > math.MaxInt32 {
 		return transcodeLimits{}, invalid("Limits.Threads %d is above %d", l.Threads, math.MaxInt32)
