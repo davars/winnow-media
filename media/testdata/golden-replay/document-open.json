@@ -1,0 +1,10 @@
+[
+	{
+		"tool": "pdfinfo",
+		"stdout": "Custom Metadata: no\nMetadata Stream: no\nTagged:          no\nUserProperties:  no\nSuspects:        no\nForm:            none\nJavaScript:      no\nPages:           2\nEncrypted:       no\nPage size:       612 x 792 pts (letter)\nPage rot:        0\nFile size:       789 bytes\nOptimized:       no\nPDF version:     1.4\n"
+	},
+	{
+		"tool": "pdfinfo",
+		"stdout": "Custom Metadata: no\nMetadata Stream: no\nTagged:          no\nUserProperties:  no\nSuspects:        no\nForm:            none\nJavaScript:      no\nPages:           2\nEncrypted:       no\nPage    1 size:  612 x 792 pts (letter)\nPage    1 rot:   0\nPage    2 size:  300 x 300 pts\nPage    2 rot:   90\nPage    1 MediaBox:      0.00     0.00   612.00   792.00\nPage    1 CropBox:       0.00     0.00   612.00   792.00\nPage    1 BleedBox:      0.00     0.00   612.00   792.00\nPage    1 TrimBox:       0.00     0.00   612.00   792.00\nPage    1 ArtBox:        0.00     0.00   612.00   792.00\nPage    2 MediaBox:      0.00     0.00   300.00   300.00\nPage    2 CropBox:       0.00     0.00   300.00   300.00\nPage    2 BleedBox:      0.00     0.00   300.00   300.00\nPage    2 TrimBox:       0.00     0.00   300.00   300.00\nPage    2 ArtBox:        0.00     0.00   300.00   300.00\nFile size:       789 bytes\nOptimized:       no\nPDF version:     1.4\n"
+	}
+]

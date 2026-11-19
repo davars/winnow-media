@@ -34,12 +34,12 @@ type videoStub struct {
 }
 
 // processor returns a Processor whose ffprobe and ffmpeg runs the stub
-// answers; magick and the rest run for real. The Processor is unsandboxed so
+// answers; magick and the rest run for real, except under -short, where a run
+// of them fails because no tool is started. The Processor is unsandboxed so
 // that the stub sees the argv of every run.
 func (s *videoStub) processor(t *testing.T) *Processor {
 	t.Helper()
-	requireTools(t, "magick", "ffmpeg", "ffprobe")
-	p, err := newProcessor(context.Background(), Config{Unsandboxed: true, Dir: t.TempDir(), Resources: s.res}, func(next runner) runner {
+	answer := func(next runner) runner {
 		return func(ctx context.Context, spec runSpec, stdout, stderr io.Writer) (toolResult, error) {
 			s.mu.Lock()
 			switch filepath.Base(spec.Tool) {
@@ -56,7 +56,15 @@ func (s *videoStub) processor(t *testing.T) *Processor {
 			s.mu.Unlock()
 			return next(ctx, spec, stdout, stderr)
 		}
-	})
+	}
+	cfg := Config{Unsandboxed: true, Dir: t.TempDir(), Resources: s.res}
+	if testing.Short() {
+		return argvProcessor(t, cfg, answer(func(_ context.Context, spec runSpec, _, _ io.Writer) (toolResult, error) {
+			return toolResult{}, fmt.Errorf("%s: no tool is started under -short", filepath.Base(spec.Tool))
+		}))
+	}
+	requireTools(t, "magick", "ffmpeg", "ffprobe")
+	p, err := newProcessor(context.Background(), cfg, answer)
 	if err != nil {
 		t.Fatal(err)
 	}

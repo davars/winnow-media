@@ -17,6 +17,13 @@ without a helper calls `skipShort` itself. Under `-short` `TestMain` empties
 `PATH`, so a test that forgets fails instead of running the tool. The gate and
 CI run without `-short`.
 
+The golden argv checks still run under `-short`. `goldenProcessor` gives them a
+Processor built by `argvProcessor`, which starts nothing, and plays back the
+tool output recorded in `media/testdata/golden-replay`; the full tier runs the
+real tools, compares their output with that recording, and `-update` rewrites it
+together with the golden files. A test that replaces `p.run` itself uses
+`stubProcessor`.
+
 ## Vocabulary
 
 This library has more than one consumer. Name things for what the code does,

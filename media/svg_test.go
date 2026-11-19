@@ -365,8 +365,9 @@ func TestRenderSVGArgv(t *testing.T) {
 		r    SVGRender
 	}{{"render-svg", SVGRender{}}, {"render-svg-dpi", SVGRender{DPI: 192}}} {
 		t.Run(c.name, func(t *testing.T) {
-			p, rec := requireSVGProcessor(t)
-			if _, _, err := p.RenderSVG(context.Background(), "testdata/svg/alpha-shapes.svg", t.TempDir(), c.r); err != nil {
+			p, rec, g := goldenProcessor(t, c.name, svgConfig)
+			g.out = t.TempDir()
+			if _, _, err := p.RenderSVG(context.Background(), "testdata/svg/alpha-shapes.svg", g.out, c.r); err != nil {
 				t.Fatal(err)
 			}
 			checkGolden(t, c.name, goldenArgv(rec.calls, "/nonexistent-out"))

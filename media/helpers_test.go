@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,6 +70,20 @@ func requireTools(t *testing.T, names ...string) toolEnv {
 		}
 	}
 	return testEnv(t)
+}
+
+// stubProcessor returns a Processor for a test that replaces its tool runs
+// through p.run, and runs no tool of its own. Under -short it starts no
+// process, and a run the test does not replace fails; otherwise it is
+// requireProcessorWith(cfg).
+func stubProcessor(t *testing.T, cfg Config) *Processor {
+	t.Helper()
+	if !testing.Short() {
+		return requireProcessorWith(t, cfg)
+	}
+	return argvProcessor(t, cfg, func(_ context.Context, spec runSpec, _, _ io.Writer) (toolResult, error) {
+		return toolResult{}, fmt.Errorf("%s: no tool is started under -short", filepath.Base(spec.Tool))
+	})
 }
 
 func requireMagick(t *testing.T) toolEnv { return requireTools(t, "magick") }
@@ -301,6 +316,12 @@ func sourceProcessor(t *testing.T) (*Processor, *recorder) {
 func sourceProcessorWith(t *testing.T, cfg Config) (*Processor, *recorder) {
 	t.Helper()
 	p := requireProcessorWith(t, cfg)
+	return p, recordSource(p)
+}
+
+// recordSource records the tool runs of p, including those of an external
+// frame compositor such as webp-frames.
+func recordSource(p *Processor) *recorder {
 	rec := record(p)
 	inner := p.compose
 	p.compose = func(ctx context.Context, in *os.File, req composeRequest, onFrame func(composedFrame) error) (*Usage, error) {
@@ -311,7 +332,7 @@ func sourceProcessorWith(t *testing.T, cfg Config) (*Processor, *recorder) {
 		}
 		return inner(ctx, in, req, onFrame)
 	}
-	return p, rec
+	return rec
 }
 
 // sameImages reports whether a and b describe the same files.

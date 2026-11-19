@@ -907,10 +907,10 @@ func TestGoldenArgv(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := requireProcessor(t)
-			rec := record(p)
+			p, rec, g := goldenProcessor(t, c.name, Config{})
 			input := c.input()
 			out := t.TempDir()
+			g.out = out
 			if err := c.run(p, input, out); err != nil {
 				t.Fatal(err)
 			}

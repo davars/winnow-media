@@ -572,7 +572,7 @@ func TestEncodeDecodesAOneFrameAnimationOnce(t *testing.T) {
 // encode reports no upright size.
 func TestEncodeRefusesAnUnsettledStillWhoseRunReportsNoUprightSize(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
+	p := stubProcessor(t, Config{})
 	path := writeFile(t, "content", []byte("not a recognised type"))
 	p.run = func(_ context.Context, _ *os.File, _ string, args ...string) (runResult, error) {
 		if slices.Contains(args, "identify") {
@@ -595,7 +595,7 @@ func TestEncodeRefusesAnUnsettledStillWhoseRunReportsNoUprightSize(t *testing.T)
 // embeds, as a composited animation does.
 func TestEncodeAProfiledStillConvertsToTheEmbeddedProfile(t *testing.T) {
 	t.Parallel()
-	p := requireProcessor(t)
+	p := stubProcessor(t, Config{})
 	path := writeFile(t, "content", []byte("not a recognised type"))
 	var encodes [][]string
 	p.run = func(_ context.Context, _ *os.File, _ string, args ...string) (runResult, error) {

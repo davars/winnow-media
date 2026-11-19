@@ -28,6 +28,17 @@ func writeClip(t *testing.T, env toolEnv, ext string, args ...string) string {
 	return stage(t, path)
 }
 
+// goldenClip returns the clip make writes with the real tools. Under -short it
+// returns a file that opens as an MP4 and stands for the clip: the recorded
+// probe says what is in it.
+func goldenClip(t *testing.T, make func(env toolEnv) string) string {
+	t.Helper()
+	if testing.Short() {
+		return stage(t, writeFile(t, "clip.mp4", ftypBox("isom", "isom", "mp42")))
+	}
+	return make(requireFFmpeg(t))
+}
+
 func testsrc(size string, rate, seconds int) []string {
 	return []string{"-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%s:rate=%d:duration=%d", size, rate, seconds)}
 }
@@ -89,7 +100,7 @@ func videoInto(t *testing.T, p *Processor, path string, enc Encoding, maxFrames 
 func TestVideoRefusals(t *testing.T) {
 	t.Parallel()
 	t.Run("audio container", func(t *testing.T) {
-		p := requireProcessor(t)
+		p := stubProcessor(t, Config{})
 		var probes, others int
 		p.run = func(_ context.Context, in *os.File, name string, _ ...string) (runResult, error) {
 			if name == "ffprobe" {
@@ -521,17 +532,16 @@ func TestVideoEncodeCostIsIndependentOfDuration(t *testing.T) {
 }
 
 func TestVideoEncodeGoldenArgv(t *testing.T) {
-	env := requireFFmpeg(t)
 	cases := []struct {
 		name  string
-		input func() string
+		input func(env toolEnv) string
 		enc   Encoding
 	}{
-		{"video-frames-sdr-h264", func() string { return sdrClip(t, env, "320x240", 10, 4) }, Encoding{MaxEdge: 160, MaxArea: 3_750_000}},
-		{"video-frames-hlg-hevc", func() string {
+		{"video-frames-sdr-h264", func(env toolEnv) string { return sdrClip(t, env, "320x240", 10, 4) }, Encoding{MaxEdge: 160, MaxArea: 3_750_000}},
+		{"video-frames-hlg-hevc", func(env toolEnv) string {
 			return hlgClip(t, env, testsrc("320x240", 10, 4))
 		}, Encoding{Format: WebP}},
-		{"video-frames-rotated", func() string { return rotatedClip(t, env) }, Encoding{MaxEdge: 80, MaxArea: 3_750_000}},
+		{"video-frames-rotated", func(env toolEnv) string { return rotatedClip(t, env) }, Encoding{MaxEdge: 80, MaxArea: 3_750_000}},
 	}
 	for _, path := range []struct {
 		name  string
@@ -540,10 +550,10 @@ func TestVideoEncodeGoldenArgv(t *testing.T) {
 		for _, c := range cases {
 			t.Run(c.name+"-"+path.name, func(t *testing.T) {
 				forceSelectLimit(t, path.limit)
-				p := requireProcessor(t)
-				rec := record(p)
-				input := c.input()
+				p, rec, g := goldenProcessor(t, c.name+"-"+path.name, Config{})
+				input := goldenClip(t, c.input)
 				out := t.TempDir()
+				g.out = out
 				if _, _, err := p.encodeEven(context.Background(), input, c.enc, 3, out); err != nil {
 					t.Fatal(err)
 				}
@@ -699,7 +709,7 @@ func TestVideoEncodeRefusesOversizedProbeBeforeSampling(t *testing.T) {
 	for name, probe := range cases {
 		for _, entry := range videoEntries() {
 			t.Run(name+"/"+entry.name, func(t *testing.T) {
-				p := requireProcessor(t)
+				p := stubProcessor(t, Config{})
 				var tools []string
 				p.run = func(_ context.Context, in *os.File, tool string, _ ...string) (runResult, error) {
 					tools = append(tools, tool)

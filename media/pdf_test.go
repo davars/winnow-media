@@ -685,7 +685,7 @@ func TestNewProcessorRefusesRenderingWithBrokenConfinement(t *testing.T) {
 
 func TestDocumentArgv(t *testing.T) {
 	t.Run("document-open", func(t *testing.T) {
-		p, rec := requirePDFProcessor(t)
+		p, rec, _ := goldenProcessor(t, "document-open", pdfConfig)
 		doc := openDoc(t, p, "testdata/pdf/base14-two-pages.pdf")
 		_ = doc
 		checkGolden(t, "document-open", goldenArgv(rec.calls, "/nonexistent-out"))
@@ -701,10 +701,11 @@ func TestDocumentArgv(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p, rec := requirePDFProcessor(t)
+			p, rec, g := goldenProcessor(t, c.name, pdfConfig)
 			doc := openDoc(t, p, filepath.Join("testdata", "pdf", c.file))
 			opened := rec.count()
-			if _, _, err := doc.Render(context.Background(), t.TempDir(), Indices(0), c.scale); err != nil {
+			g.out = t.TempDir()
+			if _, _, err := doc.Render(context.Background(), g.out, Indices(0), c.scale); err != nil {
 				t.Fatal(err)
 			}
 			checkGolden(t, c.name, goldenArgv(rec.calls[opened:], "/nonexistent-out"))

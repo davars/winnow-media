@@ -343,7 +343,7 @@ var aviHead = append([]byte("RIFF\x00\x00\x00\x00AVI "), make([]byte, 64)...)
 // the tools it was asked to run.
 func stubbedProcessor(t *testing.T, types []string, fn func(name string) (runResult, error)) (*Processor, func() []string) {
 	t.Helper()
-	p := requireProcessorWith(t, Config{Types: types})
+	p := stubProcessor(t, Config{Types: types})
 	var mu sync.Mutex
 	var names []string
 	p.run = func(_ context.Context, in *os.File, name string, _ ...string) (runResult, error) {
@@ -407,7 +407,7 @@ func TestVideoFramePixelsCapIsAppliedAtOpen(t *testing.T) {
 		}{{20_000, false}, {19_999, true}} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
-				p := requireProcessorWith(t, Config{Caps: Caps{MaxFramePixels: c.cap}})
+				p := stubProcessor(t, Config{Caps: Caps{MaxFramePixels: c.cap}})
 				p.run = func(_ context.Context, _ *os.File, tool string, _ ...string) (runResult, error) {
 					if tool != "ffprobe" {
 						return runResult{}, errors.New("unexpected tool " + tool)

@@ -326,10 +326,11 @@ func TestExtractPreviewArgv(t *testing.T) {
 	}{{"preview-header", PreviewOptions{}}, {"preview-decode", PreviewOptions{Decode: true}}}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p, rec := sourceProcessor(t)
+			p, rec, g := goldenProcessor(t, c.name, Config{})
 			file, cands := container(noiseJPEG(t, 48, 32, 17))
 			in := writeFile(t, "raw.tif", file)
 			out := t.TempDir()
+			g.out = out
 			if _, _, err := p.ExtractPreview(context.Background(), in, out, cands, c.opts); err != nil {
 				t.Fatal(err)
 			}

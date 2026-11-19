@@ -324,8 +324,7 @@ func TestTranscodeLimitsResolve(t *testing.T) {
 // Each pinned transcode, run on a clip, gives the argv in its golden file and
 // a file of the streams it names.
 func TestTranscodeGoldenArgv(t *testing.T) {
-	env := requireFFmpeg(t)
-	input := avClip(t, env)
+	input := goldenClip(t, func(env toolEnv) string { return avClip(t, env) })
 	for _, c := range []struct {
 		name   string
 		t      Transcode
@@ -336,10 +335,10 @@ func TestTranscodeGoldenArgv(t *testing.T) {
 		{"transcode-hevc-mp4", hevcMP4, []string{"video hevc", "audio aac"}, "hvc1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p := requireProcessor(t)
-			rec := record(p)
+			p, rec, g := goldenProcessor(t, c.name, Config{})
 			src := openVideo(t, p, input)
 			out := t.TempDir()
+			g.out = out
 			tr := c.t
 			tr.VideoStream = intPtr(0)
 			got, usage, err := src.Transcode(context.Background(), out, tr)
@@ -347,6 +346,10 @@ func TestTranscodeGoldenArgv(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkGolden(t, c.name, goldenArgv(rec.calls[len(rec.calls)-1:], out))
+			if testing.Short() {
+				return
+			}
+			env := requireFFmpeg(t)
 			path := filepath.Join(out, got.Name)
 			info, err := os.Stat(path)
 			if err != nil {

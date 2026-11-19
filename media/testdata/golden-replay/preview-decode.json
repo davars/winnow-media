@@ -1,0 +1,9 @@
+[
+	{
+		"tool": "magick",
+		"stdout": "0||48|32|48|32|JPEG|Undefined|DirectClass sRGB |Undefined||END\n"
+	},
+	{
+		"tool": "magick"
+	}
+]

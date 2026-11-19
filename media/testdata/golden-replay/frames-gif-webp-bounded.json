@@ -1,0 +1,27 @@
+[
+	{
+		"tool": "magick",
+		"stdout": "5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n5||64|48|64|48|GIF|Undefined|PseudoClass sRGB |Undefined|END\n"
+	},
+	{
+		"tool": "magick",
+		"stdout": "48e5bc5da8845503a613099e0dccafe7fff7b1e3dfb37f642530f63227cdb59f|32|24\na34960a5251d898da9546b9c6ff5b4303de90a632111cb6807291c39c1418b44|32|24\n770550391ba8a87a5b7aad79f0363ee22694619487c2b293907d652586c1c4e7|32|24\n",
+		"files": [
+			{
+				"path": "$OUT/.enc-0.webp",
+				"size": 58,
+				"head": "UklGRjIAAABXRUJQVlA4ICYAAADQAgCdASogABgAPjEYikOiIaEUBAAgAwS0gAAe0dAAAP7+fJQAAA=="
+			},
+			{
+				"path": "$OUT/.enc-1.webp",
+				"size": 82,
+				"head": "UklGRkoAAABXRUJQVlA4ID4AAABQAwCdASogABgAPjEYikOiIaEUBAAgAwSygDsAfgAARr/YAAD+7APf//hVuGIZqv//zXb5rt812/5oMAAAAA=="
+			},
+			{
+				"path": "$OUT/.enc-2.webp",
+				"size": 80,
+				"head": "UklGRkgAAABXRUJQVlA4IDwAAABwAwCdASogABgAPjEYikOiIaEUBAAgAwSygDsAfgB+AABEQnAA/uwD3//6s+mhF/aR//+3ZpjH7+5MAAA="
+			}
+		]
+	}
+]

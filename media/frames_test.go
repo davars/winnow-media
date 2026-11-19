@@ -288,7 +288,7 @@ func TestEncodeTimes(t *testing.T) {
 	})
 
 	t.Run("accepts the maximum", func(t *testing.T) {
-		p := requireProcessor(t)
+		p := stubProcessor(t, Config{})
 		p.run = func(context.Context, *os.File, string, ...string) (runResult, error) {
 			return runResult{}, errors.New("tool run")
 		}
