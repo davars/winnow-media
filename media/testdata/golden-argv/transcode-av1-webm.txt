@@ -41,6 +41,8 @@
 "256k"
 "-fflags"
 "+bitexact"
+"-max_interleave_delta"
+"0"
 "-f"
 "webm"
 "$OUT/000.webm"

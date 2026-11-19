@@ -102,8 +102,8 @@ Each point is stated in full in the package documentation.
   succeed. Error text is not part of the contract.
 - **[Determinism](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Determinism).**
   The same input, request, library version and tool binaries give the same
-  bytes on one architecture; an HEVC transcode's bytes also depend on the
-  host's processor count.
+  bytes on one architecture; a transcode's also depend on the host's
+  processor count and instruction set.
 
 ## Versioning
 

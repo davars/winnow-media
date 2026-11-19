@@ -90,7 +90,7 @@ func TestTranscodeArgs(t *testing.T) {
 			"-map", "0:0", "-map", "0:1",
 			"-c:v", "libsvtav1", "-preset", "5", "-crf", "18", "-b:v", "0", "-pix_fmt", "yuv420p",
 			"-c:a", "libopus", "-b:a", "256k",
-			"-fflags", "+bitexact", "-f", "webm", "/out/000.webm",
+			"-fflags", "+bitexact", "-max_interleave_delta", "0", "-f", "webm", "/out/000.webm",
 		}},
 		{"hevc-mp4", hevcMP4, []string{
 			"-map", "0:0", "-map", "0:1",
@@ -111,6 +111,25 @@ func TestTranscodeArgs(t *testing.T) {
 				t.Errorf("args =\n%q\nwant\n%q", got, want)
 			}
 		})
+	}
+}
+
+func TestTranscodeContainerArgs(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		c    Container
+		want []string
+	}{
+		{WebM{}, []string{"-f", "webm"}},
+		{WebM{BitExact: true}, []string{"-fflags", "+bitexact", "-max_interleave_delta", "0", "-f", "webm"}},
+		{MP4{}, []string{"-f", "mp4"}},
+		{MP4{FastStart: true, BitExact: true}, []string{
+			"-movflags", "+faststart", "-fflags", "+bitexact", "-max_interleave_delta", "0", "-f", "mp4",
+		}},
+	} {
+		if got := c.c.containerArgs(); !slices.Equal(got, c.want) {
+			t.Errorf("%+v: args %q, want %q", c.c, got, c.want)
+		}
 	}
 }
 
@@ -349,7 +368,7 @@ func TestTranscodeEqualsPlainFFmpeg(t *testing.T) {
 	}{
 		{"av1-webm", av1WebM, []string{
 			"-c:v", "libsvtav1", "-preset", "5", "-crf", "18", "-b:v", "0", "-pix_fmt", "yuv420p",
-			"-c:a", "libopus", "-b:a", "256k", "-fflags", "+bitexact", "out.webm",
+			"-c:a", "libopus", "-b:a", "256k", "-fflags", "+bitexact", "-max_interleave_delta", "0", "out.webm",
 		}},
 		{"hevc-mp4", hevcMP4, []string{
 			"-c:v", "libx265", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-tag:v", "hvc1",

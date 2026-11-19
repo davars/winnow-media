@@ -284,10 +284,12 @@
 // tool binaries give the same output bytes on one architecture. Nothing is
 // promised across library versions, tool builds or architectures.
 //
-// A transcode's bytes depend also, with X265, on the host's processor count,
-// from which x265 sets how many frames it encodes at once; and a WebM is the
-// same file twice only with WebM.BitExact, without which its identifiers are
-// random.
+// A transcode's bytes depend also on the host: with X265 on its processor
+// count, from which x265 sets how many frames it encodes at once, and with
+// Opus on its instruction set, which libopus chooses its code paths by. The
+// same streams are the same file only with the container's BitExact: without
+// it a WebM's identifiers are random, and the muxer interleaves the streams
+// by how fast the host ran the encoders.
 //
 // A render's bytes depend also on the host's fonts when the PDF names fonts it
 // does not embed and when the SVG has text: fontconfig reads the system's

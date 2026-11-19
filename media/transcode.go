@@ -186,8 +186,10 @@ func bitrate(bps int) string {
 
 // WebM writes a WebM file, which holds AV1 video and Opus audio.
 type WebM struct {
-	// BitExact writes no random identifiers and no muxer version, so the same
-	// streams give the same file.
+	// BitExact makes the same streams give the same file: it writes no
+	// random identifiers and no muxer version, and interleaves the streams
+	// strictly by time, holding the others while a slow encoder has not yet
+	// produced, which costs the memory of their packets meanwhile.
 	BitExact bool
 }
 
@@ -198,7 +200,7 @@ func (c WebM) holds(codec string) bool { return codec == "av1" || codec == "opus
 func (c WebM) containerArgs() []string {
 	var args []string
 	if c.BitExact {
-		args = append(args, "-fflags", "+bitexact")
+		args = append(args, bitExactArgs...)
 	}
 	return append(args, "-f", "webm")
 }
@@ -209,8 +211,8 @@ type MP4 struct {
 	// before the whole file has arrived. The file is written once more to
 	// move it.
 	FastStart bool
-	// BitExact writes no muxer version, so the file does not change with
-	// the ffmpeg build's version string.
+	// BitExact makes the same streams give the same file, as WebM.BitExact
+	// does: no muxer version, and the streams interleaved strictly by time.
 	BitExact bool
 }
 
@@ -224,10 +226,16 @@ func (c MP4) containerArgs() []string {
 		args = append(args, "-movflags", "+faststart")
 	}
 	if c.BitExact {
-		args = append(args, "-fflags", "+bitexact")
+		args = append(args, bitExactArgs...)
 	}
 	return append(args, "-f", "mp4")
 }
+
+// bitExactArgs make a muxer's output depend on the streams alone. By default
+// the muxer writes the packets it holds once they span more than 10 s
+// without a packet of a slower stream, so where the first packet of a slow
+// encoder lands depends on how fast the host ran it; 0 turns that off.
+var bitExactArgs = []string{"-fflags", "+bitexact", "-max_interleave_delta", "0"}
 
 // Transcoded describes the file Source.Transcode wrote.
 type Transcoded struct {
