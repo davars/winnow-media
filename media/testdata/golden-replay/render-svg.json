@@ -1,15 +1,60 @@
 [
 	{
 		"tool": "magick",
+		"argv": [
+			"identify",
+			"-limit",
+			"memory",
+			"1GiB",
+			"-limit",
+			"map",
+			"2GiB",
+			"-limit",
+			"area",
+			"512MP",
+			"-limit",
+			"list-length",
+			"2048",
+			"-limit",
+			"time",
+			"300",
+			"-ping",
+			"-format",
+			"%w %h\n",
+			"rsvg:/dev/fd/3[0]"
+		],
 		"stdout": "202 100\n"
 	},
 	{
 		"tool": "magick",
+		"argv": [
+			"-limit",
+			"memory",
+			"1GiB",
+			"-limit",
+			"map",
+			"2GiB",
+			"-limit",
+			"area",
+			"512MP",
+			"-limit",
+			"list-length",
+			"2048",
+			"-limit",
+			"time",
+			"300",
+			"rsvg:/dev/fd/3[0]",
+			"-depth",
+			"8",
+			"-define",
+			"png:exclude-chunks=date,time",
+			"000.png"
+		],
 		"files": [
 			{
 				"path": "$RUN/000.png",
 				"size": 1428,
-				"head": "iVBORw0KGgoAAAANSUhEUgAAAMoAAABkCAMAAADwrV8EAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAHXUExURf////78/fvu8/nl7Pff6PXZ4/XT3/bb5Pfh6fnn7vvw9P/+/p2dnZGRke7u7v32+PXW4e22yeihuuOLqt56nd54nN98n+SRrumlve67zfbc5f77/BUXFgcOCwwYEwsVEQAAANbW1vnm7e23yuWTsN96neaatfDA0fzw9BQXFh9mRzOqdyyTZ/z09/HD0955neabtvPN2v76+/vv8+yyx999oOGDpPzy9eqswuCBou68zvLJ2OCAouKHp+SSr/zz9vPO2/ba5P34+uqnvu+8zv31+OaWsuijvOOMq+ebtv74+vrr8OGFpuWUsfvx9eKJqOaZtP33+f79/v/9/u21ye65zN95nfXV4Pfd5vvt8uWXs+uuxPLK2Pjj6uGCo/rs8eyvxPXY4uectu64y/zx9eGGpu+/0OSPreurwuCCo+qov/HE1OKGpvPL2fLI1+qmvvDB0uifue66ze2zx/DD0/TR3eSQreuswuONrOeeuPPP3OGEpemmvvno7v75++qpwPHH1gwoHBRCLhE5KGBgYE1OTuPj4/HG1eyzx+CBo++7zf7+/uutw+mkvO+9zuigufTU3+KIqOWVsf32+fLM2fXX4vfc5d97nuOOrPDE1Prq7/LJ1+KKqSSTLv4AAAABYktHRACIBR1IAAAACXBIWXMAAABgAAAAYADwa0LPAAADKklEQVR42u3b+VPTQBTA8UhrRaJCgy8F4kkbEbVUQZECAh6AgNpaBa1UoIoieCF4gog3Aor37R8rDMMIlLbb7Ctvcfb7e5L3memmmRyKIpPJZDKZjLtVGTb7aseazLVZaiqbrVuP3AYuRXaOU8vdCHPprrz8AoNx202bt2C2ddt2645Ct8eE2PQdRTtZNi/etRuzPZYp3hIXxM23d1/pSqGU7T8AiSvPz14JlIMVOiTPX5l41QhAUauqGSAzHXKITSmsYYTMpNUKTKlLtkgWLZnDolKOHE0JMp15TBWSUt+QqmS6RkNASsZxCxKApmbhKC0nLEkATjYLRjkVsCgBCBpCUU67LEumT8ohgShnghwSgLMCUVq5JNB2ThjKeZOPAv6wIJT6ck4JwAVVDEo7twQgIgTlog+B0uEVgKKmcjEcv3YBKA4UCZid9BQPDgW6yClRJAnoZdSUS1gUuExM6TbRKFdCtJSraBKAAlpKDyLlGikljCiBXpWSEsGkQCElpQ+Vcp2ScgOVohFSvKgSCBBS7LgUXykd5SYuZd66X3aKG5nioKNUIFNu0VFuI1P66Sh3kCkDdBS+O3mxDf4/FCcdRUOmVNJRcC/BAO7SUbqQKRE6SiUyJUpHuYdMCdNRbLgSPURHKcW4XfyvHoWOotxHpTygpAyiUuooKTmolG5KSraJKHmoUFKUR4iUAVrKECKlhZZisL7JlrwGhZaC8kx1tipqSqeJJBk2qCnKYyRKiUJOGcG5eOl9Qk9RRlEoTxfutPjZc8xesFG8fgSJZ9GLVC9fIfeahaKM8Ut8mUxHSnsq/42XN9SGubJ4Xz3ysH4Lkv6ifGex8TD/CGhN8EjMHOrx5zf5loMyRj39wkLvLEumqGdfnPHeosRNPXlsIUu/sbZ+6rmXatLC4zx9iHrqOH0YT1HyUZA/+SXK+JSSRPtMPXCCjAmWb9ZmG/5CPW2SOhmfT7aNevkPlu6+Mnxd5Gu0UY/J1remxJDvfSPUI7JXVpQbF/KjqJb/AMvZZOZUMPYUUK39/EU9maUM+2+n1hPw+0Dv+FOT11pnC/HvVCaTyWQymYy9vwKUXDe1fKoCAAAAAElFTkSuQmCC"
+				"head": "iVBORw0KGgoAAAANSUhEUgAAAMoAAABkCAMAAADwrV8EAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAHXUExURf////78/fvu8/nl7Pff6PXZ4/XT3/bb5Pfh6fnn7vvw9P/+/p2dnZGRke7u7v32+PXW4e22yeihuuOLqt56nd54nN98n+SRrumlve67zfbc5f77/BUXFgcOCwwYEwsVEQAAANbW1vnm7e23yuWTsN96neaatfDA0fzw9BQXFh9mRzOqdyyTZ/z09/HD0955neabtvPN2v76+/vv8+yyx999oOGDpPzy9eqswuCBou68zvLJ2OCAouKHp+SSr/zz9vPO2/ba5P34+uqnvu+8zv31+OaWsuijvOOMq+ebtv74+vrr8OGFpuWUsfvx9eKJqOaZtP33+f79/v/9/u21ye65zN95nfXV4Pfd5vvt8uWXs+uuxPLK2Pjj6uGCo/rs8eyvxPXY4uectu64y/zx9eGGpu+/0OSPreurwuCCo+qov/HE1OKGpvPL2fLI1+qmvvDB0uifue66ze2zx/DD0/TR3eSQreuswuONrOeeuPPP3OGEpemmvvno7v75++qpwPHH1gwoHBRCLhE5KGBgYE1OTuPj4/HG1eyzx+CBo++7zf7+/uutw+mkvO+9zuigufTU3+KIqOWVsf32+fLM2fXX4vfc5d97nuOOrPDE1Prq7/LJ1+KKqSSTLv4AAAABYktHRACIBR1IAAAACXBIWXMAAABgAAAAYADwa0LPAAADKklEQVR42u3b+VPTQBTA8UhrRaJCgy8F4kkbEbVUQZECAh6AgNpaBa1UoIoieCF4gog3Aor37R8rDMMIlLbb7Ctvcfb7e5L3memmmRyKIpPJZDKZjLtVGTb7aseazLVZaiqbrVuP3AYuRXaOU8vdCHPprrz8AoNx202bt2C2ddt2645Ct8eE2PQdRTtZNi/etRuzPZYp3hIXxM23d1/pSqGU7T8AiSvPz14JlIMVOiTPX5l41QhAUauqGSAzHXKITSmsYYTMpNUKTKlLtkgWLZnDolKOHE0JMp15TBWSUt+QqmS6RkNASsZxCxKApmbhKC0nLEkATjYLRjkVsCgBCBpCUU67LEumT8ohgShnghwSgLMCUVq5JNB2ThjKeZOPAv6wIJT6ck4JwAVVDEo7twQgIgTlog+B0uEVgKKmcjEcv3YBKA4UCZid9BQPDgW6yClRJAnoZdSUS1gUuExM6TbRKFdCtJSraBKAAlpKDyLlGikljCiBXpWSEsGkQCElpQ+Vcp2ScgOVohFSvKgSCBBS7LgUXykd5SYuZd66X3aKG5nioKNUIFNu0Q=="
 			}
 		]
 	}

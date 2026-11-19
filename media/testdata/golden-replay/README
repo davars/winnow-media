@@ -1,0 +1,3 @@
+Recorded tool runs that the golden argv checks play back under go test -short.
+One JSON file per golden; the format is replayStep and replayFile in
+media/replay_test.go. Rewrite them with go test -update, without -short.

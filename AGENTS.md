@@ -17,12 +17,17 @@ without a helper calls `skipShort` itself. Under `-short` `TestMain` empties
 `PATH`, so a test that forgets fails instead of running the tool. The gate and
 CI run without `-short`.
 
-The golden argv checks still run under `-short`. `goldenProcessor` gives them a
+The golden argv checks also run under `-short`. `goldenProcessor` gives them a
 Processor built by `argvProcessor`, which starts nothing, and plays back the
-tool output recorded in `media/testdata/golden-replay`; the full tier runs the
-real tools, compares their output with that recording, and `-update` rewrites it
-together with the golden files. A test that replaces `p.run` itself uses
-`stubProcessor`.
+runs recorded in `media/testdata/golden-replay`: each run's tool, argv, stdout
+and written files, in order. A run that differs from the next recorded one, or
+a recorded run never made, fails the test. The full tier runs the real tools
+and compares the tool, argv, stdout (pixel signatures masked) and file names
+with the recording, not sizes, file contents or stderr, so those are not
+checked and a recording can go stale in them. `-update`, in the full tier,
+rewrites the recordings together with the golden files; the JSON format is
+`replayStep` and `replayFile` in `media/replay_test.go`. A test that replaces
+`p.run` itself uses `stubProcessor`.
 
 ## Vocabulary
 

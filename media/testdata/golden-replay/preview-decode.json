@@ -1,9 +1,50 @@
 [
 	{
 		"tool": "magick",
+		"argv": [
+			"identify",
+			"-limit",
+			"memory",
+			"1GiB",
+			"-limit",
+			"map",
+			"2GiB",
+			"-limit",
+			"area",
+			"512MP",
+			"-limit",
+			"list-length",
+			"2048",
+			"-limit",
+			"time",
+			"300",
+			"-ping",
+			"-format",
+			"%T|%[profiles]|%w|%h|%W|%H|%m|%[orientation]|%r|%A|%[tiff:subfiletype]|END\n",
+			"jpeg:/dev/fd/3[0-2048]"
+		],
 		"stdout": "0||48|32|48|32|JPEG|Undefined|DirectClass sRGB |Undefined||END\n"
 	},
 	{
-		"tool": "magick"
+		"tool": "magick",
+		"argv": [
+			"-limit",
+			"memory",
+			"1GiB",
+			"-limit",
+			"map",
+			"2GiB",
+			"-limit",
+			"area",
+			"512MP",
+			"-limit",
+			"list-length",
+			"2048",
+			"-limit",
+			"time",
+			"300",
+			"jpeg:/dev/fd/3[0]",
+			"null:"
+		]
 	}
 ]

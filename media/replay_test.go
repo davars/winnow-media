@@ -20,8 +20,12 @@ import (
 // replayStep is one tool run of a recorded call, in the order the call made
 // it.
 type replayStep struct {
-	Tool   string `json:"tool"`
-	Stdout string `json:"stdout,omitempty"`
+	Tool string `json:"tool"`
+	// Argv is the run's arguments, with the directories named as in a
+	// replayFile and the input and output directories as in the golden argv
+	// files.
+	Argv   []string `json:"argv"`
+	Stdout string   `json:"stdout,omitempty"`
 	// Files are the files the run created or grew, which a later step may
 	// read, rename or list.
 	Files []replayFile `json:"files,omitempty"`
@@ -40,7 +44,7 @@ type replayFile struct {
 
 // replayHead is how many leading bytes of each file a recording keeps: enough
 // for the headers and palettes the library decodes.
-const replayHead = 4096
+const replayHead = 1024
 
 // replayDir is where the recorded runs of the golden checks are kept.
 const replayDir = "testdata/golden-replay"
@@ -71,6 +75,9 @@ func goldenProcessor(t *testing.T, name string, cfg Config) (*Processor, *record
 	t.Helper()
 	g := &replayed{t: t, name: name}
 	if testing.Short() {
+		if *update {
+			t.Fatal("-update needs the real tools; run without -short")
+		}
 		data, err := os.ReadFile(replayPath(name))
 		if err != nil {
 			t.Fatalf("%v (run the full tests with -update to create it)", err)
@@ -79,6 +86,13 @@ func goldenProcessor(t *testing.T, name string, cfg Config) (*Processor, *record
 			t.Fatalf("%s: %v", replayPath(name), err)
 		}
 		g.p = argvProcessor(t, cfg, compositeInProcess(g.play))
+		t.Cleanup(func() {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			if !t.Failed() && g.pos < len(g.steps) {
+				t.Errorf("%s: %d of the %d recorded runs were not made; the call has gone another way", name, len(g.steps)-g.pos, len(g.steps))
+			}
+		})
 	} else {
 		g.p = requireProcessorWith(t, cfg)
 		g.p.start = g.tap(g.p.start)
@@ -125,14 +139,14 @@ func (g *replayed) finish() {
 	}
 }
 
-// equalSteps compares what a replay needs: the tool, its standard output and
-// the names of the files it wrote. Standard error, the contents of encoded
+// equalSteps compares what a replay needs: the tool, its arguments, its
+// standard output and the names of the files it wrote. Standard error, the contents of encoded
 // files and the pixel signatures an encode reports vary with the encoder's
 // build and the host, since the clips of a recording are encoded by the tools
 // under test.
 func equalSteps(a, b []replayStep) bool {
 	return slices.EqualFunc(a, b, func(x, y replayStep) bool {
-		return x.Tool == y.Tool && maskSignatures(x.Stdout) == maskSignatures(y.Stdout) &&
+		return x.Tool == y.Tool && slices.Equal(x.Argv, y.Argv) && maskSignatures(x.Stdout) == maskSignatures(y.Stdout) &&
 			slices.EqualFunc(x.Files, y.Files, func(f, g replayFile) bool { return f.Path == g.Path })
 	})
 }
@@ -149,13 +163,30 @@ func (g *replayed) places(spec runSpec) map[string]string {
 	if g.out != "" {
 		places["$OUT"] = g.out
 	}
-	if spec.Dir != g.p.dir {
+	if spec.Dir != g.p.dir && spec.Dir != g.out {
 		places["$RUN"] = spec.Dir
 	}
 	if ins, _ := filepath.Glob(filepath.Join(g.p.tmpDir(), "in-*")); len(ins) == 1 {
 		places["$IN"] = ins[0]
 	}
 	return places
+}
+
+// argv returns the arguments of spec as a recording keeps them.
+func (g *replayed) argv(spec runSpec) []string {
+	out := make([]string, len(spec.Args))
+	for i, arg := range spec.Args {
+		arg = neutralLinkDir.ReplaceAllLiteralString(arg, "$IN")
+		arg = strings.ReplaceAll(arg, "$IN/input", inputFDPath)
+		if spec.Dir != g.p.dir && spec.Dir != g.out {
+			arg = strings.ReplaceAll(arg, spec.Dir, "$RUN")
+		}
+		if g.out != "" {
+			arg = strings.ReplaceAll(arg, g.out, "$OUT")
+		}
+		out[i] = arg
+	}
+	return out
 }
 
 // snapshot returns every file under each place, by recorded path.
@@ -196,7 +227,7 @@ func (g *replayed) tap(start runner) runner {
 		var out bytes.Buffer
 		res, err := start(ctx, spec, io.MultiWriter(stdout, &out), stderr)
 		after := snapshot(places)
-		step := replayStep{Tool: filepath.Base(spec.Tool), Stdout: out.String()}
+		step := replayStep{Tool: filepath.Base(spec.Tool), Argv: g.argv(spec), Stdout: out.String()}
 		for _, path := range slices.Sorted(maps.Keys(after)) {
 			if old, ok := before[path]; !ok || old.Size != after[path].Size {
 				step.Files = append(step.Files, after[path])
@@ -235,41 +266,71 @@ func compositeInProcess(next runner) runner {
 }
 
 // play is the runner of an argv Processor: it answers each run with the next
-// recorded one and writes the files that one wrote. A run of another tool than
-// the recording's is an error, since the call has gone another way.
+// recorded one and writes the files that one wrote. A run of another tool or
+// with other arguments than the recording's is an error, since the call has
+// gone another way and the recorded output is not the tool's for this run.
 func (g *replayed) play(_ context.Context, spec runSpec, stdout, _ io.Writer) (toolResult, error) {
+	step, err := g.next(spec)
+	if err != nil {
+		return toolResult{}, err
+	}
+	// The lock is not held here: an external compositor's output reaches its
+	// consumer, which may start another run.
+	_, _ = io.WriteString(stdout, step.Stdout)
+	return toolResult{}, nil
+}
+
+// next takes the next recorded step for spec and writes its files.
+func (g *replayed) next(spec runSpec) (replayStep, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	tool := filepath.Base(spec.Tool)
 	if g.pos >= len(g.steps) {
-		return toolResult{}, fmt.Errorf("%s: a run of %s after the %d recorded", g.name, tool, len(g.steps))
+		return replayStep{}, fmt.Errorf("%s: a run of %s after the %d recorded", g.name, tool, len(g.steps))
 	}
 	step := g.steps[g.pos]
 	g.pos++
-	if step.Tool != tool {
-		return toolResult{}, fmt.Errorf("%s: run %d is %s, the recording has %s", g.name, g.pos, tool, step.Tool)
+	if argv := g.argv(spec); step.Tool != tool || !slices.Equal(step.Argv, argv) {
+		return replayStep{}, fmt.Errorf("%s: run %d differs from the recording\n got  %s %q\n want %s %q", g.name, g.pos, tool, argv, step.Tool, step.Argv)
 	}
 	places := g.places(spec)
 	for _, f := range step.Files {
 		place, rel, _ := strings.Cut(f.Path, "/")
 		dir, ok := places[place]
 		if !ok {
-			return toolResult{}, fmt.Errorf("%s: run %d wrote %s, which has no directory", g.name, g.pos, f.Path)
+			return replayStep{}, fmt.Errorf("%s: run %d wrote %s, which has no directory", g.name, g.pos, f.Path)
 		}
 		path := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return toolResult{}, err
+			return replayStep{}, err
 		}
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
 		if err != nil {
-			return toolResult{}, err
+			return replayStep{}, err
 		}
 		_, err = file.Write(f.Head[:min(len(f.Head), int(f.Size))])
-		err = cmp.Or(err, file.Truncate(f.Size), file.Close())
-		if err != nil {
-			return toolResult{}, err
+		if err = cmp.Or(err, file.Truncate(f.Size), file.Close()); err != nil {
+			return replayStep{}, err
 		}
 	}
-	_, _ = io.WriteString(stdout, step.Stdout)
-	return toolResult{}, nil
+	return step, nil
+}
+
+// A replayed run answers only the argv it was recorded for: a probe whose
+// arguments have changed must not be served the old probe's output, or a
+// golden that pins only the later runs passes under -short on output the
+// real tool would not give.
+func TestReplayRefusesARunWithOtherArguments(t *testing.T) {
+	g := &replayed{t: t, name: "transcode-hevc-mp4"}
+	data, err := os.ReadFile(replayPath(g.name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &g.steps); err != nil {
+		t.Fatal(err)
+	}
+	g.p = argvProcessor(t, Config{}, g.play)
+	if _, err := g.p.run(context.Background(), nil, "ffprobe", "-version"); err == nil {
+		t.Error("an ffprobe run with other arguments was answered from the recording")
+	}
 }
