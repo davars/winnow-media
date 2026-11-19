@@ -430,10 +430,15 @@ func (v videoInfo) defaultAudio() (int, bool) {
 
 // transcodeArgs returns the ffmpeg arguments of a transcode by plan of the
 // input at inputPath, read with dec, to output, with threads for the decoder
-// and filters.
+// and filters. The run logs at ffmpeg's default level, not at errors as other
+// runs do: x265 takes its log level from ffmpeg's and writes it into the
+// stream's header, so a lower level would change the file.
 func transcodeArgs(dec decoder, inputPath string, plan transcodePlan, threads int, output string) []string {
 	args := ffmpegArgs(threads)
-	args = append(args, "-threads", strconv.Itoa(ffmpegThreadsFor(threads, plan.video.width, plan.video.height)))
+	if i := slices.Index(args, "-v"); i >= 0 {
+		args[i+1] = "info"
+	}
+	args = append(args, "-nostats", "-threads", strconv.Itoa(ffmpegThreadsFor(threads, plan.video.width, plan.video.height)))
 	args = append(args, inputArgs(dec, inputPath)...)
 	args = append(args, plan.output...)
 	return append(args, output)

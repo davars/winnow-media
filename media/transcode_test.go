@@ -77,8 +77,8 @@ func TestTranscodeArgs(t *testing.T) {
 		{index: 1, kind: "audio", isDefault: true},
 	}}
 	prefix := []string{
-		"-hide_banner", "-nostdin", "-v", "error", "-y", "-max_alloc", "1073741824", "-filter_threads", "32",
-		"-threads", "32", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-enable_drefs", "0",
+		"-hide_banner", "-nostdin", "-v", "info", "-y", "-max_alloc", "1073741824", "-filter_threads", "32",
+		"-nostats", "-threads", "32", "-protocol_whitelist", "file", "-format_whitelist", "mov", "-enable_drefs", "0",
 		"-f", "mov", "-i", "/dev/fd/3",
 	}
 	for _, c := range []struct {
@@ -328,6 +328,56 @@ func TestTranscodeGoldenArgv(t *testing.T) {
 			}
 			if c.tag != "" && v["codec_tag_string"] != c.tag {
 				t.Errorf("video tag = %v, want %s", v["codec_tag_string"], c.tag)
+			}
+		})
+	}
+}
+
+// What the call adds to the encoder arguments (the input prefix, the forced
+// demuxer and muxer, the limits and the sandbox) changes no byte of the file:
+// each pinned transcode equals plain ffmpeg's output with the same encoder
+// arguments on the same host.
+func TestTranscodeEqualsPlainFFmpeg(t *testing.T) {
+	env := requireFFmpeg(t)
+	input := avClip(t, env)
+	p := requireProcessor(t)
+	src := openVideo(t, p, input)
+	for _, c := range []struct {
+		name  string
+		t     Transcode
+		plain []string
+	}{
+		{"av1-webm", av1WebM, []string{
+			"-c:v", "libsvtav1", "-preset", "5", "-crf", "18", "-b:v", "0", "-pix_fmt", "yuv420p",
+			"-c:a", "libopus", "-b:a", "256k", "-fflags", "+bitexact", "out.webm",
+		}},
+		{"hevc-mp4", hevcMP4, []string{
+			"-c:v", "libx265", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-tag:v", "hvc1",
+			"-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "out.mp4",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out := t.TempDir()
+			got, _, err := src.Transcode(context.Background(), out, c.t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call, err := os.ReadFile(filepath.Join(out, got.Name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			plainDir := t.TempDir()
+			plainOut := filepath.Join(plainDir, c.plain[len(c.plain)-1])
+			args := append([]string{"-nostdin", "-y", "-i", input, "-map", "0:v:0", "-map", "0:a:0?"}, c.plain[:len(c.plain)-1]...)
+			if _, err := env.run(context.Background(), "ffmpeg", append(args, plainOut)...); err != nil {
+				t.Fatal(err)
+			}
+			plain, err := os.ReadFile(plainOut)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(call, plain) {
+				t.Errorf("the call wrote %d bytes, plain ffmpeg %d; they differ", len(call), len(plain))
 			}
 		})
 	}
