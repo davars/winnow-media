@@ -291,7 +291,7 @@ func ExampleSource_Encode_video() {
 	}
 }
 
-// All with Animate writes the frames of an animation into one animated WebP.
+// Transcode writes the video into one WebM file, with limits that scale with its duration.
 func ExampleSource_Transcode() {
 	ctx := context.Background()
 	p, err := media.NewProcessor(ctx, media.Config{})
@@ -327,6 +327,7 @@ func ExampleSource_Transcode() {
 	fmt.Printf("%s: %d bytes in %s, %s of CPU\n", out.Name, out.Bytes, out.Wall, usage.CPU)
 }
 
+// All with Animate writes the frames of an animation into one animated WebP.
 func ExampleSource_Encode_animation() {
 	ctx := context.Background()
 	p, err := media.NewProcessor(ctx, media.Config{})

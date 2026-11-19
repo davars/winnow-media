@@ -210,7 +210,8 @@ func newProcessor(ctx context.Context, cfg Config, wrap func(runner) runner) (*P
 	return p, nil
 }
 
-// Confinement reports how a Processor confines the files of render runs.
+// Confinement reports how a Processor confines the files of render runs, and
+// so of Transcode runs, which are confined exactly when Confined is true.
 type Confinement struct {
 	// Confined is true when every render run is confined to its files by
 	// Landlock, as the startup probe found the kernel enforces it.
@@ -231,7 +232,7 @@ const reasonNoRender = "no render types"
 // String describes c for a log line.
 func (c Confinement) String() string {
 	if c.Reason == reasonNoRender {
-		return "no render runs: Config.RenderTypes is empty"
+		return "no render runs: Config.RenderTypes is empty, and transcodes run unconfined"
 	}
 	if c.Confined {
 		return fmt.Sprintf("render runs confined by Landlock ABI %d", c.ABI)

@@ -90,10 +90,11 @@ Each point is stated in full in the package documentation.
 - **[Hostile input](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Hostile_input).**
   The content cannot select a decoder outside `Config.Types`, and a tool
   cannot open a socket, gain privileges or leave a process behind. The sandbox
-  confines the files of a render or transcode where the kernel has Landlock, which
-  `Processor.Confinement` reports and `Config.RequireConfinement` demands, and
-  neither the files of other tools nor resident memory: a deployment supplies
-  that, and sets `Config.Types` and `Config.Caps`.
+  confines the files of a render run, and of a transcode where the `Processor`
+  confines render runs (`Config.RenderTypes` set, on a kernel with Landlock),
+  which `Processor.Confinement` reports and `Config.RequireConfinement`
+  demands, and neither the files of other tools nor resident memory: a
+  deployment supplies that, and sets `Config.Types` and `Config.Caps`.
 - **[Lifecycle](https://pkg.go.dev/github.com/davars/winnow-media/media#hdr-Lifecycle_and_concurrency).**
   Everything is safe for concurrent use. A failed or cancelled `Encode` or
   `Transcode` leaves its directory empty and the `Source` usable.

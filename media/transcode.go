@@ -42,18 +42,19 @@ type Transcode struct {
 	Limits TranscodeLimits
 }
 
-// TranscodeLimits bound the one tool run of a Transcode call. A zero field is
-// the bound every tool run of the Processor has, from its Resources; a
-// negative field is refused with ErrInvalidRequest. CPUTime, AddressSpace and
-// OutputBytes are enforced by the sandbox, so have no effect with
-// Config.Unsandboxed.
+// TranscodeLimits bound the one tool run of a Transcode call. A negative field
+// is refused with ErrInvalidRequest. A zero field is the bound every tool run
+// of the Processor has, from its Resources, except WallTime. CPUTime,
+// AddressSpace and OutputBytes are enforced by the sandbox, so have no effect
+// with Config.Unsandboxed.
 type TranscodeLimits struct {
 	// CPUTime is the CPU time the run may use, summed over its threads, as
 	// Resources.CPUTime is for any run. It must be a whole number of seconds.
 	// Zero means Resources.CPUTime. Over it the call fails with ErrTimeLimit.
 	CPUTime time.Duration
 	// WallTime is the wall-clock time the run may take. Zero means
-	// Resources.TimeLimit. Over it the call fails with ErrTimeLimit.
+	// Resources.TimeLimit, which no other ffmpeg run is held to. Over it the
+	// call fails with ErrTimeLimit.
 	WallTime time.Duration
 	// Threads is the thread count of the decoder and of the filters; the
 	// decoder uses at most two for a stream above 4096x2160. Zero means
@@ -62,7 +63,7 @@ type TranscodeLimits struct {
 	Threads int
 	// AddressSpace is the address space the run may map, in bytes. Zero
 	// means the limit of any run: Resources.Memory plus Resources.Map plus
-	// 5 GiB.
+	// 5 GiB. A run that needs more fails with a *ToolError from ffmpeg.
 	AddressSpace int64
 	// OutputBytes is the largest file the run may write, the output. Zero
 	// means the limit of any run: Resources.Disk and a quarter. Over it the

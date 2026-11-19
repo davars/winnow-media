@@ -139,10 +139,11 @@
 //
 // One encode can run for hours, which no per-Processor limit can follow, so
 // each call carries its own [TranscodeLimits]: CPU time, wall time, threads,
-// address space and output size, each defaulting to the Processor's bound for
-// any run. Under the sandbox, where render runs are confined (see Hostile
-// input), a transcode run is confined in the same way and writes only its
-// output directory.
+// address space and output size. Each but wall time defaults to the
+// Processor's bound for any run; wall time defaults to Resources.TimeLimit,
+// which no other ffmpeg run is held to. Under the sandbox, where render runs
+// are confined (see Hostile input), a transcode run is confined in the same
+// way and writes only its output directory.
 //
 // # Lifecycle and concurrency
 //
@@ -152,15 +153,15 @@
 //
 // The library sets no deadline on a call: pass a context that has one.
 // Cancelling a call's context kills its tools and returns an error wrapping
-// the context's; an Encode waiting its turn on a Source returns as soon as
-// its context ends. An Encode or Transcode that fails or is cancelled leaves
-// its output directory as it found it and the Source usable, though the Source may have
-// dropped what it kept between calls.
+// the context's; an Encode or Transcode waiting its turn on a Source returns
+// as soon as its context ends. An Encode or Transcode that fails or is
+// cancelled leaves its output directory as it found it and the Source usable,
+// though the Source may have dropped what it kept between calls.
 //
 // Close waits for running calls and does not interrupt them: to stop sooner,
 // cancel their contexts first. [Processor.Close] closes every Source and
-// [Document] still open. Open, Encode, OpenDocument and Render after Close
-// return [ErrClosed].
+// [Document] still open. Open, Encode, Transcode, OpenDocument and Render
+// after Close return [ErrClosed].
 //
 // # Errors
 //
@@ -214,21 +215,23 @@
 // which draws it with librsvg, under a second policy that allows that coder
 // to read and PNG, info and null to write, and denies every delegate, so
 // ImageMagick's SVG and MSVG coders, which can run other programs and read
-// other files, never see it, and the content cannot choose a coder. A
-// transcode run is confined like a render run, and may also read the host's
-// NUMA topology, from which an encoder sizes its threads, and write in its
-// output directory alone. A
-// data: URL inside an SVG is inline content and is drawn, its image decoded
-// by librsvg's own decoders, outside ImageMagick's policy. With the sandbox,
-// every render run is also confined
-// by Landlock where the kernel has it (Linux 5.13 or later with the Landlock
-// security module enabled): it can read the program and its libraries, the
-// system's font and locale files, process and CPU information, and the one
-// input file, by its descriptor, not a file beside it or one later put at its
-// path, and it can write only in a directory of its own. A reference inside
-// the PDF to another file, an external stream, a font or CMap path, an
-// attachment or a link action is not followed, and the sandbox's socket
-// denial closes the network.
+// other files, never see it, and the content cannot choose a coder. A data:
+// URL inside an SVG is inline content and is drawn, its image decoded by
+// librsvg's own decoders, outside ImageMagick's policy. With the sandbox,
+// every render run is also confined by Landlock where the kernel has it
+// (Linux 5.13 or later with the Landlock security module enabled): it can
+// read the program and its libraries, the system's font and locale files,
+// process and CPU information, and the one input file, by its descriptor, not
+// a file beside it or one later put at its path, and it can write only in a
+// directory of its own. A reference inside the PDF to another file, an
+// external stream, a font or CMap path, an attachment or a link action is not
+// followed, and the sandbox's socket denial closes the network.
+//
+// A transcode run is confined in the same way, exactly where
+// [Processor.Confinement] says render runs are, so not when
+// [Config.RenderTypes] is empty. It may also read the host's NUMA topology,
+// from which an encoder sizes its threads, and writes only in its output
+// directory.
 //
 // The confinement is best-effort. Where the kernel reports no Landlock, or a
 // container's seccomp profile refuses it, NewProcessor still succeeds and
@@ -242,18 +245,18 @@
 //
 // It does not guarantee that the decoders are free of bugs, and it does not
 // confine what an exploited tool can reach, except for the files of a render
-// or transcode run where confined, as above; a render run can still signal the user's other processes,
-// because scoping signals needs Landlock ABI 6 (Linux 6.12), which the
-// supported kernels do not all have. Such a tool runs as the calling user: it
-// can read and write that user's files and signal that user's other
-// processes. Its resident memory is not
-// limited, only its address space. The
-// limit on the processes it may start counts all of the user's tasks, and is
-// not enforced for root. A deployment for hostile input supplies the rest: a
-// container or equivalent with its own unprivileged user, a read-only root
-// filesystem, a memory limit, a size limit on Config.Dir, no network and no
-// secrets. It also sets Config.Types and Config.Caps; the zero [Config]
-// accepts every type and the largest sizes the library can handle.
+// or transcode run where confined, as above; a render or transcode run can
+// still signal the user's other processes, because scoping signals needs
+// Landlock ABI 6 (Linux 6.12), which the supported kernels do not all have.
+// Such a tool runs as the calling user: it can read and write that user's
+// files and signal that user's other processes. Its resident memory is not
+// limited, only its address space. The limit on the processes it may start
+// counts all of the user's tasks, and is not enforced for root. A deployment
+// for hostile input supplies the rest: a container or equivalent with its
+// own unprivileged user, a read-only root filesystem, a memory limit, a size
+// limit on Config.Dir, no network and no secrets. It also sets Config.Types
+// and Config.Caps; the zero [Config] accepts every type and the largest
+// sizes the library can handle.
 //
 // The sandbox needs Linux 5.11 or later on amd64 or arm64, a mounted /proc,
 // and a host that lets an unprivileged process install a seccomp filter, as
@@ -360,9 +363,9 @@
 // but do not narrow.
 //
 // Later versions may add fields to the structs, values to [Kind] and
-// [Format], encoders and containers for a Transcode, and sentinels, so that an error which wraps none now may wrap one
-// later: write struct literals with field names, and give a switch over a
-// Kind or Format a default case.
+// [Format], encoders and containers for a Transcode, and sentinels, so that an
+// error which wraps none now may wrap one later: write struct literals with
+// field names, and give a switch over a Kind or Format a default case.
 //
 // # Testing
 //
