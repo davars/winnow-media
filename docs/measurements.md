@@ -53,6 +53,10 @@ nix run github:davars/winnow-media#measure -- -measure-only <dir>
 The rendering inputs (PDFs, an SVG and a candidate set for `ExtractPreview`)
 are generated the same way and listed by `-list`.
 
+`internal/cmd/transcodebench` runs one `Source.Transcode` of a file the caller
+supplies, every setting and limit a flag, and prints its wall time, CPU, peak
+RSS and output size as a JSON line; see Transcoding.
+
 `-measure-only` runs on another machine, such as an arm64 board, over a
 directory copied from the one `-gen-only` filled. `-only <name>` runs one
 input, `-repeat N` reports median wall time and CPU, and `-extra
@@ -311,6 +315,91 @@ by the C library and the OpenMP runtime. Of these, only the first group
 showed in the strace; the others are the library's allowance for what a host's
 C library reads, not measured. Tests run the renders confined with all of
 them, on Linux 6.8.
+
+## Transcoding
+
+Measured on a 32-CPU x86_64 host (two Xeon E5-2640 v2, Ivy Bridge: AVX,
+no AVX2; 31 GiB; Linux 6.8, Landlock ABI 4) on 2026-11-18 and 19, with
+ffmpeg 8.1.3 (SVT-AV1 3.1.2, x265 4.1, libopus 1.6.1) from the flake's lock.
+`internal/cmd/transcodebench` ran one `Source.Transcode` through a
+`Processor` with `RenderTypes`, so the run was confined, with
+`TranscodeLimits{Threads: 32, CPUTime: 7 days, WallTime: 24 h,
+AddressSpace: 32 GiB, OutputBytes: 16 GiB}`. Each is set beside the same
+encode by plain ffmpeg with no limits and automatic threads, its arguments
+the call's encoder arguments without the input prefix, under `/usr/bin/time
+-v`. The host served other work, mostly idle: its 1-minute load average,
+sampled each minute for every run but the first three plain ones, was 3.5 to
+7.8 during the control encodes, which make about 4.8 themselves, and 15 to 31
+during the 4K encodes. Wall and CPU are those of the tool run; peak address
+space was sampled every 10 s from `/proc`, so is a lower bound.
+
+The inputs are two originals from one consumer's archive: a 148.5-minute
+720x388 H.264 MP4 of 2.38 GiB with two AAC streams and chapters (the
+control), and a 77-second 3840x2160 HEVC QuickTime of 480 MiB from a phone.
+
+| Encode | Run | Wall | CPU | Peak RSS | Peak address space | Threads |
+|---|---|---|---|---|---|---|
+| control, x265 `medium` CRF 18, AAC 256k, MP4 `FastStart` | plain, first | 8276 s* | 39,491 s* | 672 MiB | 4.8 GiB | 92 |
+| the same | plain, again | 8297 s | 39,976 s | 676 MiB | 4.8 GiB | 92 |
+| the same | the call | 8375 s | 40,381 s | 698 MiB | 6.2 GiB | 140 |
+| 4K, x265 `medium` CRF 18, AAC 256k, MP4 `FastStart` | plain | 1015 s | 26,991 s | 3.5 GiB | 7.9 GiB | 108 |
+| the same | the call, twice | 1010 s, 1010 s | 27,019 s, 27,033 s | 4.3 GiB | 10.1 GiB | 172 |
+| 4K, SVT-AV1 preset 5 CRF 18, Opus 256k, WebM | plain, no `BitExact` | 589 s | 11,790 s | 13.2 GiB | 20.3 GiB | 194 |
+| the same, `BitExact` | the call, five times | 497 to 504 s | 11,168 to 11,288 s | 13.3 to 14.3 GiB | 22.5 GiB | 258 |
+
+\* The first plain control run overlapped, for about its first 15 minutes,
+another process's 12-worker preview rebuild on the same host, and its load
+was not sampled; the second ran back to back with the call. The plain 4K
+runs ran before load sampling began.
+
+- **Time.** Through the call the control took 0.9% more wall time and 1.0%
+  more CPU than plain ffmpeg run back to back with it: 0.94 of the video's
+  duration, and 4.5 CPU-seconds per second of video. The x265 encode of a 720x388
+  stream keeps about 5 of the 32 CPUs busy, whatever the threads. The 4K
+  encodes took the same time through the call, or less: the AV1 encode's
+  plain run is one sample, unsampled for load.
+- **Threads and address space.** The call's decoder and filters run with
+  `TranscodeLimits.Threads` (32 here) where plain ffmpeg chooses its own
+  (16 at most for decoding), which shows as more threads and address space.
+  At the default `Resources` a transcode's address space limit is 8 GiB, which
+  the 4K encodes exceed (10.1 and 22.5 GiB): a caller sets
+  `TranscodeLimits.AddressSpace` for them. The tasks stay under the
+  sandbox's 512.
+- **Resident memory.** An SVT-AV1 encode of 4K at preset 5 on this host held
+  13 to 14 GiB, almost half the host's memory, so two at once would not fit;
+  the x265 encode of the same file held 4.3 GiB.
+- **The same streams.** Every call wrote the same streams as plain ffmpeg
+  (ffmpeg's `-f streamhash`, SHA-256 per stream). The MP4 files are
+  byte-identical, once the call logs at ffmpeg's default level: at `-v error`
+  each differed in one byte, the log level x265 records in the stream's
+  header. The 4K MP4 was checked byte for byte after that change; the
+  control's MP4 was not run again, and differed before it in that byte
+  alone.
+- **BitExact WebM.** Two calls with `-fflags +bitexact` alone wrote the same
+  streams but different files: one had 131 audio packets before the first
+  video packet, the other 135. The muxer writes the packets it holds once
+  they span more than `max_interleave_delta` (10 s), and the 4K AV1 encode's
+  first packet came later than that. With `-max_interleave_delta 0`, which
+  `BitExact` now adds, three calls wrote byte-identical files. On the
+  12-CPU reference host, six plain runs of the same file were identical with
+  and without the flag: the race needs a slow first packet.
+- **Hosts.** The AV1 video stream was the same on both hosts; the Opus
+  stream was not (libopus chooses its code paths by instruction set). x265
+  sets its frame threads from the host's processor count, not the process's
+  affinity: on the reference host, a 6-second 720p encode gave the same file
+  under `taskset` of 1, 4 and 12 CPUs, and three different files at ffmpeg
+  `-threads` 1, 2 and 4, which ffmpeg hands x265 as its frame-thread count.
+  So `TranscodeLimits.Threads` does not reach the encoders.
+
+**Files a transcode run opens.** `strace -f -e
+trace=openat,open,access,newfstatat,statx,readlink` of an x265 to MP4 and an
+SVT-AV1 to WebM encode under `env -i LC_ALL=C`, on the reference host, showed
+outside the Nix store: `/proc/self/status`, `/proc/cpuinfo`,
+`/proc/sys/vm/overcommit_memory`, `/sys/devices/system/cpu/possible` and
+`online`, `/sys/devices/system/node` and `node0/cpumap` (libnuma, which x265
+links, sizing its thread pools), and the Vulkan loader probing
+`/run/opengl-driver`, which is refused and unused. A confined transcode run
+reads the render run's list plus `/sys/devices/system/node`.
 
 ## Memory profiles
 
